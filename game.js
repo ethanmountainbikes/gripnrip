@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL } from './world.js';
+import { W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featAxis, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL } from './world.js';
 
 const G = 9.81;
 const G_AIR = 9.81*1.35;   // heavier feel in the air: realistic MTB airtime (~0.6-1.0 s off a kicker at 30 km/h)
@@ -457,8 +457,31 @@ function step(dt, inp){
     S.lean = THREE.MathUtils.lerp(S.lean, THREE.MathUtils.clamp(Math.atan(-yawRate*S.speed/G), -0.85, 0.85), Math.min(1,dt*8));
     S.weight = THREE.MathUtils.lerp(S.weight||0, THREE.MathUtils.clamp(inp.lean + inp.brake*0.5 - inp.pedal*0.2, -1, 1), Math.min(1, dt*6));
     S.vx = -Math.sin(S.travel)*S.speed; S.vz = -Math.cos(S.travel)*S.speed;
-    const nx = S.x + S.vx*dt, nz = S.z + S.vz*dt, ng = groundH(nx,nz);
-    const vyG = (ng - S.y)/dt;
+    let nx = S.x + S.vx*dt, nz = S.z + S.vz*dt, ng = groundH(nx,nz);
+    // jump collision: only a feature's ramp face (along its forward axis) adds launch speed. Its sides are climbed
+    // (rounded dirt) or block/deflect you with a speed loss (steep / wooden walls), never launch you.
+    let vyFeat = null;
+    { const fa = featAxis(nx, nz) || featAxis(S.x, S.z);
+      if (fa){ const mx = nx - S.x, mz = nz - S.z, dA = mx*fa.dx + mz*fa.dz;
+        const ax = S.x + fa.dx*dA, az = S.z + fa.dz*dA, f0 = featH(S.x, S.z), fAlong = featH(ax, az), f1 = featH(nx, nz);
+        const latRise = f1 - fAlong, latLen = Math.hypot(mx - fa.dx*dA, mz - fa.dz*dA) + 1e-6;
+        const rise = f1 - f0, moveLen = Math.hypot(mx, mz) + 1e-6;
+        if (rise > 0.06 && rise/moveLen > 2.5 && dA <= 0){   // back of a wooden jump: a wall, not a ramp
+          S.speed *= 0.3; S.travel += Math.PI*0.5*Math.sign(wrapA(S.travel - Math.atan2(-fa.dx,-fa.dz)) || 1); S.yaw = S.travel;
+          S.vx = -Math.sin(S.travel)*S.speed; S.vz = -Math.cos(S.travel)*S.speed; nx = S.x; nz = S.z; ng = groundH(nx, nz); vyFeat = 0; S.sideHits = (S.sideHits||0) + 1;
+        } else if (latRise > 0.06 && latRise/latLen > 1.2){
+         // wall-steep side face: bounce off sideways, lose speed
+          const t1 = Math.atan2(-fa.dx, -fa.dz), cand = [t1, t1 + Math.PI];
+          const tgt = Math.abs(wrapA(cand[0]-S.travel)) < Math.abs(wrapA(cand[1]-S.travel)) ? cand[0] : cand[1];
+          const dYaw = wrapA(tgt - S.travel); S.travel += dYaw; S.yaw += dYaw*0.7; S.speed *= 0.45;
+          S.vx = -Math.sin(S.travel)*S.speed; S.vz = -Math.cos(S.travel)*S.speed;
+          nx = S.x; nz = S.z; ng = groundH(nx, nz); S.sideHits = (S.sideHits||0) + 1; vyFeat = 0;
+        } else vyFeat = (fAlong - f0)/dt; } }
+    // vertical speed from ground-following never exceeds slope x horizontal speed along the travel direction
+    const fdx = -Math.sin(S.travel), fdz = -Math.cos(S.travel), g0 = groundH(S.x, S.z);
+    const gradeF = Math.max(0, (groundH(S.x + fdx*0.5, S.z + fdz*0.5) - g0)/0.5, (ng - g0)/Math.max(0.05, S.speed*dt));
+    let vyG = vyFeat === null ? (ng - S.y)/dt : (terrainH(nx,nz) - (S.y - featH(S.x,S.z)))/dt + vyFeat;
+    vyG = Math.max(-1.5*S.speed - 3, Math.min(vyG, Math.min(1.5, gradeF)*S.speed + 0.3));
     S.landCool = Math.max(0, (S.landCool||0) - dt);
     S.gf = (S.gf||0) + 1;
     const crestG = inp.counter ? G*2.2 : G*1.15;   // counter-pump (RS up) keeps you glued over rollers
@@ -498,10 +521,17 @@ function step(dt, inp){
     if (Math.abs(ty) < 0.2){ const e = wrapA(S.pitch-gp); if (Math.abs(e) < 1.3){ S.pitch -= e*Math.min(1,dt*2.5); } }
     if (Math.abs(spinIn) < 0.3){ const e = wrapA(S.spin); if (Math.abs(e) < 1.0) S.spin -= e*Math.min(1,dt*4); }
     S.dust = 0;
-    const gvy = (groundH(S.x+S.vx*dt, S.z+S.vz*dt) - gh)/dt;
+    const gvy = Math.min((groundH(S.x+S.vx*dt, S.z+S.vz*dt) - gh)/dt, 1.5*Math.hypot(S.vx,S.vz) + 0.3);
     if (S.y <= gh) land(gh, gp);
     else if (!S.popped && S.airT < 0.25 && S.y - gh < 0.3 && S.vy - gvy < 1.5){ S.y = gh; S.air = false; S.lastVyG = gvy; S.gf = 0; S.spin = 0; S.pitch = gp; S.tweak = 0; S.nose = 0; S.trick = null; S.wYaw = S.wPitch = 0; }
   }
+  // failsafe: no NaN/Inf, bounded velocities, never stuck in the air or under the ground
+  if (S.air && !S.popped) S.vy = Math.min(S.vy, 25);
+  if (!S.air) S.lastVyG = Math.min(S.lastVyG||0, 1.5*S.speed + 0.3);
+  S.speed = Math.min(S.speed, 30); S.vy = Math.max(-40, Math.min(40, S.vy||0));
+  if (S.air){ const hs = Math.hypot(S.vx,S.vz); if (hs > 30){ S.vx *= 30/hs; S.vz *= 30/hs; } }
+  if (![S.x,S.y,S.z,S.vx,S.vy,S.vz,S.speed,S.pitch,S.yaw].every(Number.isFinite) || (S.air && S.airT > 4)){ respawnSafe(); S.vy = 0; S.air = false; S.airT = 0; }
+  else { const g = groundH(S.x,S.z); if (S.y < g - 1){ S.y = g; if (S.air){ S.air = false; S.airT = 0; S.vy = 0; S.lastVyG = 0; } } }
   S.time += dt;
 }
 function land(gh, gp){

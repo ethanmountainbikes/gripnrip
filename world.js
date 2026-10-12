@@ -194,6 +194,16 @@ export function featH(x, z){
     if (v > h) h = v; }
   return h;
 }
+// forward axis of the feature that dominates the surface at (x,z), or null (used so only ramp faces launch)
+export function featAxis(x, z){
+  const fs = featGrid.get(key(Math.floor(x/CELL), Math.floor(z/CELL))); if (!fs) return null; let h = 0, best = null;
+  for (const f of fs){ if (x<f.minx||x>f.maxx||z<f.minz||z>f.maxz) continue;
+    const rx = x-f.x, rz = z-f.z, t = rx*f.dx + rz*f.dz, us = rx*f.dz - rz*f.dx, u = Math.abs(us);
+    if (t < 0 || t > f.L || u > f.hw + (f.wood ? 0 : 1.2)) continue;
+    let v = f.p(t, us); if (!f.wood && u > f.hw) v *= 0.5*(1+Math.cos(Math.PI*(u-f.hw)/1.2));
+    if (v > h){ h = v; best = f; } }
+  return best;
+}
 export const groundH = (x,z) => terrainH(x,z) + featH(x,z);
 
 // ---------- trees (deterministic per 100 m cell, cached) ----------
