@@ -1,7 +1,19 @@
 import * as THREE from 'three';
-import { W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featAxis, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL } from './world.js';
+import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featAxis, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL } from './world.js';
 
 const G = 9.81;
+// ---------- bikes (shop) ----------
+const BIKES = [
+  {id:'hardtail', name:'Starter Hardtail', price:0,    color:0xff2fa8, scale:[1,1,1],       drag:1.00, grip:1.00, pop:1.00, stab:1.00, desc:'The bike you know. Balanced.'},
+  {id:'trail',    name:'Trail Bike',       price:800,  color:0x2f8cff, scale:[1,1,1.04],    drag:0.94, grip:1.06, pop:1.03, stab:1.05, desc:'A bit faster and grippier everywhere.'},
+  {id:'dj',       name:'Dirt Jumper',      price:1500, color:0x22c55e, scale:[0.92,0.9,0.9],drag:1.05, grip:1.00, pop:1.22, stab:1.08, desc:'Small and poppy. Big bunny hops, slower top speed.'},
+  {id:'enduro',   name:'Enduro Bike',      price:2500, color:0xff7a12, scale:[1,1.03,1.08], drag:0.88, grip:1.12, pop:1.05, stab:1.12, desc:'Fast and planted on rough descents.'},
+  {id:'dh',       name:'DH Bike',          price:4000, color:0x222222, scale:[1.05,1.06,1.14],drag:0.80, grip:1.18, pop:0.95, stab:1.20, desc:'Fastest downhill, most stable landings, least pop.'},
+];
+const LS = { get:(k,d)=>{ try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch(e){ return d; } }, set:(k,v)=>{ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} } };
+const owned = new Set(LS.get('trailDescent.owned', ['hardtail'])); owned.add('hardtail');
+let BIKE = BIKES.find(b => b.id === LS.get('trailDescent.bike', 'hardtail') && owned.has(b.id)) || BIKES[0];
+const EARN = 0.3;   // DOLLAHS earn rate vs. the old REP values (~30%)
 const G_AIR = 9.81*1.35;   // heavier feel in the air: realistic MTB airtime (~0.6-1.0 s off a kicker at 30 km/h)
 let seed = 7; const rnd = () => (seed = (seed*16807) % 2147483647) / 2147483647;
 
@@ -15,7 +27,7 @@ document.body.prepend(renderer.domElement);
 const scene = new THREE.Scene();
 const SKY = 0xa9cfe6;
 scene.background = new THREE.Color(SKY);
-scene.fog = new THREE.Fog(0xbcd6e2, 120, 1100);
+scene.fog = new THREE.Fog(0xbcd6e2, 200, 3800);   // fog fades into the sky's horizon colour
 const camera = new THREE.PerspectiveCamera(68, innerWidth/innerHeight, 0.1, 6000);
 addEventListener('resize', () => { camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 scene.add(new THREE.HemisphereLight(0xdff0ff, 0x4a6030, 1.1));
@@ -29,11 +41,11 @@ scene.add(sun, sun.target);
 { const g = new THREE.SphereGeometry(4000, 24, 12);
   const m = new THREE.ShaderMaterial({side:THREE.BackSide, depthWrite:false, fog:false,
     vertexShader:`varying vec3 p; void main(){p=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
-    fragmentShader:`varying vec3 p; void main(){float h=normalize(p).y; vec3 c=mix(vec3(.78,.86,.9),vec3(.35,.6,.88),clamp(h*2.5,0.,1.)); gl_FragColor=vec4(c,1.);}`});
+    fragmentShader:`varying vec3 p; void main(){float h=normalize(p).y; vec3 c=mix(vec3(.737,.839,.886),vec3(.35,.6,.88),pow(clamp(h*1.6,0.,1.),0.8)); gl_FragColor=vec4(c,1.);}`});
   var skyDome = new THREE.Mesh(g, m); skyDome.renderOrder = -1; scene.add(skyDome); }
 
 // distant mountains (follow camera horizontally)
-const mountains = new THREE.Group();
+const mountains = new THREE.Group(); mountains.visible = false;   // replaced by real distant terrain
 { const mat = new THREE.MeshLambertMaterial({color:0x6f8aa3, flatShading:true, fog:false});
   const snow = new THREE.MeshLambertMaterial({color:0xeef3f7, flatShading:true, fog:false});
   for (let i=0;i<46;i++){ const a = i/46*Math.PI*2 + rnd()*0.1, r = 2300+rnd()*500, hgt = 300+rnd()*500;
@@ -121,8 +133,8 @@ function updateChunks(px, pz, budgetMs = 6, maxR = LOAD_R){
 }
 // low-detail terrain for the whole map, hidden wherever detailed chunks are loaded
 const farU = { value: new THREE.Vector3(0,0,0) };
-{ const S = 20, N = Math.round((2*HALF+400)/S)+1, pos = new Float32Array(N*N*3), col = new Float32Array(N*N*3), c = new THREE.Color(), idx = [];
-  for (let r=0;r<N;r++) for (let k=0;k<N;k++){ const x = -HALF-200+k*S, z = -HALF-200+r*S, h = terrainH(x,z), i = (r*N+k)*3;
+{ const FAR = 4200, S = 40, N = Math.round(2*FAR/S)+1, pos = new Float32Array(N*N*3), col = new Float32Array(N*N*3), c = new THREE.Color(), idx = [];
+  for (let r=0;r<N;r++) for (let k=0;k<N;k++){ const x = -FAR+k*S, z = -FAR+r*S, h = terrainH(x,z), i = (r*N+k)*3;
     const dx = terrainH(x+S,z)-terrainH(x-S,z), dz = terrainH(x,z+S)-terrainH(x,z-S), ny = 2*S/Math.hypot(dx,2*S,dz);
     pos[i]=x; pos[i+1]=h-0.6; pos[i+2]=z; groundColor(x,z,h,ny,false,c); col[i]=c.r; col[i+1]=c.g; col[i+2]=c.b; }
   for (let r=0;r<N-1;r++) for (let k=0;k<N-1;k++){ const a=r*N+k, b=a+1, e=a+N, f=e+1; idx.push(a,e,b, b,e,f); }
@@ -158,7 +170,7 @@ const farU = { value: new THREE.Vector3(0,0,0) };
       for (let i=0;i<=NT;i++) for (let k=0;k<=NU;k++){ const t = i/NT*f.L, u = -UW + k/NU*2*UW, [x,z] = at(t,u), fh = featH(x,z);
         const edge = k === 0 || k === NU || i === 0 || i === NT;      // outer rim tucks just under the ground
         dv.push(x, meshH(x,z) + fh + (edge ? -0.04 : 0.02), z);
-        c.copy(C_DIRT).lerp(C_DIRT2, 0.3 + 0.4*Math.sin(t*1.7+u)*Math.sin(u*2.1)); if (fh < 0.05) c.lerp(C_GRASS, 0.0); dc.push(c.r,c.g,c.b); }
+        c.copy(C_DIRT).lerp(C_DIRT2, 0.3 + 0.4*Math.sin(t*1.7+u)*Math.sin(u*2.1)); if (f.rock && fh > 0.06) c.copy(C_ROCK).lerp(C_DIRT2, 0.2+0.3*Math.sin(t*3.1+u*2.7)); if (f.road && fh < 0.05 && Math.abs(u) < f.hw+0.6) c.setRGB(0.16,0.16,0.17); /* road in the gap */ if (fh < 0.05) c.lerp(C_GRASS, 0.0); dc.push(c.r,c.g,c.b); }
       // wind triangles so faces point up (correct normals -> no black sides)
       const up = (() => { const [x0,z0] = at(0,-UW), [x1,z1] = at(0,UW), [x2,z2] = at(1,-UW); return ((x1-x0)*(z2-z0) - (z1-z0)*(x2-x0)) < 0; })();
       for (let i=0;i<NT;i++) for (let k=0;k<NU;k++){ const a = b0+i*(NU+1)+k, b = a+1, e = a+NU+1, g = e+1; if (up) di.push(a,b,e, b,g,e); else di.push(a,e,b, b,e,g); }
@@ -177,25 +189,28 @@ const farU = { value: new THREE.Vector3(0,0,0) };
     for (let i=4;i<tr.pts.length;i+=8) for (const side of [-1,1]){ const yw = tr.yaw[i], x = tr.pts[i][0] + Math.cos(yw)*side*(W+0.9), z = tr.pts[i][1] - Math.sin(yw)*side*(W+0.9);
       M.makeTranslation(x, terrainH(x,z), z); poles.setMatrixAt(n, M); poles.setColorAt(n++, c); } }
   poles.count = n; poles.computeBoundingSphere(); scene.add(poles);
-  const banner = (x, z, yaw, color, label, half = W+1) => { const grp = new THREE.Group(), pm = new THREE.MeshLambertMaterial({color:0x333333});
+  const banner = (x, z, yaw, color, label, half = W+1, sub = null) => { const grp = new THREE.Group(), pm = new THREE.MeshLambertMaterial({color:0x333333});
     for (const s of [-1,1]){ const p = new THREE.Mesh(new THREE.BoxGeometry(0.25,4.5,0.25),pm); p.position.set(s*half,2.25,0); grp.add(p); }
     const cv = document.createElement('canvas'); cv.width=512; cv.height=96; const cx2 = cv.getContext('2d'); cx2.fillStyle=color; cx2.fillRect(0,0,512,96);
-    cx2.fillStyle='#fff'; cx2.font='bold 52px Arial'; cx2.textAlign='center'; cx2.fillText(label,256,68,490);
+    cx2.fillStyle='#fff'; cx2.textAlign='center';
+    if (sub){ cx2.font='bold 40px Arial'; cx2.fillText(label,256,42,490); cx2.font='bold 28px Arial'; cx2.fillText(sub,256,84,490); }
+    else { cx2.font='bold 52px Arial'; cx2.fillText(label,256,68,490); }
     const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace;
     const b = new THREE.Mesh(new THREE.PlaneGeometry(2*half,1.2), new THREE.MeshBasicMaterial({map:t,side:THREE.DoubleSide})); b.position.y=4; grp.add(b);
     grp.position.set(x, terrainH(x,z), z); grp.rotation.y = yaw; scene.add(grp); };
   for (const tr of trails){ const i0 = 1, i1 = tr.pts.length-3;
-    banner(tr.pts[i0][0], tr.pts[i0][1], tr.yaw[i0], tr.color === '#111111' ? '#333' : tr.color, 'START · ' + tr.name.toUpperCase());
+    banner(tr.pts[i0][0], tr.pts[i0][1], tr.yaw[i0], tr.color === '#111111' ? '#333' : tr.color, 'START · ' + tr.name.toUpperCase(), W+1, `${DIFF[tr.diff].icon} ${DIFF[tr.diff].label.toUpperCase()} · ${tr.type.toUpperCase()}`);
     banner(tr.pts[i1][0], tr.pts[i1][1], tr.yaw[i1], '#1c9c3a', 'FINISH · ' + tr.name.toUpperCase()); }
   const pyaw = Math.atan2(-PARK.dir[0], -PARK.dir[1]);
-  banner(PARK.x - PARK.dir[0]*(PARK.r-12), PARK.z - PARK.dir[1]*(PARK.r-12), pyaw, '#ff7a00', 'DIRT JUMP PARK', 42); }
+  banner(PARK.x - PARK.dir[0]*(PARK.r-12), PARK.z - PARK.dir[1]*(PARK.r-12), pyaw, '#ff7a00', 'DIRT JUMP PARK', 42, `${DIFF.pro.icon} PRO LINE · DIRT JUMP`); }
 // ---------- Bike + rider ----------
+const frameMat = new THREE.MeshStandardMaterial({color:0xff2fa8, roughness:0.4, metalness:0.3});
 const bike = new THREE.Group();          // position + heading yaw (+ spin)
 const pitchG = new THREE.Group(); bike.add(pitchG);
 const leanG = new THREE.Group(); pitchG.add(leanG);
 const rig = new THREE.Group(); leanG.add(rig);        // preload compression
 const wheels = [];
-{ const pink = new THREE.MeshStandardMaterial({color:0xff2fa8, roughness:0.4, metalness:0.3});
+{ const pink = frameMat;
   const black = new THREE.MeshStandardMaterial({color:0x1a1a1a, roughness:0.8});
   const silver = new THREE.MeshStandardMaterial({color:0xbbbbbb, metalness:0.8, roughness:0.3});
   const orange = new THREE.MeshStandardMaterial({color:0xff7a12, roughness:0.7});
@@ -333,7 +348,7 @@ function placeAt(x, z, yaw){
   S.speed = 0; S.vy = 0; S.air = false; S.travel = S.yaw; S.wYaw = S.wPitch = 0; S.nose = 0; S.susp = S.suspV = 0; S.pitch = 0; S.spin = 0; S.lean = 0; S.preload = 0; S.crashT = 0; S.tweak = 0; S.trick = null; S.landCool = 0.3;
 }
 function resetGame(){
-  Object.assign(S,{lives:3,score:0,bestAir:0,totalAir:0,time:0,maxKmh:0,clean:0,spins:0,flips:0,finishes:0,parkClean:0,state:'riding',paused:false});
+  Object.assign(S,{lives:3,bestAir:0,totalAir:0,time:0,maxKmh:0,clean:0,spins:0,flips:0,finishes:0,parkClean:0,state:'riding',paused:false});
   objI = 0; teleport(spotI, true); $('overlay').classList.add('hidden'); setTimeout(()=>$('help').classList.add('hidden'), 12000);
 }
 function crash(reason){ S.lastCrash = reason;
@@ -346,8 +361,11 @@ function crash(reason){ S.lastCrash = reason;
   else flash('BAIL!', 1.5);
 }
 function showOverlay(title,msg){ $('overlay').classList.remove('hidden'); $('overlayBox').querySelector('h1').textContent=title; $('overlayMsg').innerHTML=msg; }
-function togglePause(){ if (S.state!=='riding') return; S.paused=!S.paused; if (S.paused) showOverlay('PAUSED','Press <b>Menu</b> / <b>P</b> to resume'); else $('overlay').classList.add('hidden'); }
+function togglePause(){ if (S.state!=='riding' || shopOpen) return; S.paused=!S.paused; if (S.paused) showOverlay('PAUSED','Press <b>Menu</b> / <b>P</b> to resume<br><small>Press <b>X</b> / <b>O</b> for the 🚲 Bike Shop</small>'); else $('overlay').classList.add('hidden'); }
 function onPress(code){
+  if (shopOpen){ shopKey(code); return; }
+  if ((code==='X'||code==='KeyO') && (S.state==='menu' || S.paused)){ openShop(); return; }
+  if (code==='KeyO' && S.state==='riding'){ openShop(); return; }
   if (code==='Enter' || code==='A'){ if (S.state==='menu'||S.state==='over'||S.state==='finished'){ resetGame(); return; } }
   if (code==='Space' && (S.state==='menu'||S.state==='over'||S.state==='finished')) { resetGame(); return; }
   if (code==='KeyP'||code==='Escape'||code==='Start') togglePause();
@@ -374,19 +392,24 @@ const ALWAYS = new Set(['Flow Line']);
 const isOpen = i => { const tr = spotTrail(i); return !tr || ALWAYS.has(tr.name) || unlocked.has(tr.name); };
 const nextOpen = (from, dir) => { for (let k=1;k<=spots.length;k++){ const j = ((from + dir*k) % spots.length + spots.length) % spots.length; if (isOpen(j)) return j; } return from; };
 let spotI = 1;   // spawn at Flow Line
-const menuMsg = () => `Press <b>A</b> / <b>Enter</b> to drop in at <b>${spots[spotI].name}</b><br><small>D-pad ← → / [ ] to pick a spot</small>`;
+const spotTag = i => { const tr = spots[i].trail !== undefined ? trails[spots[i].trail] : (spots[i].name.startsWith('Dirt') ? PARK : null); return tr ? ` ${DIFF[tr.diff].icon} ${DIFF[tr.diff].label} ${tr.type}` : ' free roam'; };
+const menuMsg = () => `<small>Press <b>X</b> / <b>O</b> for the 🚲 Bike Shop · $${S.score.toLocaleString()} DOLLAHS</small><br>Press <b>A</b> / <b>Enter</b> to drop in at <b>${spots[spotI].name}</b> <small>(${spotTag(spotI).trim()})</small><br><small>D-pad ← → / [ ] to pick a spot</small>`;
 function teleport(i, quiet){
   spotI = (i + spots.length) % spots.length; const s = spots[spotI];
   updateChunks(s.x, s.z, 1e9, 160);      // build the ground around the spot right away
   placeAt(s.x, s.z, s.yaw); S.crumbs = []; S.crumbT = 0; S.run = null; camInit = false;
-  if (!quiet){ flash(s.name, 1.6); } toast(`📍 ${spotI+1}/${spots.length} ${s.name}  ·  ${spots.filter((_,j)=>isOpen(j)).length} spots unlocked  ·  D-pad ← → to teleport`);
+  if (!quiet){ flash(s.name, 1.6); } toast(`📍 ${spotI+1}/${spots.length} ${s.name} ·${spotTag(spotI)}  ·  ${spots.filter((_,j)=>isOpen(j)).length} spots unlocked  ·  D-pad ← → to teleport`);
 }
+const OOB = HALF - 60, inside = (x,z) => Math.max(Math.abs(x), Math.abs(z)) < OOB - 90;
 function respawnSafe(){
   if (S.failedRun !== undefined && S.failedRun !== null){ const tr = trails[S.failedRun]; S.failedRun = null;   // failed run: back to just above that trail's START arch
     placeAt(tr.pts[0][0], tr.pts[0][1], tr.yaw[0]); S.crumbs = []; S.crumbT = 0; camInit = false; return; }
   // back to where you were riding safely ~1.5 s ago (Mavrix-style), facing the way you were going
-  const c = (S.crumbs||[]).find(c => S.time - c.t >= 1.5) || (S.crumbs||[])[0];
-  if (c) placeAt(c.x, c.z, c.yaw); else placeAt(S.x, S.z, S.travel ?? S.yaw);
+  const ok = (S.crumbs||[]).filter(c => inside(c.x, c.z));
+  const c = ok.find(c => S.time - c.t >= 1.5) || ok[0];
+  if (c) placeAt(c.x, c.z, c.yaw);
+  else if (!inside(S.x, S.z)){ const L = OOB - 120, x = Math.max(-L, Math.min(L, S.x)), z = Math.max(-L, Math.min(L, S.z)); placeAt(x, z, Math.atan2(x, z)); camInit = false; }   // face the middle of the map
+  else placeAt(S.x, S.z, S.travel ?? S.yaw);
   S.crumbs = []; S.crumbT = 0;
 }
 function trackWorld(dt){
@@ -400,13 +423,18 @@ function trackWorld(dt){
   if (cur){ const tr = trails[cur.t];
     if (cur.s < 18 && (!S.run || S.run.t !== cur.t)) { S.run = {t:cur.t, start:S.time, s:cur.s}; S.lives = 3; trickEl.textContent = `⏱ ${tr.name} — run started`; S.trickMsgT = 2; }
     if (S.run && S.run.t === cur.t){ S.run.s = Math.max(S.run.s, cur.s);
-      if (cur.s > tr.len - 8){ const time = S.time - S.run.start, bonus = 1000 + Math.round(tr.len/2);
-        S.finishes++; S.score += bonus; flash('FINISH!', 2.5); trickEl.textContent = `${tr.name} in ${fmtTime(time)}  +${bonus}`; S.trickMsgT = 3.5;
+      if (cur.s > tr.len - 8){ const time = S.time - S.run.start, bonus = Math.round((1000 + tr.len/2)*EARN);
+        S.finishes++; S.score += bonus; flash('FINISH!', 2.5); trickEl.textContent = `${tr.name} in ${fmtTime(time)}  +$${bonus}`; S.trickMsgT = 3.5;
         S.best ||= {}; if (!S.best[tr.name] || time < S.best[tr.name]){ S.best[tr.name] = time; toast(`🏁 New best on ${tr.name}: ${fmtTime(time)}`); }
         if (!unlocked.has(tr.name)){ unlocked.add(tr.name); saveUnlocks(); setTimeout(()=>toast(`🔓 Unlocked: ${tr.name} — teleport there any time`), 1200); }
         S.run = null; } } }
-  // keep inside the map
-  const lim = HALF - 40; if (Math.abs(S.x) > lim || Math.abs(S.z) > lim){ S.x = Math.max(-lim, Math.min(lim, S.x)); S.z = Math.max(-lim, Math.min(lim, S.z)); S.speed *= 0.5; if (!S.air) S.y = groundH(S.x,S.z); }
+  // map boundary: warning as you approach, then a bail + respawn at your last safe spot inside (counts as a crash only during a trail run)
+  const edge = Math.max(Math.abs(S.x), Math.abs(S.z));
+  if (S.crashT <= 0){
+    if (edge > OOB){ S.oob = true; crash('Out of bounds!'); }
+    else if (edge > OOB - 70){ if ((S.oobWarnT||0) <= 0){ flash('⚠ OUT OF BOUNDS — TURN BACK', 1.2); S.oobWarnT = 1.5; } }
+  }
+  S.oobWarnT = (S.oobWarnT||0) - dt;
 }
 const wrapA = a => Math.atan2(Math.sin(a), Math.cos(a));
 
@@ -428,23 +456,24 @@ function step(dt, inp){
     const h0 = groundH(S.x,S.z), h1 = groundH(S.x+tx_*0.5, S.z+tz_*0.5);
     const slope = (h1-h0)/0.5;
     let a = -G*slope/Math.sqrt(1+slope*slope);
-    a += inp.pedal * (S.speed < 12 ? 6 : 6*12/S.speed);
+    // pedalling: ~2.5 m/s² from a standstill, fading to zero at 30 km/h, weaker uphill; above 30 km/h speed only comes from gravity and pumping
+    a += inp.pedal * 2.5 * Math.max(0, 1 - S.speed/8.33) / (1 + 4*Math.max(0, slope));
     a -= inp.brake * 9 * Math.min(1,S.speed);
-    a -= 0.0045*S.speed*S.speed + 0.25;
+    a -= 0.0045*BIKE.drag*S.speed*S.speed + 0.25;
     if (!onTrail) a -= 0.35*S.speed + 1.5;
     // pumping: compress into backsides (downslope) and extend over faces (upslope) to gain speed; wrong timing costs speed
     const prevPre = S.preload;
     if (inp.pumpHold) { S.preload = Math.min(1, S.preload + dt*2.2); S.hopWin = 0.35; }
     let pop = 0;
     if (!inp.pumpHold){ S.hopWin = (S.hopWin||0) - dt;
-      if (inp.pop && S.preload > 0.05 && S.hopWin > 0){ pop = 1.2 + S.preload*2.0; /* bunny hop ~0.3-0.5 m */ S.preload = 0; }
+      if (inp.pop && S.preload > 0.05 && S.hopWin > 0){ pop = (1.2 + S.preload*2.0)*BIKE.pop; /* bunny hop ~0.3-0.5 m */ S.preload = 0; }
       else S.preload = Math.max(0, S.preload - dt*3); }
     const cr = (S.preload - prevPre)/dt;           // >0 compressing, <0 extending
     const pumpA = cr > 0 ? cr*(Math.max(0,-slope)*9 - Math.max(0,slope)*4) : -cr*(Math.max(0,slope)*3.5 - Math.max(0,-slope)*1.5);
     a += THREE.MathUtils.clamp(pumpA, -4, 6); S.pumpGain = pumpA;
     // slides: steering + braking breaks rear traction; the travel direction lags the bike heading
     const sliding = inp.brake > 0.3 && Math.abs(inp.steer) > 0.35 && S.speed > 5;
-    const grip = sliding ? 1.4 + Math.abs(S.slip||0)*3 : onTrail ? 11 : 5;
+    const grip = sliding ? 1.4 + Math.abs(S.slip||0)*3 : (onTrail ? 11 : 5)*BIKE.grip;
     const turn = 1.9 * Math.min(1, 0.25 + S.speed/8) / (1 + S.speed*0.03) * (sliding ? 1.7 : 1) * (1 + 0.15*Math.max(0,-inp.lean));
     S.yaw -= inp.steer * turn * dt;
     const slipPrev = S.travel; S.travel += wrapA(S.yaw - S.travel) * Math.min(1, grip*dt);
@@ -548,7 +577,7 @@ function land(gh, gp){
   S.speed = Math.max(0, fwd)*0.96;
   { const gr = (groundH(S.x - Math.sin(S.yaw)*S.speed/120, S.z - Math.cos(S.yaw)*S.speed/120) - gh)*120; S.vy = Math.min(tvy, gr); S.lastVyG = S.vy; } S.gf = 0; S.landCool = 0.3;
   const impact = -vn; S.suspV = (S.suspV||0) + Math.min(impact,15)*0.12; S.dustBurst = Math.min(1, impact/8);
-  if (Math.abs(pe) > 0.75 || Math.abs(se) > 0.85){ crash(Math.abs(se)>0.85 ? 'Landed sideways!' : 'Over the bars!'); return; }
+  if (Math.abs(pe) > 0.75*BIKE.stab || Math.abs(se) > 0.85*BIKE.stab){ crash(Math.abs(se)>0.85*BIKE.stab ? 'Landed sideways!' : 'Over the bars!'); return; }
   if (impact > 20){ crash('Too hard a landing!'); return; }
   if (S.trick){ crash('Still mid-trick!'); return; }
   if (Math.abs(S.tweak||0) > 0.6){ crash('Didn\'t straighten the tweak!'); return; }
@@ -564,8 +593,8 @@ function land(gh, gp){
     if ((S.tweakT||0) > 0.15){ parts.push('Tweak'); pts += Math.round(150 + S.tweakT*300); }
     parts.push(`${S.airT.toFixed(1)}s air`);
     if (Math.abs(pe) < 0.2 && Math.abs(se) < 0.2){ parts.push('Perfect!'); pts = Math.round(pts*1.25); }
-    S.score += pts; S.clean++; if (inPark(S.x,S.z)) S.parkClean = (S.parkClean||0) + 1; S.totalAir += S.airT; S.bestAir = Math.max(S.bestAir, S.airT);
-    trickEl.textContent = parts.join(' + ') + `  +${pts}`; S.trickMsgT = 2.5;
+    pts = Math.max(1, Math.round(pts*EARN)); S.score += pts; S.clean++; if (inPark(S.x,S.z)) S.parkClean = (S.parkClean||0) + 1; S.totalAir += S.airT; S.bestAir = Math.max(S.bestAir, S.airT);
+    trickEl.textContent = parts.join(' + ') + `  +$${pts}`; S.trickMsgT = 2.5;
   }
 }
 const fmtTime = t => `${Math.floor(t/60)}:${(t%60).toFixed(1).padStart(4,'0')}`;
@@ -598,7 +627,7 @@ function frame(){
   for (const k in inp.pressed) onPress(k);
   if (S.state==='riding' && !S.paused){
     acc += dt; const h = 1/120; while (acc >= h){ step(h, inp); acc -= h; }
-    trackWorld(dt);
+    trackWorld(dt); shopProximity(dt);
   } else if (S.state!=='riding' && S.state!=='menu') { step(dt, {steer:0,pedal:0,brake:1,jump:false,tx:0,ty:0}); }
   updateChunks(S.x, S.z); farU.value.set(S.x, S.z, coveredR);
   // pose bike
@@ -633,7 +662,8 @@ function frame(){
   arc.style.strokeDasharray = `${Math.min(1,kmh/90)*arcLen} 1000`;
   $('airVal').textContent = (S.air && S.airT > 0.1 ? S.airT : 0).toFixed(1)+'s';
   $('airBest').textContent = `best ${S.bestAir.toFixed(1)}s`;
-  $('scoreVal').textContent = S.score.toLocaleString();
+  $('scoreVal').textContent = '$' + S.score.toLocaleString();
+  if (S.score !== S.savedScore){ S.savedScore = S.score; LS.set('trailDescent.dollahs', S.score); }
   $('lives').style.display = S.run ? '' : 'none';
   $('livesVal').textContent = S.lives>0 ? '♥ '.repeat(S.lives).trim() : '—';
   const run = S.run && trails[S.run.t];
@@ -667,11 +697,51 @@ function drawMinimap(){
   mmx.font = 'bold 10px Arial'; mmx.textAlign = 'center';
   spots.forEach((s,i)=>{ const px = (s.x+HALF)/sc, pz = (s.z+HALF)/sc, open = isOpen(i);      // unlocked spots: white numbered dot; locked: grey with a lock
     mmx.fillStyle = open ? '#fff' : 'rgba(60,60,60,.85)'; mmx.beginPath(); mmx.arc(px, pz, 6, 0, 7); mmx.fill();
-    mmx.fillStyle = open ? '#000' : '#bbb'; mmx.fillText(open ? String(i+1) : '🔒', px, pz+3.5); });
+    mmx.fillStyle = open ? '#000' : '#bbb'; mmx.fillText(open ? String(i+1) : '🔒', px, pz+3.5);
+    const tr = s.trail !== undefined ? trails[s.trail] : s.name.startsWith('Dirt') ? PARK : null;     // difficulty icon next to each spot
+    if (tr){ const d = DIFF[tr.diff]; mmx.font = 'bold 9px Arial'; mmx.lineWidth = 2; mmx.strokeStyle = '#fff'; mmx.fillStyle = d.color; mmx.globalAlpha = open ? 1 : 0.6;
+      mmx.strokeText(d.icon, px+12, pz+3); mmx.fillText(d.icon, px+12, pz+3); mmx.globalAlpha = 1; mmx.font = 'bold 10px Arial'; } });
   mmx.textAlign = 'start';
   mmx.save(); mmx.translate(a,b); mmx.rotate(-yw); mmx.fillStyle = '#ffd84d'; mmx.strokeStyle = '#000'; mmx.lineWidth = 1;
   mmx.beginPath(); mmx.moveTo(0,-7); mmx.lineTo(4.5,5); mmx.lineTo(-4.5,5); mmx.closePath(); mmx.fill(); mmx.stroke(); mmx.restore();
 }
+// ---------- bike shop ----------
+let shopOpen = false, shopSel = 0, shopWasPaused = false;
+function applyBike(){ frameMat.color.set(BIKE.color); leanG.scale.set(...BIKE.scale); }
+function openShop(){ shopOpen = true; shopWasPaused = S.paused; if (S.state==='riding') S.paused = true; shopSel = BIKES.indexOf(BIKE); renderShop(); $('shop').classList.remove('hidden'); }
+function closeShop(){ shopOpen = false; $('shop').classList.add('hidden'); if (S.state==='riding'){ S.paused = shopWasPaused; if (!S.paused) $('overlay').classList.add('hidden'); } S.shopCool = 3; }
+function bar(v){ const p = Math.round(50 + (v-1)*250); return `<span class="sbar"><i style="width:${Math.max(8,Math.min(100,p))}%"></i></span>`; }
+function renderShop(){
+  $('shopBal').textContent = '$' + S.score.toLocaleString() + ' DOLLAHS';
+  $('shopList').innerHTML = BIKES.map((b,i) => { const own = owned.has(b.id), eq = BIKE === b;
+    return `<div class="bike${i===shopSel?' sel':''}"><div class="sw" style="background:#${b.color.toString(16).padStart(6,'0')}"></div><div class="bn"><b>${b.name}</b><small>${b.desc}</small></div>
+      <div class="st">Speed ${bar(2-b.drag)} Grip ${bar(b.grip)}<br>Pop ${bar(b.pop)} Stability ${bar(b.stab)}</div>
+      <div class="pr">${eq ? 'EQUIPPED' : own ? 'OWNED · equip' : b.price ? '$'+b.price.toLocaleString() : 'FREE'}</div></div>`; }).join('');
+}
+function shopKey(code){
+  if (['DL','ArrowUp','ArrowLeft','KeyW','KeyA','BracketLeft'].includes(code)) shopSel = (shopSel+BIKES.length-1)%BIKES.length;
+  else if (['DR','ArrowDown','ArrowRight','KeyS','KeyD','BracketRight'].includes(code)) shopSel = (shopSel+1)%BIKES.length;
+  else if (code==='A'||code==='Enter'||code==='Space'){ const b = BIKES[shopSel];
+    if (!owned.has(b.id)){ if (S.score >= b.price){ S.score -= b.price; owned.add(b.id); LS.set('trailDescent.owned', [...owned]); toast(`🛒 Bought the ${b.name}!`); } else { toast(`Not enough DOLLAHS: need $${(b.price-S.score).toLocaleString()} more`); renderShop(); return; } }
+    BIKE = b; LS.set('trailDescent.bike', b.id); applyBike(); toast(`🚲 Riding the ${b.name}`); }
+  else if (code==='B'||code==='Escape'||code==='KeyO'||code==='X'||code==='Start'||code==='KeyP') { closeShop(); return; }
+  renderShop();
+}
+// shop building in the valley: ride up to the door to open the shop
+const SHOP_POS = {x:-40, z:250, yaw:0};
+{ const g = new THREE.Group(), y = terrainH(SHOP_POS.x, SHOP_POS.z);
+  const wall = new THREE.MeshLambertMaterial({color:0xc9a77a}), roof = new THREE.MeshLambertMaterial({color:0x8b2e1f}), dark = new THREE.MeshLambertMaterial({color:0x3a2a1c});
+  const body = new THREE.Mesh(new THREE.BoxGeometry(12,5,9), wall); body.position.y = 2.5; g.add(body);
+  const rf = new THREE.Mesh(new THREE.ConeGeometry(8.6,3,4), roof); rf.position.y = 6.5; rf.rotation.y = Math.PI/4; rf.scale.set(1,1,0.75); g.add(rf);
+  const door = new THREE.Mesh(new THREE.BoxGeometry(3.2,3.4,0.2), dark); door.position.set(0,1.7,-4.55); g.add(door);
+  const cv = document.createElement('canvas'); cv.width=512; cv.height=128; const c2 = cv.getContext('2d'); c2.fillStyle='#ffd84d'; c2.fillRect(0,0,512,128); c2.fillStyle='#222'; c2.font='bold 76px Arial'; c2.textAlign='center'; c2.fillText('$ BIKE SHOP',256,92);
+  const tx = new THREE.CanvasTexture(cv); tx.colorSpace = THREE.SRGBColorSpace; const sign = new THREE.Mesh(new THREE.PlaneGeometry(8,2), new THREE.MeshBasicMaterial({map:tx})); sign.position.set(0,4.2,-4.62); sign.rotation.y = Math.PI; g.add(sign);
+  g.traverse(o=>{ if (o.isMesh){ o.castShadow = o.receiveShadow = true; } });
+  g.position.set(SHOP_POS.x, y-0.3, SHOP_POS.z); scene.add(g); }
+function shopProximity(dt){ S.shopCool = Math.max(0, (S.shopCool||0) - dt);
+  const dx = S.x - SHOP_POS.x, dz = S.z - (SHOP_POS.z - 6);
+  if (!shopOpen && S.shopCool <= 0 && !S.air && dx*dx + dz*dz < 9) openShop(); }
+S.score = LS.get('trailDescent.dollahs', 0); S.savedScore = S.score; applyBike();
 showOverlay('TRAIL DESCENT', menuMsg());
 teleport(spotI, true);
 window.__game = S; window.__readInput = readInput; window.__groundH = groundH; window.__world = { trails, features, spots, PARK, terrainH, featH, isDirt, nearTrails, base, inPark };

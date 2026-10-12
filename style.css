@@ -27,3 +27,9 @@ canvas{display:block}
 #overlayBox p{font-size:22px}
 #minimap{position:absolute;top:84px;right:20px;width:180px;height:180px;border:2px solid rgba(255,255,255,.8);border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.4)}
 #timer{white-space:nowrap}
+#shop{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:20;background:rgba(15,20,25,.92);padding:16px 22px;border-radius:12px;width:min(760px,94vw);box-shadow:0 8px 30px rgba(0,0,0,.6)}
+#shop.hidden{display:none}#shop h2{margin:0 0 10px;color:#ffd84d}#shopBal{float:right;color:#7CFC8A;font-size:18px}
+.bike{display:flex;align-items:center;gap:12px;padding:8px;border-radius:8px;margin:4px 0;background:rgba(255,255,255,.05)}.bike.sel{outline:2px solid #ffd84d;background:rgba(255,216,77,.12)}
+.sw{width:34px;height:34px;border-radius:6px;flex:none;border:2px solid #fff}.bn{flex:1.2}.bn small{display:block;opacity:.75}.st{flex:1.6;font-size:12px}.pr{flex:none;width:120px;text-align:right;font-weight:800}
+.sbar{display:inline-block;width:52px;height:6px;background:#333;border-radius:3px;margin:0 6px 0 3px;vertical-align:middle}.sbar i{display:block;height:100%;background:#ffb020;border-radius:3px}
+#overlay{z-index:10}
