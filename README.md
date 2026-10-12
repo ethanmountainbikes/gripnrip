@@ -99,3 +99,23 @@ Run it locally with `python3 -m http.server`, then open http://localhost:8000.
 - The bike shop is a log cabin beside the valley path (spur path to the porch), >= 10 m clear of every path, trail and lift.
 - Objectives were removed; DOLLAHS still come from tricks and finishes.
 - Flip landings drop whole turns and settle by the shortest rotation, with a short quaternion blend.
+
+## Full-screen map, waypoints and the Bike Shop spot
+- View (controller) or M opens a full-screen map that pauses the game. It shows every trail with its name, difficulty, type and lock state, plus lifts and the trails they serve, paths, the park, the shop, checkpoints, teleport spots, waypoints, your position and heading, and a legend. Move the cursor with the stick, D-pad, arrows or mouse. A or Enter teleports to an unlocked spot, X, W or a click sets or removes a waypoint (up to 3), and B, M or View closes the map. On the controller, help is now Y in the pause menu; on the keyboard it is still H.
+- Waypoints show as tall glowing beacons with an on-screen distance marker that sticks to the screen edge when off-screen, appear on the minimap, clear with a toast when you ride within 12 m, and are saved in localStorage.
+- The Bike Shop is an always-open teleport spot (16, Shift+6). Number keys: 1-9 and 0 for spots 1-10, Shift+1-6 for spots 11-16.
+
+## Rider, bike and trick animations
+- **Models:** the bike and rider are built procedurally in `rider.js`; there are no third-party models to credit. Bike: hydroformed frame tubes, rear triangle with rocker link and coil shock, fork with gold stanchions, lowers and arch, 28-spoke wheels with knobby tyres, disc rotors and calipers, cassette, chainring, chain, derailleur, cranks, flat pedals with pins, dropper post and saddle, riser bar, stem, grips and levers. Rider: full-face helmet with peak and goggles, jersey, pants, knee pads, gloves and shoes. Static parts are merged into one mesh per material.
+- **Skeleton and IK:** hips, spine, head, upper and lower arms, hands, thighs, shins and feet. A two-bone IK solver keeps the hands on the grips and the feet on the pedals; elbows point out and knees point forward. The cranks turn while you pedal, and the pedals stay level.
+- **Tricks** (LB + right stick; keyboard C + I/J/K/L, diagonals with two keys, C+U for a barspin). How far you push the stick sets how strong the pose is, and poses blend in and out over about 0.1 s. Pose references: Red Bull "Slopestyle MTB tricks guide", the X Games BMX Tricktionary and riding.guide.
+  - ↑ No-hander: arms thrown out wide, knees pinch the seat
+  - ↖ Tuck no-hander: bars pulled into the lap, shoulders over the bars, arms swept back
+  - ↓ No-footer: both feet kicked off wide and back
+  - ← Superman: body stretched flat behind the bike, hands on the grips
+  - → Can-can: one leg kicked over the top tube
+  - ↙ Nac-nac: bars turned like a whip, one foot pushed out behind the rear wheel
+  - ↗ X-up: bars turned about 180°, arms crossed
+  - ↘ Tailwhip: feet off, the frame spins around the head tube while the bars and body stay put
+  - RS click (C+U): Barspin: the bars, fork and front wheel spin a full turn; release to catch them
+  - Whip, table and scrub come from the right stick (tweak), flips tuck the rider in, and in a 360 the rider looks over their shoulder.

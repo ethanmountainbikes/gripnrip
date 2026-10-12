@@ -36,3 +36,12 @@ canvas{display:block}
 #liftLegend{position:absolute;top:270px;right:20px;width:184px;font:11px/1.35 Arial,sans-serif;color:#fff;text-shadow:0 1px 2px #000;pointer-events:none}
 #liftLegend b{display:inline-block;width:14px;height:10px;margin-right:4px;border:1px solid #fff;vertical-align:middle}
 #liftRide{position:absolute;left:50%;bottom:120px;transform:translateX(-50%);background:rgba(0,0,0,.55);color:#fff;padding:8px 16px;border-radius:8px;font:bold 16px Arial;display:none}
+
+#bigmapWrap{position:fixed;inset:0;z-index:40}
+#bigmap{width:100%;height:100%;display:block;cursor:crosshair}
+#wpMarkers{position:fixed;inset:0;pointer-events:none;z-index:5}
+.wpMarker{position:absolute;left:0;top:0;color:#3ef0ff;font:bold 13px sans-serif;text-align:center;text-shadow:0 0 4px #000,0 0 2px #000;white-space:nowrap}
+.wpMarker b{display:block;font-size:16px}
+.wpMarker span{color:#fff}
+.wpMarker.edge{opacity:.85;background:rgba(0,30,40,.55);padding:3px 7px;border-radius:10px;border:1px solid #3ef0ff}
+#bigmapWrap.hidden{display:none}

@@ -344,6 +344,7 @@ export const SHOP = (() => { let best = null;
     if (c >= 10 && Math.hypot(x-LIFTS[0].bx, z-LIFTS[0].bz) > 35) best = {x, z, yaw: Math.atan2(x - J[0], z - J[1])}; }   // door faces the junction
   return best; })();
 const shopDoor = [SHOP.x - Math.sin(SHOP.yaw)*12, SHOP.z - Math.cos(SHOP.yaw)*12], parkGate = [PARK.x + 100*Math.cos(2.88), PARK.z + 100*Math.sin(2.88)];
+spots.push({name:'Bike Shop', shop:true, x: SHOP.x - Math.sin(SHOP.yaw)*20, z: SHOP.z - Math.cos(SHOP.yaw)*20, yaw: SHOP.yaw + Math.PI});   // always-open teleport on the porch spur, facing the door
 // waypoints on a ring 105 m from the park centre so paths go around the pad and its jump lines, never through them
 const ring = (...degs) => degs.map(a => [PARK.x + 150*Math.cos(a*Math.PI/180), PARK.z + 105*Math.sin(a*Math.PI/180)]);
 const CONN_DEFS = [

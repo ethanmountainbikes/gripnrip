@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { buildBikeRider } from './rider.js';
 import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featAxis, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL, LIFTS, connectors, CW, SHOP } from './world.js';
 
 const G = 9.81;
@@ -210,42 +211,7 @@ const bike = new THREE.Group();          // position + heading yaw (+ spin)
 const pitchG = new THREE.Group(); bike.add(pitchG);
 const leanG = new THREE.Group(); pitchG.add(leanG);
 const rig = new THREE.Group(); leanG.add(rig);        // preload compression
-const wheels = [];
-{ const pink = frameMat;
-  const black = new THREE.MeshStandardMaterial({color:0x1a1a1a, roughness:0.8});
-  const silver = new THREE.MeshStandardMaterial({color:0xbbbbbb, metalness:0.8, roughness:0.3});
-  const orange = new THREE.MeshStandardMaterial({color:0xff7a12, roughness:0.7});
-  const navy = new THREE.MeshStandardMaterial({color:0x22283a, roughness:0.8});
-  const white = new THREE.MeshStandardMaterial({color:0xf4f4f4, roughness:0.4});
-  const skin = new THREE.MeshStandardMaterial({color:0xd9a27a});
-  const bar = (a,b,r,mat) => { const A=new THREE.Vector3(...a), B=new THREE.Vector3(...b), L=A.distanceTo(B);
-    const m=new THREE.Mesh(new THREE.CylinderGeometry(r,r,L,8),mat); m.position.copy(A).add(B).multiplyScalar(0.5);
-    m.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), B.clone().sub(A).normalize()); m.castShadow=true; rig.add(m); return m; };
-  const R = 0.36;
-  for (const zz of [-0.58, 0.55]){ const w = new THREE.Group(); w.position.set(0,R,zz);
-    const tire = new THREE.Mesh(new THREE.TorusGeometry(R-0.04,0.06,8,20), black); tire.rotation.y=Math.PI/2; tire.castShadow=true; w.add(tire);
-    for (let i=0;i<6;i++){ const sp = new THREE.Mesh(new THREE.BoxGeometry(0.015,2*(R-0.08),0.02), silver); sp.rotation.x = i*Math.PI/6; w.add(sp); }
-    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.05,0.05,0.12,8), pink); hub.rotation.z=Math.PI/2; w.add(hub);
-    rig.add(w); wheels.push(w); }
-  // frame (front = -z)
-  const BB=[0,0.33,0.05], seat=[0,0.95,0.25], head=[0,0.9,-0.38];
-  bar(BB,seat,0.04,pink); bar(BB,head,0.05,pink); bar(seat,head,0.04,pink);
-  bar(BB,[0,R,0.55],0.03,pink); bar(seat,[0,R,0.55],0.03,pink);
-  bar(head,[0.08,R,-0.58],0.03,silver); bar(head,[-0.08,R,-0.58],0.03,silver);
-  bar([0,0.9,-0.38],[0,1.05,-0.42],0.03,black); bar([-0.38,1.06,-0.42],[0.38,1.06,-0.42],0.02,black);
-  bar([0,0.95,0.25],[0,1.0,0.3],0.02,black); const s=bar([0,1.0,0.22],[0,1.0,0.42],0.05,black);
-  // rider
-  const box = (w,h,d,mat,x,y,z,rx=0) => { const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat); m.position.set(x,y,z); m.rotation.x=rx; m.castShadow=true; rig.add(m); return m; };
-  box(0.36,0.55,0.24,orange,0,1.42,0.02,-0.75);                  // torso leaning forward
-  box(0.37,0.2,0.25,white,0,1.48,0.0,-0.75).scale.set(0.3,0.3,1.02); // jersey stripe
-  const helm = new THREE.Mesh(new THREE.SphereGeometry(0.15,12,10), white); helm.position.set(0,1.7,-0.24); helm.scale.set(1,0.95,1.2); helm.castShadow=true; rig.add(helm);
-  box(0.22,0.08,0.12,navy,0,1.66,-0.36);   // goggles/visor
-  const peak = box(0.22,0.02,0.12,white,0,1.79,-0.36,-0.2);
-  bar([-0.18,1.55,-0.1],[-0.36,1.08,-0.42],0.05,orange); bar([0.18,1.55,-0.1],[0.36,1.08,-0.42],0.05,orange); // arms
-  for (const sx of [-0.12,0.12]){ bar([sx,1.15,0.2],[sx*1.6,0.9,-0.12],0.07,navy); bar([sx*1.6,0.9,-0.12],[sx*1.4,0.42,0.06],0.06,navy);
-    box(0.09,0.06,0.2,black,sx*1.4,0.4,0.02); }
-  box(0.3,0.22,0.22,navy,0,1.17,0.22);
-}
+const BR = buildBikeRider(frameMat); rig.add(BR.root); const wheels = BR.wheels;   // detailed procedural bike + skeletal rider (rider.js)
 scene.add(bike);
 bike.traverse(o=>{ if(o.isMesh) o.castShadow=true; });
 
@@ -284,15 +250,15 @@ function padMap(gp){
   const ax = i => gp.axes[i] || 0;
   if (gp.mapping === 'standard'){
     return { lx:ax(0), rx:ax(2), ry:ax(3), lt:bv(6), rt:bv(7),
-      ly:ax(1), btn:{A:bv(0)>0.5, B:bv(1)>0.5, X:bv(2)>0.5, Y:bv(3)>0.5, LB:bv(4)>0.5, Back:bv(8)>0.5, Start:bv(9)>0.5, DL:bv(14)>0.5, DR:bv(15)>0.5} };
+      ly:ax(1), btn:{A:bv(0)>0.5, B:bv(1)>0.5, X:bv(2)>0.5, Y:bv(3)>0.5, LB:bv(4)>0.5, RS:bv(11)>0.5, Back:bv(8)>0.5, Start:bv(9)>0.5, DL:bv(14)>0.5, DR:bv(15)>0.5, DU:bv(12)>0.5, DD:bv(13)>0.5} };
   }
   if (gp.axes.length >= 6){   // Firefox XInput-style: triggers on axes 2 & 5
     return { lx:ax(0), rx:ax(3), ry:ax(4), lt:trigAxis(gp,2), rt:trigAxis(gp,5),
-      ly:ax(1), btn:{A:bv(0)>0.5, B:bv(1)>0.5, X:bv(2)>0.5, Y:bv(3)>0.5, LB:bv(4)>0.5, Back:bv(6)>0.5, Start:bv(7)>0.5, ...dpadNS(gp, bv, 13, 14)} };
+      ly:ax(1), btn:{A:bv(0)>0.5, B:bv(1)>0.5, X:bv(2)>0.5, Y:bv(3)>0.5, LB:bv(4)>0.5, RS:bv(9)>0.5, Back:bv(6)>0.5, Start:bv(7)>0.5, ...dpadNS(gp, bv, 13, 14)} };
   }
   // other non-standard layouts: right stick on 2,3, triggers as buttons 6,7
   return { lx:ax(0), rx:ax(2), ry:ax(3), lt:Math.max(bv(6), 0), rt:Math.max(bv(7), 0),
-    ly:ax(1), btn:{A:bv(0)>0.5, B:bv(1)>0.5, X:bv(2)>0.5, Y:bv(3)>0.5, LB:bv(4)>0.5, Back:bv(8)>0.5, Start:bv(9)>0.5, ...dpadNS(gp, bv, 14, 15)} };
+    ly:ax(1), btn:{A:bv(0)>0.5, B:bv(1)>0.5, X:bv(2)>0.5, Y:bv(3)>0.5, LB:bv(4)>0.5, RS:bv(11)>0.5, Back:bv(8)>0.5, Start:bv(9)>0.5, ...dpadNS(gp, bv, 14, 15)} };
 }
 
 // Descenders default Xbox layout:
@@ -308,9 +274,12 @@ function readInput(){
     const m = padMap(gp), rx = dz(m.rx), ry = dz(m.ry);
     inp.steer += dz(m.lx); inp.lean += dz(m.ly);
     inp.pedal = Math.max(inp.pedal, m.rt); inp.brake = Math.max(inp.brake, m.lt);
-    if (m.btn.LB){ if (Math.hypot(rx,ry) > 0.35) inp.trick = Math.abs(rx) > Math.abs(ry) ? (rx>0?'right':'left') : (ry>0?'down':'up'); }
+    if (m.btn.LB){ const mag = Math.hypot(rx,ry);   // LB + right stick: 8 directions (diagonals = tuck no-hander, X-up, nac-nac, tailwhip), RS click = barspin; stick amount = trick strength
+      if (m.btn.RS){ inp.trick = 'bar'; inp.trickAmt = 1; }
+      else if (mag > 0.35){ const sec = Math.round(Math.atan2(ry, rx)/(Math.PI/4)); inp.trick = {0:'right', 1:'dr', 2:'down', 3:'dl', 4:'left', '-4':'left', '-3':'ul', '-2':'up', '-1':'ur'}[sec]; inp.trickAmt = Math.min(1, (mag-0.35)/0.6); } }
     else { if (ry > 0.5) inp.pumpHold = true; if (ry < -0.5){ inp.pop = true; inp.counter = true; } inp.tweak = rx; inp.rsy = ry; }
-    for (const name of ['A','B','X','Y','Start','Back','DL','DR']){ const now=!!m.btn[name], key=gp.index+'_'+name; if(now && !prevBtn[key]) inp.pressed[name]=true; prevBtn[key]=now; }
+    inp.dpx = (m.btn.DR?1:0) - (m.btn.DL?1:0); inp.dpy = (m.btn.DD?1:0) - (m.btn.DU?1:0); inp.lsx = dz(m.lx); inp.lsy = dz(m.ly);
+    for (const name of ['A','B','X','Y','Start','Back','DL','DR','DU','DD']){ const now=!!m.btn[name], key=gp.index+'_'+name; if(now && !prevBtn[key]) inp.pressed[name]=true; prevBtn[key]=now; }
     break; }
   if (keys.KeyA||keys.ArrowLeft) inp.steer -= 1; if (keys.KeyD||keys.ArrowRight) inp.steer += 1;
   if (keys.KeyW||keys.ArrowUp) inp.pedal = 1; if (keys.KeyS||keys.ArrowDown) inp.brake = 1;
@@ -318,7 +287,8 @@ function readInput(){
   if (keys.KeyJ) inp.steer -= 1; if (keys.KeyL) inp.steer += 1;
   if (keys.ShiftLeft||keys.ShiftRight) inp.counter = true;
   if (keys.KeyQ) inp.tweak -= 1; if (keys.KeyE) inp.tweak += 1;
-  if (keys.KeyC){ inp.trick = keys.KeyI||keys.ArrowUp ? 'up' : keys.KeyK||keys.ArrowDown ? 'down' : keys.KeyJ||keys.ArrowLeft ? 'left' : keys.KeyL||keys.ArrowRight ? 'right' : inp.trick; }
+  if (keys.KeyC){ const u = keys.KeyI||keys.ArrowUp, d = keys.KeyK||keys.ArrowDown, l = keys.KeyJ||keys.ArrowLeft, r = keys.KeyL||keys.ArrowRight;
+    const t = keys.KeyU ? 'bar' : u && l ? 'ul' : u && r ? 'ur' : d && l ? 'dl' : d && r ? 'dr' : u ? 'up' : d ? 'down' : l ? 'left' : r ? 'right' : null; if (t){ inp.trick = t; inp.trickAmt = 1; } }
   if (keys.Space) inp.pumpHold = true;
   if (!keys.Space && kbSpacePrev) inp.pop = true;
   kbSpacePrev = !!keys.Space;
@@ -352,10 +322,13 @@ function crash(reason){ S.lastCrash = reason;
   else flash('BAIL!', 1.5);
 }
 function showOverlay(title,msg){ $('overlay').classList.remove('hidden'); $('overlayBox').querySelector('h1').textContent=title; $('overlayMsg').innerHTML=msg; }
-function togglePause(){ if (S.state!=='riding' || shopOpen) return; S.paused=!S.paused; if (S.paused) showOverlay('PAUSED','Press <b>Menu</b> / <b>P</b> to resume<br><small>Press <b>X</b> / <b>O</b> for the 🚲 Bike Shop</small>'); else $('overlay').classList.add('hidden'); }
+function togglePause(){ if (S.state!=='riding' || shopOpen) return; S.paused=!S.paused; if (S.paused) showOverlay('PAUSED','Press <b>Menu</b> / <b>P</b> to resume<br><small>Press <b>X</b> / <b>O</b> for the 🚲 Bike Shop · <b>Y</b> / <b>H</b> controls help · <b>View</b> / <b>M</b> full map</small>'); else $('overlay').classList.add('hidden'); }
 function onPress(code){
   if (S.lift){ if (code==='A'||code==='Enter'||code==='Space') S.lift.d = 1e9; return; }   // skip the chairlift ride
   if (shopOpen){ shopKey(code); return; }
+  if (bigMap.open){ mapKey(code); return; }
+  if ((code==='Back'||code==='KeyM') && S.state==='riding' && !S.lift){ openMap(); return; }
+  if (code==='Y' && S.paused){ $('help').classList.toggle('hidden'); return; }   // help moved into the pause menu on the controller
   if ((code==='X'||code==='KeyO') && (S.state==='menu' || S.paused)){ openShop(); return; }
   if (code==='KeyO' && S.state==='riding'){ openShop(); return; }
   if (code==='Enter' || code==='A'){ if (S.state==='menu'||S.state==='over'||S.state==='finished'){ resetGame(); return; } }
@@ -363,13 +336,13 @@ function onPress(code){
   if (code==='KeyP'||code==='Escape'||code==='Start') togglePause();
   if (code==='KeyV'||code==='Y'){ camMode = (camMode+1)%3; toast(['Camera: chase','Camera: far','Camera: close'][camMode]); }
   if (code==='KeyX'||code==='X') camInit = false;
-  if (code==='KeyH'||code==='Back') $('help').classList.toggle('hidden');
+  if (code==='KeyH') $('help').classList.toggle('hidden');
   if ((code==='KeyR'||code==='B') && S.state==='riding' && !S.paused) { respawnSafe(); flash('RESPAWN',0.8); }
   // teleport between spots: D-pad ← → on the controller, [ ] / , . or 1-8 on the keyboard
   if (S.state==='riding' && !S.paused){
     if (code==='DL'||code==='BracketLeft'||code==='Comma') teleport(nextOpen(spotI,-1));
     if (code==='DR'||code==='BracketRight'||code==='Period') teleport(nextOpen(spotI,1));
-    const m = /^Digit([0-9])$/.exec(code); if (m && (+m[1]||10) <= spots.length){ const j = (+m[1]||10)-1; if (isOpen(j)) teleport(j); else toast(`🔒 ${spots[j].name} is locked — finish ${spotTrail(j).name} once to unlock it`); }
+    const m = /^Digit([0-9])$/.exec(code), num = m ? (+m[1]||10) + (keys.ShiftLeft||keys.ShiftRight ? 10 : 0) : 0; if (m && num <= spots.length){ const j = num-1; /* 1-9,0 = spots 1-10; Shift+1-5 = spots 11-15 */ if (isOpen(j)) teleport(j); else toast(`🔒 ${spots[j].name} is locked — finish ${spotTrail(j).name} once to unlock it`); }
   } else if (S.state==='menu' && (code==='DL'||code==='DR'||code==='BracketLeft'||code==='BracketRight')){
     spotI = nextOpen(spotI, code==='DL'||code==='BracketLeft' ? -1 : 1); $('overlayMsg').innerHTML = menuMsg(); }
 }
@@ -545,7 +518,7 @@ function step(dt, inp){
     S.tweak = THREE.MathUtils.lerp(S.tweak||0, inp.tweak, Math.min(1, dt*9));
     S.nose = THREE.MathUtils.lerp(S.nose||0, -inp.rsy*0.6, Math.min(1, dt*8));
     if (Math.abs(S.tweak) > 0.6) S.tweakT = (S.tweakT||0) + dt;
-    if (inp.trick){ S.trick = inp.trick; S.trickT = (S.trickT||0) + dt; if (S.trickT > 0.3) S.tricksDone.add(inp.trick); } else { S.trick = null; S.trickT = 0; }
+    if (inp.trick){ S.trick = inp.trick; S.trickAmt = inp.trickAmt ?? 1; S.trickT = (S.trickT||0) + dt; if (S.trickT > 0.3) S.tricksDone.add(inp.trick); } else { S.trick = null; S.trickT = 0; }
     S.lean = THREE.MathUtils.lerp(S.lean, 0, dt*3); S.weight = THREE.MathUtils.lerp(S.weight||0, ty, dt*5);
     const gh = groundH(S.x,S.z), gs = (groundH(S.x+S.vx*0.05, S.z+S.vz*0.05)-gh)/(Math.hypot(S.vx,S.vz)*0.05+1e-3);
     const gp = Math.atan(gs);
@@ -591,7 +564,7 @@ function land(gh, gp){
     const parts = []; let pts = Math.round(S.airT*120);
     if (flips){ parts.push((Math.abs(flips)>1? `${Math.abs(flips)}x `:'') + (flips<0?'Frontflip':'Backflip')); pts += 600*Math.abs(flips); S.flips += Math.abs(flips); }
     if (spins){ parts.push(`${Math.abs(spins)*360}`); pts += 350*Math.abs(spins); S.spins += Math.abs(spins); }
-    const TN = {up:'No Hander', down:'No Footer', left:'Superman', right:'Can-Can'};
+    const TN = {up:'No Hander', down:'No Footer', left:'Superman', right:'Can-Can', ul:'Tuck No Hander', ur:'X-Up', dl:'Nac-Nac', dr:'Tailwhip', bar:'Barspin'};
     for (const t of (S.tricksDone||[])){ parts.push(TN[t]); pts += 400; }
     if ((S.scrub||0) > 0.5){ parts.push('Scrub'); pts += 250; }
     if ((S.tweakT||0) > 0.15){ parts.push('Tweak'); pts += Math.round(150 + S.tweakT*300); }
@@ -643,8 +616,8 @@ function frame(){
   if (S.air) S.landBlend = 0.15; else if (S.landBlend > 0) S.landBlend -= dt;
   if (!S.air && S.landBlend > 0) bike.quaternion.slerp(_qT, 1 - Math.exp(-dt/0.04)); else bike.quaternion.copy(_qT);
   pitchG.rotation.set(0,0,0); leanG.rotation.set(0,0,0);   // whip/scrub: stick right = bike whips right
-  const tp_ = S.trick; rig.rotation.x = tp_==='up' ? 0.25 : tp_==='down' ? -0.15 : 0; rig.rotation.z = tp_==='left' ? 0.35 : tp_==='right' ? -0.35 : 0;
-  rig.position.z = (tp_ ? 0.15 : 0) + (S.weight||0)*0.12;      // visible fore/aft weight transfer
+  BR.update(S, inp, dt);                                       // rider pose: IK on grips/pedals, blended trick keyframes, barspin/tailwhip bike parts
+  rig.position.z = (S.weight||0)*0.12;                         // visible fore/aft weight transfer
   rig.position.y = -(S.susp||0)*0.8; rig.scale.y = 1 - (S.susp||0)*0.5;
   spawnDust(dt);
   for (const w of wheels) w.rotation.x -= S.speed*dt/0.36;
@@ -661,6 +634,7 @@ function frame(){
   camera.position.copy(camPos);
   camRoll = THREE.MathUtils.lerp(camRoll, -S.lean*0.18 + (S.sliding ? S.slip*0.1 : 0), Math.min(1, dt*4));
   camera.up.set(Math.sin(camRoll)*Math.cos(ch), Math.cos(camRoll), -Math.sin(camRoll)*Math.sin(ch)); camera.lookAt(camLook);
+  if (window.__camSide){ const o = window.__camSide, c = Math.cos(S.yaw), s_ = Math.sin(S.yaw); camera.position.set(S.x + c*o.d + Math.sin(S.yaw)*(o.b||0), S.y + (o.h||1.2), S.z - s_*o.d + Math.cos(S.yaw)*(o.b||0)); camera.up.set(0,1,0); camera.lookAt(S.x, S.y + 0.9, S.z); }   // test hook: side camera for pose screenshots
   mountains.position.set(camera.position.x, 0, camera.position.z);
   skyDome.position.copy(camera.position);
   sun.position.set(S.x+30, S.y+60, S.z+20); sun.target.position.set(S.x, S.y, S.z-10);
@@ -680,7 +654,7 @@ function frame(){
   $('progressBar').style.width = run ? Math.min(100, S.run.s/run.len*100) + '%' : '0%';
   $('progressBar').style.background = run ? run.color : '#fff';
   $('timer').textContent = run ? `${run.name}  ${fmtTime(S.time - S.run.start)}` : (S.onTrailName || 'Free roam');
-  drawMinimap();
+  drawMinimap(); updateWaypoints(dt); if (bigMap.open) mapFrame(dt, inp);
   if (S.trickMsgT > 0){ S.trickMsgT -= dt; if (S.trickMsgT<=0) trickEl.textContent=''; }
   if (S.flashT > 0){ S.flashT -= dt; if (S.flashT<=0) centerEl.textContent=''; }
   fpsN++; fpsT+=dt; if (fpsT>1){ window.__fps = fpsN/fpsT; fpsN=0; fpsT=0; }
@@ -714,10 +688,108 @@ function drawMinimap(){
     const tr = s.trail !== undefined ? trails[s.trail] : s.name.startsWith('Dirt') ? PARK : null;     // difficulty icon next to each spot
     if (tr){ const d = DIFF[tr.diff]; mmx.font = 'bold 9px Arial'; mmx.lineWidth = 2; mmx.strokeStyle = '#fff'; mmx.fillStyle = d.color; mmx.globalAlpha = open ? 1 : 0.6;
       mmx.strokeText(d.icon, px+12, pz+3); mmx.fillText(d.icon, px+12, pz+3); mmx.globalAlpha = 1; mmx.font = 'bold 10px Arial'; } });
+  waypoints.forEach(w => { const px = (w.x+HALF)/sc, pz = (w.z+HALF)/sc; mmx.fillStyle = '#3ef0ff'; mmx.strokeStyle = '#003'; mmx.lineWidth = 1.5; mmx.beginPath(); mmx.moveTo(px, pz-6); mmx.lineTo(px+5, pz); mmx.lineTo(px, pz+6); mmx.lineTo(px-5, pz); mmx.closePath(); mmx.fill(); mmx.stroke(); });
   mmx.textAlign = 'start';
   mmx.save(); mmx.translate(a,b); mmx.rotate(-yw); mmx.fillStyle = '#ffd84d'; mmx.strokeStyle = '#000'; mmx.lineWidth = 1;
   mmx.beginPath(); mmx.moveTo(0,-7); mmx.lineTo(4.5,5); mmx.lineTo(-4.5,5); mmx.closePath(); mmx.fill(); mmx.stroke(); mmx.restore();
 }
+// ---------- full-screen map (View / M) + waypoints ----------
+const bigMap = { open:false, cx:0, cz:0, wasPaused:false, mouse:false };
+const WP_KEY = 'trailDescent.waypoints', WP_MAX = 3;
+const waypoints = (LS.get(WP_KEY, []) || []).filter(w => Number.isFinite(w.x) && Number.isFinite(w.z)).slice(0, WP_MAX);
+const wpBeacons = [];
+const beaconMat = new THREE.MeshBasicMaterial({color:0x3ef0ff, transparent:true, opacity:0.45, blending:THREE.AdditiveBlending, depthWrite:false, fog:false});
+const beaconCore = new THREE.MeshBasicMaterial({color:0xbaffff, transparent:true, opacity:0.8, blending:THREE.AdditiveBlending, depthWrite:false, fog:false});
+function syncBeacons(){ for (const b of wpBeacons) scene.remove(b.g); wpBeacons.length = 0; $('wpMarkers').innerHTML = '';
+  waypoints.forEach((w, i) => { const g = new THREE.Group(), y = terrainH(w.x, w.z);
+    const outer = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 260, 16, 1, true), beaconMat); outer.position.y = 130; g.add(outer);
+    const core = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 260, 8, 1, true), beaconCore); core.position.y = 130; g.add(core);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(3, 0.25, 6, 32), beaconCore); ring.rotation.x = Math.PI/2; ring.position.y = 0.4; g.add(ring);
+    g.position.set(w.x, y, w.z); scene.add(g);
+    const el = document.createElement('div'); el.className = 'wpMarker'; el.innerHTML = `<b>◆ ${i+1}</b><span></span>`; $('wpMarkers').appendChild(el);
+    wpBeacons.push({g, ring, el, w}); }); LS.set(WP_KEY, waypoints); }
+function toggleWaypointAt(x, z){ const scr = mapScale(); const hit = waypoints.findIndex(w => Math.hypot(w.x-x, w.z-z)*scr.s < 14);
+  if (hit >= 0){ waypoints.splice(hit, 1); toast('◆ Waypoint removed'); }
+  else { if (waypoints.length >= WP_MAX) waypoints.shift(); waypoints.push({x, z}); toast(`◆ Waypoint set (${waypoints.length}/${WP_MAX})`); }
+  syncBeacons(); }
+const _wv = new THREE.Vector3();
+function updateWaypoints(dt){ const W_ = innerWidth, H_ = innerHeight;
+  for (let i = wpBeacons.length-1; i >= 0; i--){ const b = wpBeacons[i], d = Math.hypot(S.x-b.w.x, S.z-b.w.z);
+    if (d < 12 && S.state === 'riding' && !S.lift){ waypoints.splice(waypoints.indexOf(b.w), 1); toast('◆ Waypoint reached!'); syncBeacons(); return; }
+    b.ring.rotation.z += dt; b.ring.scale.setScalar(1 + 0.15*Math.sin(performance.now()/300));
+    _wv.set(b.w.x, terrainH(b.w.x, b.w.z) + 4, b.w.z).project(camera);
+    let x = (_wv.x*0.5 + 0.5)*W_, y = (-_wv.y*0.5 + 0.5)*H_; const behind = _wv.z > 1, m = 40;
+    if (behind){ x = W_ - x; y = H_ - m; }
+    const off = behind || x < m || x > W_-m || y < m || y > H_-m; x = Math.max(m, Math.min(W_-m, x)); y = Math.max(m, Math.min(H_-m, y));
+    b.el.style.transform = `translate(${x}px, ${y}px) translate(-50%,-50%)`; b.el.classList.toggle('edge', off); b.el.style.display = bigMap.open || S.state !== 'riding' ? 'none' : '';
+    b.el.querySelector('span').textContent = d >= 1000 ? (d/1000).toFixed(1) + ' km' : Math.round(d) + ' m'; } }
+const bm = $('bigmap'), bmx = bm.getContext('2d'); let bigBg = null;
+function makeBigBg(){ const N = 640, cv = document.createElement('canvas'); cv.width = cv.height = N; const x = cv.getContext('2d'), img = x.createImageData(N, N), sc = 2*HALF/N;
+  for (let j=0;j<N;j++) for (let i=0;i<N;i++){ const wx = -HALF+(i+.5)*sc, wz = -HALF+(j+.5)*sc, h = base(wx,wz), dh = base(wx+sc,wz)-h, k = (j*N+i)*4;
+    const v = 70 + Math.min(150, Math.max(0, h*0.45)) + dh*8, band = (Math.floor(h/25)&1) ? 8 : 0; img.data[k] = v*0.75+band; img.data[k+1] = v*0.95+band; img.data[k+2] = v*0.7; img.data[k+3] = 255; }
+  x.putImageData(img, 0, 0); return cv; }
+const mapScale = () => { const sz = Math.min(innerWidth - 300, innerHeight - 40), s = sz/(2*HALF); return {s, ox: 20 + (innerWidth - 300 - sz)/2, oy: (innerHeight - sz)/2, sz}; };
+function openMap(){ bigMap.open = true; bigMap.wasPaused = S.paused; S.paused = true; bigMap.cx = S.x; bigMap.cz = S.z; bm.width = innerWidth; bm.height = innerHeight; $('bigmapWrap').classList.remove('hidden'); }
+function closeMap(){ bigMap.open = false; S.paused = bigMap.wasPaused; $('bigmapWrap').classList.add('hidden'); }
+function mapTeleport(){ const {s} = mapScale(); let best = -1, bd = 1e9; spots.forEach((p, i) => { const d = Math.hypot(p.x-bigMap.cx, p.z-bigMap.cz)*s; if (d < 22 && d < bd){ bd = d; best = i; } });
+  if (best < 0){ toast('Move the cursor onto a spot to teleport'); return; }
+  if (!isOpen(best)){ toast(`🔒 ${spots[best].name} is locked — finish ${spotTrail(best).name} once to unlock it`); return; }
+  closeMap(); teleport(best); }
+function mapKey(code){
+  if (code==='B'||code==='KeyM'||code==='Back'||code==='Escape') closeMap();
+  else if (code==='A'||code==='Enter'||code==='Space') mapTeleport();
+  else if (code==='X'||code==='KeyW') toggleWaypointAt(bigMap.cx, bigMap.cz); }
+bm.addEventListener('mousemove', e => { const {s, ox, oy} = mapScale(); bigMap.cx = (e.clientX - ox)/s - HALF; bigMap.cz = (e.clientY - oy)/s - HALF; bigMap.mouse = true; });
+bm.addEventListener('click', e => { if (bigMap.open) toggleWaypointAt(bigMap.cx, bigMap.cz); });
+bm.addEventListener('dblclick', e => { if (bigMap.open) mapTeleport(); });
+function mapFrame(dt, inp){
+  if (bm.width !== innerWidth || bm.height !== innerHeight){ bm.width = innerWidth; bm.height = innerHeight; }
+  const kx = (keys.ArrowRight?1:0) - (keys.ArrowLeft?1:0) + (keys.KeyD?1:0) - (keys.KeyA?1:0), ky = (keys.ArrowDown?1:0) - (keys.ArrowUp?1:0) + (keys.KeyS?1:0);
+  const vx = (inp.lsx||0) + (inp.dpx||0) + kx, vz = (inp.lsy||0) + (inp.dpy||0) + ky, sp = 600;
+  bigMap.cx = Math.max(-HALF, Math.min(HALF, bigMap.cx + vx*sp*dt)); bigMap.cz = Math.max(-HALF, Math.min(HALF, bigMap.cz + vz*sp*dt));
+  const {s, ox, oy, sz} = mapScale(), P = (x, z) => [ox + (x+HALF)*s, oy + (z+HALF)*s], c = bmx;
+  c.clearRect(0, 0, bm.width, bm.height); c.fillStyle = 'rgba(8,14,20,.88)'; c.fillRect(0, 0, bm.width, bm.height);
+  c.imageSmoothingEnabled = true; c.drawImage(bigBg || (bigBg = makeBigBg()), ox, oy, sz, sz); c.strokeStyle = '#fff'; c.lineWidth = 2; c.strokeRect(ox, oy, sz, sz);
+  // connectors, park, shop
+  c.strokeStyle = 'rgba(235,215,170,.9)'; c.lineWidth = 1.5; for (const k of connectors){ c.beginPath(); k.pts.forEach((p, i) => { if (i%3 && i < k.pts.length-1) return; const [a,b] = P(p[0],p[1]); i ? c.lineTo(a,b) : c.moveTo(a,b); }); c.stroke(); }
+  { const [a,b] = P(PARK.x, PARK.z); c.fillStyle = 'rgba(160,110,60,.9)'; c.beginPath(); c.arc(a, b, PARK.r*s, 0, 7); c.fill(); c.fillStyle = '#fff'; c.font = 'bold 13px sans-serif'; c.textAlign = 'center'; c.fillText('🏁 Dirt Jump Park', a, b - PARK.r*s - 6); }
+  { const [a,b] = P(SHOP.x, SHOP.z); c.font = '18px sans-serif'; c.textAlign = 'center'; c.fillText('🚲', a, b+6); c.font = 'bold 12px sans-serif'; c.fillStyle = '#ffe08a'; c.fillText('Bike Shop', a, b+20); }
+  // trails (locked = dashed + dim) with checkpoints
+  for (const [i, tr] of trails.entries()){ const open = isOpen(i); c.globalAlpha = open ? 1 : 0.55; c.setLineDash(open ? [] : [6,4]);
+    c.strokeStyle = '#000'; c.lineWidth = 5; c.beginPath(); tr.pts.forEach((p, j) => { if (j%3 && j < tr.pts.length-1) return; const [a,b] = P(p[0],p[1]); j ? c.lineTo(a,b) : c.moveTo(a,b); }); c.stroke();
+    c.strokeStyle = tr.color === '#111111' ? '#444' : tr.color; c.lineWidth = 3; c.stroke(); c.setLineDash([]);
+    for (const cp of tr.cps){ const [a,b] = P(cp.x, cp.z); c.fillStyle = '#f2b800'; c.beginPath(); c.moveTo(a, b-5); c.lineTo(a+4, b+3); c.lineTo(a-4, b+3); c.closePath(); c.fill(); } c.globalAlpha = 1; }
+  // lifts with served trails
+  c.textAlign = 'left';
+  for (const L of LIFTS){ const [a,b] = P(L.bx,L.bz), [e,f] = P(L.tx,L.tz); c.strokeStyle = '#111'; c.lineWidth = 4; c.beginPath(); c.moveTo(a,b); c.lineTo(e,f); c.stroke(); c.strokeStyle = L.color; c.lineWidth = 2; c.setLineDash([5,3]); c.stroke(); c.setLineDash([]);
+    for (const [p,q] of [[a,b],[e,f]]){ c.fillStyle = L.color; c.fillRect(p-5,q-5,10,10); c.strokeStyle = '#fff'; c.lineWidth = 1.5; c.strokeRect(p-5,q-5,10,10); }
+    c.font = 'bold 12px sans-serif'; c.lineWidth = 3; c.strokeStyle = '#000'; c.fillStyle = '#fff'; const t = `🚡 ${L.short}: ${L.serves.join(', ')}`; c.strokeText(t, a+8, b+4); c.fillText(t, a+8, b+4); }
+  // trail labels at the start: name, difficulty icon, type, lock state
+  for (const [i, tr] of trails.entries()){ const open = isOpen(i), [a,b] = P(tr.pts[0][0], tr.pts[0][1]), d = DIFF[tr.diff];
+    c.font = 'bold 12px sans-serif'; c.lineWidth = 3; c.strokeStyle = '#000'; c.fillStyle = open ? '#fff' : '#aaa'; const t = `${open ? '' : '🔒 '}${tr.name}`; c.strokeText(t, a+9, b-4); c.fillText(t, a+9, b-4);
+    c.font = '11px sans-serif'; c.fillStyle = /^#(000|111|222)/.test(d.color) || d.color==='black' ? '#eee' : d.color; const t2 = `${d.icon} ${d.label} · ${tr.type}`; c.strokeText(t2, a+9, b+9); c.fillText(t2, a+9, b+9); }
+  // spots
+  c.textAlign = 'center'; c.font = 'bold 11px sans-serif';
+  spots.forEach((p, i) => { const [a,b] = P(p.x, p.z), open = isOpen(i); c.fillStyle = open ? '#fff' : 'rgba(60,60,60,.9)'; c.beginPath(); c.arc(a, b, 8, 0, 7); c.fill(); c.strokeStyle = '#000'; c.lineWidth = 1; c.stroke(); c.fillStyle = open ? '#000' : '#bbb'; c.fillText(open ? String(i+1) : '🔒', a, b+4); });
+  // waypoints
+  waypoints.forEach((w, i) => { const [a,b] = P(w.x, w.z); c.fillStyle = '#3ef0ff'; c.strokeStyle = '#003'; c.lineWidth = 2; c.beginPath(); c.moveTo(a, b-9); c.lineTo(a+7, b); c.lineTo(a, b+9); c.lineTo(a-7, b); c.closePath(); c.fill(); c.stroke(); c.fillStyle = '#003'; c.fillText(String(i+1), a, b+4); });
+  // rider position + heading
+  { const [a,b] = P(S.x, S.z); c.save(); c.translate(a, b); c.rotate(-(S.yaw + (S.spin||0))); c.fillStyle = '#ffd84d'; c.strokeStyle = '#000'; c.lineWidth = 1.5; c.beginPath(); c.moveTo(0,-11); c.lineTo(7,8); c.lineTo(-7,8); c.closePath(); c.fill(); c.stroke(); c.restore(); }
+  // cursor + hover info
+  { const [a,b] = P(bigMap.cx, bigMap.cz); c.strokeStyle = '#fff'; c.lineWidth = 2; c.beginPath(); c.arc(a, b, 10, 0, 7); c.moveTo(a-18, b); c.lineTo(a-6, b); c.moveTo(a+6, b); c.lineTo(a+18, b); c.moveTo(a, b-18); c.lineTo(a, b-6); c.moveTo(a, b+6); c.lineTo(a, b+18); c.stroke();
+    let hov = -1; spots.forEach((p, i) => { if (Math.hypot(p.x-bigMap.cx, p.z-bigMap.cz)*s < 22) hov = i; });
+    const dist = Math.round(Math.hypot(bigMap.cx - S.x, bigMap.cz - S.z)); c.textAlign = 'left'; c.font = 'bold 13px sans-serif'; c.fillStyle = '#fff'; c.strokeStyle = '#000'; c.lineWidth = 3;
+    const t = hov >= 0 ? `${spots[hov].name} — ${isOpen(hov) ? 'A / Enter: teleport' : '🔒 locked'}` : `${dist} m away`; c.strokeText(t, a+16, b-14); c.fillText(t, a+16, b-14); }
+  // legend
+  const lx = innerWidth - 270, rows = [['━', '#fff', 'Trail (dashed + 🔒 = locked)'], ['▲', '#f2b800', 'Checkpoint'], ['■', '#e53935', 'Lift station (dashed line = lift)'], ['─', '#ebd7aa', 'Connector path'], ['●', '#a06e3c', 'Dirt Jump Park'], ['🚲', '#fff', 'Bike Shop'], ['①', '#fff', 'Teleport spot'], ['◆', '#3ef0ff', `Waypoint (max ${WP_MAX})`], ['▲', '#ffd84d', 'You']];
+  c.fillStyle = 'rgba(0,0,0,.6)'; c.fillRect(lx-12, 20, 262, 46 + rows.length*20 + 140); c.textAlign = 'left'; c.font = 'bold 16px sans-serif'; c.fillStyle = '#fff'; c.fillText('MAP', lx, 44);
+  c.font = '13px sans-serif'; rows.forEach(([ic, col, label], k) => { c.fillStyle = col; c.fillText(ic, lx, 70 + k*20); c.fillStyle = '#ddd'; c.fillText(label, lx + 26, 70 + k*20); });
+  let y = 80 + rows.length*20; c.fillStyle = '#fff'; c.font = 'bold 13px sans-serif'; c.fillText('Difficulty', lx, y); c.font = '13px sans-serif';
+  for (const k of ['green','blue','black','dblack']){ y += 18; c.fillStyle = /^#(000|111|222)/.test(DIFF[k].color) || DIFF[k].color==='black' ? '#eee' : DIFF[k].color; c.fillText(`${DIFF[k].icon} ${DIFF[k].label}`, lx, y); }
+  y += 26; c.fillStyle = '#bbb'; c.font = '12px sans-serif';
+  for (const l of ['Stick / D-pad / arrows / mouse: move cursor', 'A / Enter / double-click: teleport', 'X / W / click: set or remove waypoint', 'B / M / View: close']){ c.fillText(l, lx, y); y += 16; }
+}
+syncBeacons();
 // ---------- bike shop ----------
 let shopOpen = false, shopSel = 0, shopWasPaused = false;
 function applyBike(){ frameMat.color.set(BIKE.color); leanG.scale.set(...BIKE.scale); }
@@ -872,6 +944,6 @@ S.score = LS.get('trailDescent.dollahs', 0); S.savedScore = S.score; applyBike()
 showOverlay('TRAIL DESCENT', menuMsg());
 teleport(spotI, true);
 window.__game = S; window.__readInput = readInput; window.__groundH = groundH; window.__lift = i => startLift(i); window.__world = { LIFTS, connectors, trails, features, spots, PARK, SHOP, terrainH, featH, isDirt, nearTrails, base, inPark };
-window.__teleport = i => teleport(i); window.__unlocked = unlocked; window.__isOpen = isOpen; window.__chunks = () => chunks.size; window.__renderer = renderer;
+window.__BR = BR; window.__teleport = i => teleport(i); window.__unlocked = unlocked; window.__isOpen = isOpen; window.__chunks = () => chunks.size; window.__renderer = renderer;
 window.__sim = (secs, inp) => { const h=1/120; const base={steer:0,pedal:0,brake:0,jump:false,tx:0,ty:0}; for(let t=0;t<secs;t+=h){ step(h, Object.assign({}, base, typeof inp==='function'?inp(t):inp)); trackWorld(h); } return {x:S.x, z:S.z, kmh:S.speed*3.6, air:S.air, lives:S.lives, clean:S.clean, score:S.score}; };
 frame();

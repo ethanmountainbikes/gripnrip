@@ -38,17 +38,19 @@
     <tr><td>Bunny hop</td><td>Right stick ↓ then ↑</td><td>release Space</td></tr>
     <tr><td>Counter-pump (stretch up)</td><td>Right stick ↑</td><td>Shift</td></tr>
     <tr><td>Tweak / whip · scrub at takeoff</td><td>Right stick ← → (analog)</td><td>Q / E</td></tr>
-    <tr><td>Tricks</td><td>LB + right stick direction</td><td>C + I/K/J/L</td></tr>
+    <tr><td>Tricks (stick amount = strength)</td><td>LB + right stick: ↑ no-hander, ↖ tuck no-hander, ↓ no-footer, ← superman, → can-can, ↙ nac-nac, ↗ X-up, ↘ tailwhip; LB + RS click = barspin</td><td>C + I/K/J/L (two keys for diagonals), C + U = barspin</td></tr>
     <tr><td>Respawn</td><td>B</td><td>R</td></tr>
     <tr><td>Switch / reset camera</td><td>Y / X</td><td>V / X</td></tr>
     <tr><td>Pause</td><td>Menu</td><td>P / Esc</td></tr>
     <tr><td>Bike shop</td><td>X (title / pause), or ride to the shop in the valley</td><td>O</td></tr>
-    <tr><td>Teleport to prev / next spot</td><td>D-pad ← / →</td><td>[ / ] (or , / .), 1–9, 0 jump to a spot (trail spots unlock after you finish that trail)</td></tr>
+    <tr><td>Teleport to prev / next spot</td><td>D-pad ← / →</td><td>[ / ] (or , / .), 1–9, 0 jump to spots 1–10, Shift+1–6 to spots 11–16 (trail spots unlock after you finish that trail)</td></tr>
   </table>
   <p>Pump: compress into backsides, extend over faces to gain speed. Lay the bike over with the right stick as you leave a lip to scrub (lower, faster). Land straight, level and untweaked. Controller: press any button so Firefox detects it.</p>
 </div>
 <div id="shop" class="hidden"><h2>🚲 BIKE SHOP <span id="shopBal"></span></h2><div id="shopList"></div><p>D-pad / arrows: choose · <b>A</b> / Enter: buy or equip · <b>B</b> / Esc: close</p></div>
 <div id="overlay"><div id="overlayBox"><h1>TRAIL DESCENT</h1><p id="overlayMsg">Press <b>A</b> / <b>Enter</b> to drop in</p></div></div>
+<div id="wpMarkers"></div>
+<div id="bigmapWrap" class="hidden"><canvas id="bigmap"></canvas></div>
 <script type="module" src="game.js"></script>
 </body>
 </html>
