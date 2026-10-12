@@ -64,7 +64,7 @@ Controller support has been checked against an Xbox One pad's layout in Chrome, 
 Run it locally with `python3 -m http.server`, then open http://localhost:8000.
 
 ## DOLLAHS and the bike shop
-- You earn **$ DOLLAHS** for clean jumps and tricks (about 30% of the old rep values) and for finishing trails. Your balance is saved in the browser.
+- You earn **$ DOLLAHS** for clean jumps and tricks (about 15% of the old rep values) and for finishing trails. Your balance is saved in the browser.
 - Open the **Bike Shop** with X / O on the title or pause screen, or ride up to the shop building in the valley (near Valley Meadow). Bikes you own and the one you ride are saved.
 
 | Bike | Price | Speed (drag) | Grip | Pop | Landing stability |
@@ -79,3 +79,14 @@ Run it locally with `python3 -m http.server`, then open http://localhost:8000.
 - Every trail has yellow CHECKPOINT gates every ~170-250 m (shown as yellow triangles on the minimap). During a run, a crash, the respawn button or going out of bounds puts you back at the last checkpoint (or the start) with a little speed; the timer keeps running. In free roam you respawn at your last safe spot.
 - The Dirt Jump Park pad is now level, with a tall roll-in hill. On its north side, a 5 m wooden **Big Drop** deck runs off the roll-in to a lip, a knuckle and a long transition landing.
 - Pedalling now pushes up to 55 km/h on the flat (65 km/h uphill, shown 10 lower on the speedometer), and climbing is much easier.
+
+## Chairlifts, connector paths and money
+- Three chairlifts. Ride into a bottom station to sit on a chair and ride up (A / Enter skips the ride):
+  - **Lift A, Summit Express:** from the valley by the shop to Summit DH, Flow Line, Freeride Ridge and North Face.
+  - **Lift B, West Ridge:** from the park to Forest Singletrack and Meadow Flow.
+  - **Lift C, East Hills:** to Pump Line and Hilltop Jumps.
+  Lifts are always open, including for trails you haven't unlocked for teleport yet.
+- Narrow gravel connector paths link the lifts, trail starts and ends, the park and the shop. They show as thin lines on the minimap.
+- Grass no longer slows you down; it only has less grip than dirt.
+- Trail jumps are sized to the speed you carry at each one. Jumps on faster sections are bigger, and those on slower sections are smaller, within the trail's difficulty.
+- DOLLAHS: tricks and landings pay about 15% of the old REP values, and finishing a trail pays (1000 + trail length ÷ 2) × 0.15.

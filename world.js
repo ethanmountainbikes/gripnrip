@@ -98,6 +98,7 @@ export const trails = TRAIL_DEFS.map((def, id) => {
 // Each feature has an origin, a forward direction, a half width and a height profile p(t) along it. Heights add to the terrain.
 export const features = [];
 const KL = 5.5, KH = 1.5, KW = 2.3;   // original wooden kicker
+import { JUMP_SPEEDS } from './jumpspeeds.js';
 const PROF = {
   kicker: (H,L) => ({L, p: t => t>=0 && t<=L ? H*Math.pow(t/L,1.7) : 0, wood:true}),
   table:  (H,L1,deck,L3) => ({L:L1+deck+L3, p: t => t<0 ? 0 : t<=L1 ? H*Math.pow(t/L1,1.6) : t<=L1+deck ? H-0.15 : t<=L1+deck+L3 ? (H-0.15)*0.5*(1+Math.cos(Math.PI*(t-L1-deck)/L3)) : 0}),
@@ -118,19 +119,27 @@ function addFeature(kind, x, z, yaw, hw, prof, trail){
   features.push(f); return f;
 }
 // trail features: only on straight-ish downhill sections
+// jumps are scaled to the speed riders actually carry at each spot (measured by a coasting bot, see JUMP_SPEEDS):
+// a uniform geometric scale g keeps the ramp angles, so the clearing speed goes with sqrt(g); g = (v / trail's median speed)^2
+const JUMPY = new Set(['kicker','table','double','gap','stepup','stepdown','drop','rockdrop']);
+const GMAX = {green:1.1, blue:1.2, black:1.3, dblack:1.35};
+const scaleProf = (pr, g) => g === 1 ? pr : {...pr, L: pr.L*g, p: (t, us) => g*pr.p(t/g, us), L0: pr.L};
 for (const tr of trails){
   const n = tr.pts.length;
   // features match the trail type (spacing = run-out after each feature)
   const spacing = {dh:55, enduro:50, flow:40, flowg:45, xc:60, tech:28, freeride:60, drops:60, pump:6, jumps:24}[tr.kind];
   let i = 40, k = 0;
+  const sp = (JUMP_SPEEDS[tr.name] || []).filter(Boolean).sort((a,b)=>a-b), vRef = sp.length ? sp[sp.length>>1] : 30;   // the trail's typical speed = current jump size
   while (i < n-30){
     const turn = Math.abs(Math.atan2(Math.sin(tr.yaw[i+12]-tr.yaw[i]), Math.cos(tr.yaw[i+12]-tr.yaw[i])));
     const sl = (tr.h[i]-tr.h[i+10])/20;
     if (turn < 0.18 && sl > 0.04 || (tr.kind==='pump' || tr.kind==='xc' || tr.kind==='tech') && turn < 0.3){
-      const [x,z] = tr.pts[i], yaw = tr.yaw[i+2], A = (kind, hw, pr) => addFeature(kind, x, z, yaw, hw, pr, tr.id);
+      const v = (JUMP_SPEEDS[tr.name] || [])[k], g = v ? Math.max(0.7, Math.min(GMAX[tr.diff], (v/vRef)**2)) : 1;
+      const S_ = (kind, pr) => JUMPY.has(kind) ? scaleProf(pr, g) : pr;
+      const [x,z] = tr.pts[i], yaw = tr.yaw[i+2], A = (kind, hw, pr) => { const f = addFeature(kind, x, z, yaw, hw, S_(kind, pr), tr.id); f.k = k; f.g = JUMPY.has(kind) ? g : 1; return f; };
       let f;
       const sz = {green:0.7, blue:0.9, black:1.1, dblack:1.3}[tr.diff];   // feature size by difficulty
-      const hip = (H) => addFeature('kicker', x, z, yaw + (k%2 ? 0.35 : -0.35), KW, PROF.kicker(H, KL), tr.id);   // angled takeoff (hip)
+      const hip = (H) => { const f = addFeature('kicker', x, z, yaw + (k%2 ? 0.35 : -0.35), KW, S_('kicker', PROF.kicker(H, KL)), tr.id); f.k = k; f.g = g; return f; };   // angled takeoff (hip)
       switch (tr.kind){
         case 'dh':       f = [() => A('kicker', KW, PROF.kicker(KH, KL)), () => A('rocks', 2.6, PROF.rocks(0.28, 10, 5)), () => A('drop', 1.8, PROF.drop(1.2*sz, 5, 2.5)),
                               () => A('stepdown', 2.4, PROF.stepdown(1.5*sz, 4.5, 2, 1.0, 6)), () => A('rockdrop', 2.0, {...PROF.drop(1.0*sz, 3, 2), rock:true}), () => A('gap', 2.4, PROF.gap(1.6*sz, 5, 3, 6))][k%6](); break;      // fast: jumps, rock gardens, drops
@@ -144,7 +153,7 @@ for (const tr of trails){
         case 'pump':     f = A('roller', 2.6, PROF.roller(0.4, 9)); break;                                                                                          // consecutive rollers
         case 'jumps':    f = [() => A('table', 2.4, PROF.table(1.4, 4.5, 3.5, 4.5)), () => A('double', 2.4, PROF.double(1.5, 4.5, 2.2, 5)), () => A('stepup', 2.4, PROF.stepup(1.2, 4.5, 1.8, 1.6, 3, 5)), () => hip(1.4), () => A('gap', 2.4, PROF.gap(1.5, 4.5, 2.5, 6))][k%5](); break;                    // consecutive tables & doubles
       }
-      k++; i += Math.round(spacing/2) + Math.round(f.L/2); continue;
+      k++; i += Math.round(spacing/2) + Math.round((f.L0 || f.L)/2); continue;
     }
     i += 3;
   }
@@ -211,7 +220,7 @@ export function nearTrails(x, z){
 }
 export function trailDist(x,z){ let m = 1e9; for (const n of nearTrails(x,z)) m = Math.min(m, n.d); return m; }
 export function inPark(x,z){ return Math.hypot(x-PARK.x, z-PARK.z) <= PARK.r+6; }
-export function isDirt(x,z){ return trailDist(x,z) <= W+0.3 || inPark(x,z) || Math.hypot(x-PARK.x, z-PARK.z) <= PARK.r+35 || featH(x,z) > 0.05; }   // wooden decks ride like trail
+export function isDirt(x,z){ return trailDist(x,z) <= W+0.3 || inPark(x,z) || Math.hypot(x-PARK.x, z-PARK.z) <= PARK.r+35 || featH(x,z) > 0.05 || connDist(x,z) <= CW; }   // wooden decks and connector paths ride like trail
 
 // terrain without features: hillside with benched trails cut in, plus small off-trail bumps
 export function terrainH(x, z){
@@ -258,6 +267,7 @@ export function treesInCell(ci, cj){
     if (inPark(x,z) || Math.hypot(x-PARK.x, z-PARK.z) < PARK.r+38) continue;
     if (Math.hypot(x+40, z-250) < 22) continue;   // bike shop clearing
     if (trailDist(x,z) < W+2.5 || featH(x,z) > 0) continue;
+    if (connDist(x,z) < CW+2 || nearLiftStation(x,z,16) || liftLineDist(x,z) < 16) continue;   // keep paths, stations and lift lines clear
     a.push({x, z, y:terrainH(x,z)-0.2, h:hgt, rot, hue});
   }
   treeCache.set(k, a); return a;
@@ -282,3 +292,44 @@ export const spots = [
   {name:'Dirt Jump Park', x:PARK.x - PARK.dir[0]*95, z:PARK.z - PARK.dir[1]*95 - 10*PARK.dir[0], yaw:parkYaw},
   {name:'Valley Meadow (free roam)', x:-60, z:300, yaw:Math.PI},
 ];
+
+// ---------- chairlifts: each serves a cluster of trail starts ----------
+const awayFromTrails = (x, z, need = 14) => { if (trailDist(x,z) >= need) return [x, z];
+  for (let r = 4; r < 80; r += 4) for (let a = 0; a < 6.28; a += 0.4){ const px = x + Math.cos(a)*r, pz = z + Math.sin(a)*r; if (trailDist(px,pz) >= need && !inPark(px,pz)) return [px, pz]; } return [x, z]; };
+export const LIFTS = [
+  {name:'Summit Express', short:'A', color:'#e53935', b:[-15, 205], t:[190, -462], serves:['Summit DH','Flow Line','Freeride Ridge','North Face']},
+  {name:'West Ridge Lift', short:'B', color:'#1e88e5', b:[-335, 455], t:[-628, 222], serves:['Forest Singletrack','Meadow Flow']},
+  {name:'East Hills Lift', short:'C', color:'#8e24aa', b:[585, 215], t:[712, 412], serves:['Pump Line','Hilltop Jumps']},
+].map(L => { const [bx,bz] = awayFromTrails(L.b[0], L.b[1]), [tx,tz] = awayFromTrails(L.t[0], L.t[1]);
+  const len = Math.hypot(tx-bx, tz-bz), dx = (tx-bx)/len, dz = (tz-bz)/len;
+  return {...L, bx, bz, tx, tz, len, dx, dz, yaw: Math.atan2(-dx, -dz)}; });
+
+// ---------- connector paths: narrow gravel links between trails, lifts, the park and the shop ----------
+// waypoints only; each path is resampled every 2 m and draped on the terrain (no jumps, no bench cut)
+const tEnd = name => { const t = trails.find(t => t.name === name), p = t.pts[t.pts.length-1]; return p; };
+const tBeg = name => { const t = trails.find(t => t.name === name); return t.pts[0]; };
+const L_ = i => [LIFTS[i].bx, LIFTS[i].bz], T_ = i => [LIFTS[i].tx, LIFTS[i].tz];
+const shopDoor = [-40, 244], valley = [-60, 300], parkGate = [PARK.x - PARK.r + 6, PARK.z - 10];
+const CONN_DEFS = [
+  [shopDoor, L_(0)], [valley, shopDoor], [valley, [-110, 480], [-225, 525], parkGate], [parkGate, L_(1)],
+  [T_(0), tBeg('Summit DH')], [T_(0), tBeg('Flow Line')], [T_(0), tBeg('Freeride Ridge')], [T_(0), tBeg('North Face')],
+  [T_(1), tBeg('Forest Singletrack')], [T_(1), tBeg('Meadow Flow')],
+  [T_(2), tBeg('Pump Line')], [T_(2), tBeg('Hilltop Jumps')],
+  [tEnd('Summit DH'), parkGate], [tEnd('Meadow Flow'), [-335, 300], parkGate], [tEnd('Flow Line'), L_(2)],
+  [tEnd('Forest Singletrack'), [-420, 640], parkGate], [tEnd('Hilltop Jumps'), [560, 620], [540, 350], L_(2)], [tEnd('Pump Line'), [880, 380], [700, 250], L_(2)],
+];
+export const connectors = CONN_DEFS.map(wp => { const pts = [];
+  for (let k = 0; k < wp.length-1; k++){ const [ax,az] = wp[k], [bx,bz] = wp[k+1], n = Math.max(1, Math.ceil(Math.hypot(bx-ax, bz-az)/2));
+    for (let i = (k ? 1 : 0); i <= n; i++){ const u = i/n; pts.push([ax + (bx-ax)*u, az + (bz-az)*u]); } }
+  // gentle wiggle-free smoothing at the corners
+  for (let it = 0; it < 6; it++) for (let i = 1; i < pts.length-1; i++){ pts[i] = [(pts[i-1][0]+2*pts[i][0]+pts[i+1][0])/4, (pts[i-1][1]+2*pts[i][1]+pts[i+1][1])/4]; }
+  return {pts}; });
+export const CW = 1.3;   // connector half width
+const cGrid = new Map(), CG = 40;
+connectors.forEach((c, ci) => c.pts.forEach((p, i) => { const k = key(Math.floor(p[0]/CG), Math.floor(p[1]/CG)); let a = cGrid.get(k); if (!a) cGrid.set(k, a = []); a.push(ci*100000 + i); }));
+export function connDist(x, z){ let m = 1e9; const ci0 = Math.floor(x/CG), cj0 = Math.floor(z/CG);
+  for (let di=-1; di<=1; di++) for (let dj=-1; dj<=1; dj++){ const a = cGrid.get(key(ci0+di, cj0+dj)); if (!a) continue;
+    for (const id of a){ const p = connectors[Math.floor(id/100000)].pts[id%100000]; const d = Math.hypot(x-p[0], z-p[1]); if (d < m) m = d; } }
+  return m; }
+export const nearLiftStation = (x, z, r) => LIFTS.some(L => Math.hypot(x-L.bx, z-L.bz) < r || Math.hypot(x-L.tx, z-L.tz) < r);
+export function liftLineDist(x, z){ let m = 1e9; for (const L of LIFTS){ const u = Math.max(0, Math.min(L.len, (x-L.bx)*L.dx + (z-L.bz)*L.dz)); m = Math.min(m, Math.hypot(x-(L.bx+L.dx*u), z-(L.bz+L.dz*u))); } return m; }

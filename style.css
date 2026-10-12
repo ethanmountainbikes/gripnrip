@@ -33,3 +33,6 @@ canvas{display:block}
 .sw{width:34px;height:34px;border-radius:6px;flex:none;border:2px solid #fff}.bn{flex:1.2}.bn small{display:block;opacity:.75}.st{flex:1.6;font-size:12px}.pr{flex:none;width:120px;text-align:right;font-weight:800}
 .sbar{display:inline-block;width:52px;height:6px;background:#333;border-radius:3px;margin:0 6px 0 3px;vertical-align:middle}.sbar i{display:block;height:100%;background:#ffb020;border-radius:3px}
 #overlay{z-index:10}
+#liftLegend{position:absolute;top:270px;right:20px;width:184px;font:11px/1.35 Arial,sans-serif;color:#fff;text-shadow:0 1px 2px #000;pointer-events:none}
+#liftLegend b{display:inline-block;width:14px;height:10px;margin-right:4px;border:1px solid #fff;vertical-align:middle}
+#liftRide{position:absolute;left:50%;bottom:120px;transform:translateX(-50%);background:rgba(0,0,0,.55);color:#fff;padding:8px 16px;border-radius:8px;font:bold 16px Arial;display:none}

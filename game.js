@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featAxis, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL } from './world.js';
+import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featAxis, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL, LIFTS, connectors, CW } from './world.js';
 
 const G = 9.81;
 // ---------- bikes (shop) ----------
@@ -13,7 +13,7 @@ const BIKES = [
 const LS = { get:(k,d)=>{ try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch(e){ return d; } }, set:(k,v)=>{ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} } };
 const owned = new Set(LS.get('trailDescent.owned', ['hardtail'])); owned.add('hardtail');
 let BIKE = BIKES.find(b => b.id === LS.get('trailDescent.bike', 'hardtail') && owned.has(b.id)) || BIKES[0];
-const EARN = 0.3;   // DOLLAHS earn rate vs. the old REP values (~30%)
+const EARN = 0.15;   // DOLLAHS earn rate vs. the old REP values (~15%)
 const G_AIR = 9.81*1.35;   // heavier feel in the air: realistic MTB airtime (~0.6-1.0 s off a kicker at 30 km/h)
 let seed = 7; const rnd = () => (seed = (seed*16807) % 2147483647) / 2147483647;
 
@@ -364,6 +364,7 @@ function crash(reason){ S.lastCrash = reason;
 function showOverlay(title,msg){ $('overlay').classList.remove('hidden'); $('overlayBox').querySelector('h1').textContent=title; $('overlayMsg').innerHTML=msg; }
 function togglePause(){ if (S.state!=='riding' || shopOpen) return; S.paused=!S.paused; if (S.paused) showOverlay('PAUSED','Press <b>Menu</b> / <b>P</b> to resume<br><small>Press <b>X</b> / <b>O</b> for the 🚲 Bike Shop</small>'); else $('overlay').classList.add('hidden'); }
 function onPress(code){
+  if (S.lift){ if (code==='A'||code==='Enter'||code==='Space') S.lift.d = 1e9; return; }   // skip the chairlift ride
   if (shopOpen){ shopKey(code); return; }
   if ((code==='X'||code==='KeyO') && (S.state==='menu' || S.paused)){ openShop(); return; }
   if (code==='KeyO' && S.state==='riding'){ openShop(); return; }
@@ -396,6 +397,7 @@ let spotI = 1;   // spawn at Flow Line
 const spotTag = i => { const tr = spots[i].trail !== undefined ? trails[spots[i].trail] : (spots[i].name.startsWith('Dirt') ? PARK : null); return tr ? ` ${DIFF[tr.diff].icon} ${DIFF[tr.diff].label} ${tr.type}` : ' free roam'; };
 const menuMsg = () => `<small>Press <b>X</b> / <b>O</b> for the 🚲 Bike Shop · $${S.score.toLocaleString()} DOLLAHS</small><br>Press <b>A</b> / <b>Enter</b> to drop in at <b>${spots[spotI].name}</b> <small>(${spotTag(spotI).trim()})</small><br><small>D-pad ← → / [ ] to pick a spot</small>`;
 function teleport(i, quiet){
+  if (S.lift){ S.lift = null; $('liftRide').style.display = 'none'; myChair.visible = false; }
   spotI = (i + spots.length) % spots.length; const s = spots[spotI];
   updateChunks(s.x, s.z, 1e9, 160);      // build the ground around the spot right away
   placeAt(s.x, s.z, s.yaw); S.crumbs = []; S.crumbT = 0; S.run = null; camInit = false;
@@ -465,7 +467,7 @@ function step(dt, inp){
       a += inp.pedal * (2.5 + Math.min(3.5, up*12)) * Math.max(0, 1 - S.speed/cap); }   // stronger stroke uphill so typical grades are climbable
     a -= inp.brake * 9 * Math.min(1,S.speed);
     a -= 0.0038*BIKE.drag*S.speed*S.speed + 0.2;
-    if (!onTrail) a -= (0.35*S.speed + 1.5) * (slope > 0.03 && inp.pedal > 0 ? 0.5 : 1);   // grass drag, eased while pedalling uphill
+    // (grass rolls like dirt: no off-trail speed penalty; grip off-trail is still lower)
     // pumping: compress into backsides (downslope) and extend over faces (upslope) to gain speed; wrong timing costs speed
     const prevPre = S.preload;
     if (inp.pumpHold) { S.preload = Math.min(1, S.preload + dt*2.2); S.hopWin = 0.35; }
@@ -500,7 +502,7 @@ function step(dt, inp){
         const ax = S.x + fa.dx*dA, az = S.z + fa.dz*dA, f0 = featH(S.x, S.z), fAlong = featH(ax, az), f1 = featH(nx, nz);
         const latRise = f1 - fAlong, latLen = Math.hypot(mx - fa.dx*dA, mz - fa.dz*dA) + 1e-6;
         const rise = f1 - f0, moveLen = Math.hypot(mx, mz) + 1e-6;
-        if (rise > 0.06 && rise/moveLen > 2.5 && dA <= 0){   // back of a wooden jump: a wall, not a ramp
+        if (rise > 0.06 && rise/moveLen > 2.5){   // a vertical face (back of a wooden jump, front of a step-down deck): a wall, not a ramp
           S.speed *= 0.3; S.travel += Math.PI*0.5*Math.sign(wrapA(S.travel - Math.atan2(-fa.dx,-fa.dz)) || 1); S.yaw = S.travel;
           S.vx = -Math.sin(S.travel)*S.speed; S.vz = -Math.cos(S.travel)*S.speed; nx = S.x; nz = S.z; ng = groundH(nx, nz); vyFeat = 0; S.sideHits = (S.sideHits||0) + 1;
         } else if (latRise > 0.06 && latRise/latLen > 1.2){
@@ -515,7 +517,7 @@ function step(dt, inp){
     const fdx = -Math.sin(S.travel), fdz = -Math.cos(S.travel), g0 = groundH(S.x, S.z);
     const gradeF = Math.max(0, (groundH(S.x + fdx*0.5, S.z + fdz*0.5) - g0)/0.5, (g0 - groundH(S.x - fdx*0.5, S.z - fdz*0.5))/0.5, (ng - g0)/Math.max(0.05, S.speed*dt));
     let vyG = vyFeat === null ? (ng - S.y)/dt : (terrainH(nx,nz) - (S.y - featH(S.x,S.z)))/dt + vyFeat;
-    vyG = Math.max(-1.5*S.speed - 3, Math.min(vyG, (vyFeat !== null ? 1.5 : Math.min(1.5, gradeF))*S.speed + 0.3));   // ramp faces keep their full lip speed
+    vyG = Math.max(-1.5*S.speed - 3, Math.min(vyG, (vyFeat !== null ? 1.5 : Math.min(1.0, gradeF))*S.speed + 0.3));   // ramp faces keep their full lip speed
     S.landCool = Math.max(0, (S.landCool||0) - dt);
     S.gf = (S.gf||0) + 1;
     const crestG = inp.counter ? G*2.2 : G*1.15;   // counter-pump (RS up) keeps you glued over rollers
@@ -635,11 +637,12 @@ function frame(){
   const dt = Math.min(0.05, clock.getDelta());
   const inp = readInput();
   for (const k in inp.pressed) onPress(k);
-  if (S.state==='riding' && !S.paused){
+  if (S.state==='riding' && !S.paused && S.lift){ liftRide(dt, inp); }
+  else if (S.state==='riding' && !S.paused){
     acc += dt; const h = 1/120; while (acc >= h){ step(h, inp); acc -= h; }
-    trackWorld(dt); shopProximity(dt);
+    trackWorld(dt); shopProximity(dt); liftProximity(dt);
   } else if (S.state!=='riding' && S.state!=='menu') { step(dt, {steer:0,pedal:0,brake:1,jump:false,tx:0,ty:0}); }
-  updateChunks(S.x, S.z); farU.value.set(S.x, S.z, coveredR);
+  animateLifts(dt); updateChunks(S.x, S.z); farU.value.set(S.x, S.z, coveredR);
   // pose bike
   bike.position.set(S.x, S.y, S.z);
   bike.rotation.y = S.yaw + S.spin;
@@ -700,6 +703,10 @@ const mm = $('minimap'), mmx = mm.getContext('2d'), MMS = mm.width, mmBg = docum
   for (const tr of trails){ const pa = new Path2D(); tr.pts.forEach((p,i)=>{ if (i%3 && i < tr.pts.length-1) return; const [a,b] = P(p[0],p[1]); i ? pa.lineTo(a,b) : pa.moveTo(a,b); }); tr.mmPath = pa; }
   x.fillStyle = 'rgba(160,110,60,.9)'; { const [a,b] = P(PARK.x,PARK.z); x.beginPath(); x.arc(a,b,PARK.r/sc,0,7); x.fill(); }
   x.fillStyle = '#f2b800'; x.strokeStyle = '#000'; x.lineWidth = 1; for (const tr of trails) for (const cp of tr.cps){ const [a,b] = P(cp.x, cp.z); x.beginPath(); x.moveTo(a, b-4); x.lineTo(a+3.5, b+2.5); x.lineTo(a-3.5, b+2.5); x.closePath(); x.fill(); x.stroke(); }   // checkpoints
+  x.strokeStyle = 'rgba(235,215,170,.85)'; x.lineWidth = 1; x.setLineDash([]); for (const c of connectors){ x.beginPath(); c.pts.forEach((p,i)=>{ if (i%4 && i < c.pts.length-1) return; const [a,b] = P(p[0],p[1]); i ? x.lineTo(a,b) : x.moveTo(a,b); }); x.stroke(); }   // connector paths
+  for (const L of LIFTS){ const [a,b] = P(L.bx,L.bz), [c,d] = P(L.tx,L.tz); x.strokeStyle = '#111'; x.lineWidth = 3; x.beginPath(); x.moveTo(a,b); x.lineTo(c,d); x.stroke(); x.strokeStyle = L.color; x.lineWidth = 1.6; x.setLineDash([3,2]); x.stroke(); x.setLineDash([]);
+    for (const [p,q] of [[a,b],[c,d]]){ x.fillStyle = L.color; x.fillRect(p-3.5,q-3.5,7,7); x.strokeStyle = '#fff'; x.lineWidth = 1; x.strokeRect(p-3.5,q-3.5,7,7); }
+    x.font = 'bold 10px sans-serif'; x.fillStyle = '#fff'; x.strokeStyle = '#000'; x.lineWidth = 3; const lbl = 'Lift ' + L.short; x.strokeText(lbl, a+6, b+4); x.fillText(lbl, a+6, b+4); }
   if (PARK.drop){ const D = PARK.drop, [a,b] = P(D.x + D.dx*D.lip, D.z + D.dz*D.lip); x.fillStyle = '#5a3418'; x.fillRect(a-3,b-3,6,6); x.strokeStyle = '#ffd36b'; x.lineWidth = 1.5; x.strokeRect(a-3,b-3,6,6); x.fillStyle = '#ffd36b'; x.font = 'bold 9px sans-serif'; x.fillText('DROP', a+5, b+3); }
 }
 function drawMinimap(){
@@ -751,13 +758,74 @@ const SHOP_POS = {x:-40, z:250, yaw:0};
   const tx = new THREE.CanvasTexture(cv); tx.colorSpace = THREE.SRGBColorSpace; const sign = new THREE.Mesh(new THREE.PlaneGeometry(8,2), new THREE.MeshBasicMaterial({map:tx})); sign.position.set(0,4.2,-4.62); sign.rotation.y = Math.PI; g.add(sign);
   g.traverse(o=>{ if (o.isMesh){ o.castShadow = o.receiveShadow = true; } });
   g.position.set(SHOP_POS.x, y-0.3, SHOP_POS.z); scene.add(g); }
+// ---------- connector paths (narrow gravel ribbons draped on the terrain) ----------
+{ const v = [], idx = [], col = []; const c1 = new THREE.Color(0xb59a6e), c2 = new THREE.Color(0x9c845c);
+  for (const c of connectors){ const P = c.pts, b0 = v.length/3;
+    for (let i=0;i<P.length;i++){ const a = P[Math.max(0,i-1)], b = P[Math.min(P.length-1,i+1)], dx = b[0]-a[0], dz = b[1]-a[1], l = Math.hypot(dx,dz)||1, nx = -dz/l, nz = dx/l;
+      for (const sd of [-1,1]){ const x = P[i][0] + nx*CW*sd, z = P[i][1] + nz*CW*sd; v.push(x, terrainH(x,z) + 0.07, z); const cc = (i%7<3) ? c1 : c2; col.push(cc.r, cc.g, cc.b); } }
+    for (let i=0;i<P.length-1;i++){ const a = b0+i*2; idx.push(a, a+2, a+1, a+1, a+2, a+3); } }
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(v,3)); g.setAttribute('color', new THREE.Float32BufferAttribute(col,3)); g.setIndex(idx); g.computeVertexNormals();
+  const m = new THREE.Mesh(g, new THREE.MeshLambertMaterial({vertexColors:true, side:THREE.DoubleSide, polygonOffset:true, polygonOffsetFactor:-2, polygonOffsetUnits:-2})); m.receiveShadow = true; scene.add(m); }
+// ---------- chairlifts: towers, cable, moving chairs; ride from the bottom station to the top ----------
+const liftObjs = [];
+{ const steel = new THREE.MeshLambertMaterial({color:0x6b7078}), wood = new THREE.MeshLambertMaterial({color:0x7a5534}), roofM = new THREE.MeshLambertMaterial({color:0x2f3b4a});
+  const cableM = new THREE.LineBasicMaterial({color:0x222222});
+  const station = (x, z, yaw, L, top) => { const g = new THREE.Group(), y = terrainH(x,z);
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(9,0.5,7), wood); deck.position.y = 0.25; g.add(deck);
+    for (const [px,pz] of [[-4,-3],[4,-3],[-4,3],[4,3]]){ const p = new THREE.Mesh(new THREE.BoxGeometry(0.35,6,0.35), steel); p.position.set(px,3,pz); g.add(p); }
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(10,0.4,8), roofM); roof.position.y = 6.2; g.add(roof);
+    const wheel = new THREE.Mesh(new THREE.CylinderGeometry(2.6,2.6,0.4,20), steel); wheel.position.y = 6.9; g.add(wheel);
+    const cv = document.createElement('canvas'); cv.width = 512; cv.height = 128; const c2 = cv.getContext('2d'); c2.fillStyle = L.color; c2.fillRect(0,0,512,128); c2.fillStyle = '#fff'; c2.textAlign = 'center';
+    c2.font = 'bold 50px Arial'; c2.fillText(`🚡 ${L.name.toUpperCase()}`, 256, 56, 490); c2.font = 'bold 26px Arial'; c2.fillText(top ? 'TOP · ' + L.serves.join(' · ') : 'RIDE IN TO GO UP · ' + L.serves.join(' · '), 256, 104, 490);
+    const tx = new THREE.CanvasTexture(cv); tx.colorSpace = THREE.SRGBColorSpace; const sign = new THREE.Mesh(new THREE.PlaneGeometry(9,2.25), new THREE.MeshBasicMaterial({map:tx, side:THREE.DoubleSide})); sign.position.set(0,7.6,0); g.add(sign);
+    g.traverse(o=>{ if (o.isMesh){ o.castShadow = true; o.receiveShadow = true; } });
+    g.position.set(x, y, z); g.rotation.y = yaw; scene.add(g); };
+  for (const L of LIFTS){ station(L.bx, L.bz, L.yaw, L, false); station(L.tx, L.tz, L.yaw, L, true);
+    // cable path: towers every ~55 m, cable 9 m above the ground at each tower, sagging a little between
+    const nT = Math.max(2, Math.round(L.len/55)), heights = [];
+    for (let i=0;i<=nT;i++){ const u = i/nT, x = L.bx + (L.tx-L.bx)*u, z = L.bz + (L.tz-L.bz)*u, h = terrainH(x,z) + (i===0||i===nT ? 7 : 10); heights.push(h);
+      if (i>0 && i<nT){ const t = new THREE.Mesh(new THREE.CylinderGeometry(0.35,0.5,h-terrainH(x,z),8), steel); t.position.set(x, (h+terrainH(x,z))/2, z); t.castShadow = true; scene.add(t);
+        const bar = new THREE.Mesh(new THREE.BoxGeometry(5,0.3,0.3), steel); bar.position.set(x, h, z); bar.rotation.y = L.yaw; scene.add(bar); } }
+    const cableY = u => { const f = u*nT, i = Math.min(nT-1, Math.floor(f)), k = f - i; return heights[i] + (heights[i+1]-heights[i])*k - Math.sin(Math.PI*k)*0.8; };
+    const off = 2.2, sx = Math.cos(L.yaw), sz = -Math.sin(L.yaw);   // up cable on one side, down on the other
+    for (const sd of [-1,1]){ const pts = []; for (let i=0;i<=nT*8;i++){ const u = i/(nT*8); pts.push(new THREE.Vector3(L.bx + (L.tx-L.bx)*u + sx*off*sd, cableY(u), L.bz + (L.tz-L.bz)*u + sz*off*sd)); }
+      scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), cableM)); }
+    // chairs: one instanced mesh per lift, spaced ~30 m, moving round the loop
+    const nC = Math.max(4, Math.round(L.len*2/30)), chairG = new THREE.BoxGeometry(1.8,0.2,0.7);
+    const chairs = new THREE.InstancedMesh(chairG, new THREE.MeshLambertMaterial({color:new THREE.Color(L.color)}), nC); scene.add(chairs);
+    const hangers = new THREE.InstancedMesh(new THREE.BoxGeometry(0.08,2.2,0.08), steel, nC); scene.add(hangers);
+    liftObjs.push({L, cableY, chairs, hangers, nC, off, sx, sz, phase:0}); } }
+const myChair = new THREE.Group(); { const m = new THREE.MeshLambertMaterial({color:0x333a44}); const seat = new THREE.Mesh(new THREE.BoxGeometry(1.8,0.15,0.7), m); seat.position.y = 0.55; myChair.add(seat); const back = new THREE.Mesh(new THREE.BoxGeometry(1.8,0.8,0.12), m); back.position.set(0,0.95,0.35); myChair.add(back); const bar = new THREE.Mesh(new THREE.BoxGeometry(0.08,1.9,0.08), m); bar.position.set(0,1.5,0.35); myChair.add(bar); myChair.visible = false; scene.add(myChair); }
+const LIFT_SPEED = 5;   // m/s along the cable
+const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _v = new THREE.Vector3(), _s = new THREE.Vector3(1,1,1);
+function liftPos(o, d){ // d = distance round the loop (0..2*len): up on one side, back down on the other
+  const L = o.L, len = L.len, up = d < len, u = up ? d/len : 1 - (d-len)/len, sd = up ? -1 : 1;
+  return [L.bx + (L.tx-L.bx)*u + o.sx*o.off*sd, o.cableY(u), L.bz + (L.tz-L.bz)*u + o.sz*o.off*sd, up]; }
+function animateLifts(dt){ for (const o of liftObjs){ o.phase = (o.phase + dt*LIFT_SPEED) % (2*o.L.len);
+    for (let i=0;i<o.nC;i++){ const [x,y,z,up] = liftPos(o, (o.phase + i*2*o.L.len/o.nC) % (2*o.L.len));
+      _q.setFromEuler(_e.set(0, o.L.yaw + (up ? 0 : Math.PI), 0)); _m4.compose(_v.set(x, y-2.3, z), _q, _s); o.chairs.setMatrixAt(i, _m4);
+      _m4.compose(_v.set(x, y-1.15, z), _q, _s); o.hangers.setMatrixAt(i, _m4); }
+    o.chairs.instanceMatrix.needsUpdate = true; o.hangers.instanceMatrix.needsUpdate = true; } }
+{ const el = document.getElementById('liftLegend'); el.innerHTML = LIFTS.map(L => `<div><b style="background:${L.color}"></b>Lift ${L.short}: ${L.serves.join(', ')}</div>`).join(''); }
+function liftProximity(dt){ S.liftCool = Math.max(0, (S.liftCool||0) - dt); if (S.lift || S.liftCool > 0 || S.air || S.crashT > 0) return;
+  for (let i=0;i<LIFTS.length;i++){ const L = LIFTS[i]; if (Math.hypot(S.x-L.bx, S.z-L.bz) < 4.5){ startLift(i); return; } } }
+function startLift(i){ const L = LIFTS[i]; S.lift = {i, d:0}; S.run = null; S.speed = 0; S.vy = 0; S.air = false; S.crumbs = []; S.liftWas = S.yaw;
+  $('liftRide').style.display = 'block'; $('liftRide').textContent = `🚡 ${L.name} → ${L.serves.join(' · ')}   (A / Enter to skip)`; camInit = false; }
+function liftRide(dt, inp){ const o = liftObjs[S.lift.i], L = o.L;
+  S.lift.d += dt*LIFT_SPEED*6;   // the ride itself is sped up so it takes ~10-25 s
+  if (S.lift.d >= L.len){ endLift(); return; }
+  const [x,y,z] = liftPos(o, S.lift.d); S.x = x; S.z = z; S.y = y - 2.2; S.yaw = S.travel = L.yaw; S.pitch = 0; S.lean = 0; S.speed = 0; myChair.visible = true; myChair.position.set(x, y - 2.95, z); myChair.rotation.y = L.yaw; }
+function endLift(){ const L = LIFTS[S.lift.i]; S.lift = null; myChair.visible = false; $('liftRide').style.display = 'none';
+  // step off at the top station, facing the first trail it serves
+  const tr = trails.find(t => t.name === L.serves[0]), x = L.tx + L.dx*7, z = L.tz + L.dz*7, yaw = Math.atan2(-(tr.pts[0][0]-x), -(tr.pts[0][1]-z));
+  updateChunks(x, z, 1e9, 160); placeAt(x, z, yaw); S.liftCool = 3; camInit = false; toast(`🚡 ${L.name} — top station · ${L.serves.join(' · ')}`); }
 function shopProximity(dt){ S.shopCool = Math.max(0, (S.shopCool||0) - dt);
   const dx = S.x - SHOP_POS.x, dz = S.z - (SHOP_POS.z - 6);
   if (!shopOpen && S.shopCool <= 0 && !S.air && dx*dx + dz*dz < 9) openShop(); }
 S.score = LS.get('trailDescent.dollahs', 0); S.savedScore = S.score; applyBike();
 showOverlay('TRAIL DESCENT', menuMsg());
 teleport(spotI, true);
-window.__game = S; window.__readInput = readInput; window.__groundH = groundH; window.__world = { trails, features, spots, PARK, terrainH, featH, isDirt, nearTrails, base, inPark };
+window.__game = S; window.__readInput = readInput; window.__groundH = groundH; window.__lift = i => startLift(i); window.__world = { LIFTS, connectors, trails, features, spots, PARK, terrainH, featH, isDirt, nearTrails, base, inPark };
 window.__teleport = i => teleport(i); window.__unlocked = unlocked; window.__isOpen = isOpen; window.__chunks = () => chunks.size; window.__renderer = renderer;
 window.__sim = (secs, inp) => { const h=1/120; const base={steer:0,pedal:0,brake:0,jump:false,tx:0,ty:0}; for(let t=0;t<secs;t+=h){ step(h, Object.assign({}, base, typeof inp==='function'?inp(t):inp)); trackWorld(h); } return {x:S.x, z:S.z, kmh:S.speed*3.6, air:S.air, lives:S.lives, clean:S.clean, score:S.score}; };
 frame();
