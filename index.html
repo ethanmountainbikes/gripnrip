@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Trail Descent – Downhill MTB</title>
+<title>Trail Descent – Open World MTB</title>
 <link rel="stylesheet" href="style.css">
 <script type="importmap">
 { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
@@ -23,6 +23,7 @@
   <div id="timer">0:00.0</div>
   <div id="toast"></div>
   <div id="center"></div>
+  <canvas id="minimap" width="180" height="180"></canvas>
 </div>
 <div id="help">
   <h3>CONTROLS <small>(Descenders layout · View / H toggles)</small></h3>
@@ -40,6 +41,7 @@
     <tr><td>Respawn</td><td>B</td><td>R</td></tr>
     <tr><td>Switch / reset camera</td><td>Y / X</td><td>V / X</td></tr>
     <tr><td>Pause</td><td>Menu</td><td>P / Esc</td></tr>
+    <tr><td>Teleport to prev / next spot</td><td>D-pad ← / →</td><td>[ / ] (or , / .), 1–8 jump to a spot</td></tr>
   </table>
   <p>Pump: compress into backsides, extend over faces to gain speed. Lay the bike over with the right stick as you leave a lip to scrub (lower, faster). Land straight, level and untweaked. Controller: press any button so Firefox detects it.</p>
 </div>

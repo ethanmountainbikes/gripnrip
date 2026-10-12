@@ -25,3 +25,5 @@ canvas{display:block}
 #overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.45)}
 #overlay.hidden{display:none}#overlayBox{text-align:center}#overlayBox h1{font-size:64px;margin:0;letter-spacing:4px;color:#ff8c1a}
 #overlayBox p{font-size:22px}
+#minimap{position:absolute;top:84px;right:20px;width:180px;height:180px;border:2px solid rgba(255,255,255,.8);border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.4)}
+#timer{white-space:nowrap}
