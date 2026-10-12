@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Trail Descent – Downhill MTB</title>
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+<div id="hud">
+  <div id="lives"><span class="lbl">HEALTH</span><span id="livesVal">♥ ♥ ♥</span></div>
+  <div id="objective"><div class="objTitle">OBJECTIVE</div><div id="objText">Get 1 clean landing(s) 0/1</div></div>
+  <div id="airtime"><div class="lbl">AIRTIME</div><div id="airVal">0.0s</div><div class="sub" id="airBest">best 0.0s</div></div>
+  <div id="score"><div class="lbl">REP</div><div id="scoreVal">0</div><div id="trick"></div></div>
+  <div id="speedo">
+    <svg viewBox="0 0 200 200"><path class="track" d="M30 150 A80 80 0 1 1 170 150"/><path id="speedArc" class="bar" d="M30 150 A80 80 0 1 1 170 150"/></svg>
+    <div id="speedVal">0</div><div class="unit">km/h</div>
+  </div>
+  <div id="progress"><div id="progressBar"></div></div>
+  <div id="timer">0:00.0</div>
+  <div id="toast"></div>
+  <div id="center"></div>
+</div>
+<div id="help">
+  <h3>CONTROLS <small>(H / Back to toggle)</small></h3>
+  <table>
+    <tr><th></th><th>Controller</th><th>Keyboard</th></tr>
+    <tr><td>Steer / lean</td><td>Left stick</td><td>A / D or ← →</td></tr>
+    <tr><td>Pedal</td><td>RT / R2</td><td>W or ↑</td></tr>
+    <tr><td>Brake</td><td>LT / L2</td><td>S or ↓</td></tr>
+    <tr><td>Jump (hold = preload)</td><td>A / Cross</td><td>Space</td></tr>
+    <tr><td>Tricks in air</td><td>Right stick</td><td>I J K L (A/D also spin)</td></tr>
+    <tr><td>Respawn</td><td>Y / Triangle</td><td>R</td></tr>
+    <tr><td>Pause</td><td>Start / Options</td><td>P / Esc</td></tr>
+  </table>
+  <p>Land with the bike straight and level for a clean landing. Stay on the dirt – grass slows you down.</p>
+</div>
+<div id="overlay"><div id="overlayBox"><h1>TRAIL DESCENT</h1><p id="overlayMsg">Press <b>A</b> / <b>Enter</b> to drop in</p></div></div>
+<script type="module" src="game.js"></script>
+</body>
+</html>
