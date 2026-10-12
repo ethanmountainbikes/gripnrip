@@ -90,3 +90,12 @@ Run it locally with `python3 -m http.server`, then open http://localhost:8000.
 - Grass no longer slows you down; it only has less grip than dirt.
 - Trail jumps are sized to the speed you carry at each one. Jumps on faster sections are bigger, and those on slower sections are smaller, within the trail's difficulty.
 - DOLLAHS: tricks and landings pay about 15% of the old REP values, and finishing a trail pays (1000 + trail length ÷ 2) × 0.15.
+
+## Bigger map, new trails, shop and flip landings
+- The map is ~32% larger (2.76 km square); the new outer band has rolling forested hills. All original trails, the park, lifts and paths are unchanged.
+- New trails: **Boreal Enduro** (Enduro, black), **Ridgeback Flow** (Flow, blue), **Eastern Traverse** (Cross-country, green), with speed-sized jumps, checkpoints, arches and unlock-on-finish teleports.
+- New lifts: **Boreal Chair** (D: Boreal Enduro, Drop Zone) and **East Ridge Chair** (E: Ridgeback Flow, Rock Garden, Eastern Traverse), plus connector paths.
+- Connector paths route around the Dirt Jump Park; an automated check fails if any path passes within 15 m of the park pad or a jump.
+- The bike shop is a log cabin beside the valley path (spur path to the porch), >= 10 m clear of every path, trail and lift.
+- Objectives were removed; DOLLAHS still come from tricks and finishes.
+- Flip landings drop whole turns and settle by the shortest rotation, with a short quaternion blend.

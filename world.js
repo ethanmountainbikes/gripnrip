@@ -58,6 +58,10 @@ const TRAIL_DEFS = [
   {name:'Meadow Flow',        color:'#1abc9c', start:[-560,250],  goal:[-330,120],  grade:0.10, kind:'flowg', type:'Flow', diff:'green'},
   {name:'Pump Line',          color:'#f1c40f', start:[750,450],   goal:[1000,720],  grade:0.08, kind:'pump', type:'Pump track', diff:'green'},
   {name:'Hilltop Jumps',      color:'#ff9a1a', start:[680,380],   goal:[620,840],  grade:0.09, kind:'jumps', type:'Jump line', diff:'blue'},
+  // outer-band trails (added with the map expansion)
+  {name:'Boreal Enduro',      color:'#5d4037', start:[-450,-1180], goal:[-1180,-1050], grade:0.13, kind:'enduro', type:'Enduro', diff:'black', outer:true},
+  {name:'Ridgeback Flow',     color:'#00acc1', start:[850,-1180],  goal:[1200,-1060], grade:0.12, kind:'flow', type:'Flow', diff:'blue', outer:true},
+  {name:'Eastern Traverse',   color:'#7cb342', start:[1150,-950],  goal:[1150,-250],  grade:0.07, kind:'xc', type:'Cross-country', diff:'green', outer:true},
 ];
 function walk(def){
   let [x,z] = def.start, yaw = def.startYaw ?? Math.atan2(-(def.goal[0]-x), -(def.goal[1]-z));
@@ -70,7 +74,7 @@ function walk(def){
     const gyaw = Math.atan2(-gx,-gz); let best = null;
     for (const dy of [-0.22,-0.11,0,0.11,0.22]){
       const ny = yaw+dy, nx = x - Math.sin(ny)*STEP, nz = z - Math.cos(ny)*STEP;
-      if (Math.abs(nx) > CORE-130 || Math.abs(nz) > CORE-130) continue;
+      const lim = def.outer ? HALF-150 : CORE-130; if (Math.abs(nx) > lim || Math.abs(nz) > lim) continue;
       const sl = (base(x,z) - base(nx,nz))/STEP;      // >0 downhill
       const ga = Math.atan2(Math.sin(ny-gyaw), Math.cos(ny-gyaw));
       const gw = gd < 120 ? 5 : 1.5;
@@ -301,7 +305,7 @@ export const featClear = (x, z) => { let m = 1e9; for (const f of features){ if 
     const rx = x-f.x, rz = z-f.z, t = Math.max(0, Math.min(f.L, rx*f.dx + rz*f.dz)), u = Math.max(0, Math.abs(rx*f.dz - rz*f.dx) - f.hw); m = Math.min(m, Math.hypot(rx*f.dx + rz*f.dz - t, u)); } return m; };
 const SHOP_XZ = [-40, 250], LIFT_CLEAR = 15;
 const flatEnough = (x, z) => { const h0 = terrainH(x,z); let mx = 0; for (const [a,b] of [[-6,-6],[6,-6],[-6,6],[6,6],[0,7],[7,0],[0,-7],[-7,0]]) mx = Math.max(mx, Math.abs(terrainH(x+a,z+b)-h0)); return mx; };
-const stationOK = (x, z) => trailDist(x,z) >= LIFT_CLEAR + 5 && featClear(x,z) >= LIFT_CLEAR + 5 && !inPark(x,z) && Math.hypot(x-PARK.x, z-PARK.z) > PARK.r + 20 && Math.hypot(x-SHOP_XZ[0], z-SHOP_XZ[1]) > 30 && Math.max(Math.abs(x), Math.abs(z)) < CORE - 200;
+const stationOK = (x, z) => trailDist(x,z) >= LIFT_CLEAR + 5 && featClear(x,z) >= LIFT_CLEAR + 5 && !inPark(x,z) && Math.hypot(x-PARK.x, z-PARK.z) > PARK.r + 20 && Math.hypot(x-SHOP_XZ[0], z-SHOP_XZ[1]) > 30 && Math.max(Math.abs(x), Math.abs(z)) < HALF - 200;
 // deterministic search for a flat, clear station spot near a preferred point
 function findStation(px, pz, maxR = 160){ let best = null, bs = 1e9; const rnd = mulberry(Math.round(px*7 + pz*13) + 99);
   for (let n = 0; n < 900; n++){ const r = maxR*Math.sqrt(rnd()), a = rnd()*6.283, x = px + Math.cos(a)*r, z = pz + Math.sin(a)*r;
@@ -311,6 +315,8 @@ const LIFT_DEFS = [
   {name:'Summit Express', short:'A', color:'#e53935', b:[-15, 205], t:[190, -470], serves:['Summit DH','Flow Line','Freeride Ridge','North Face']},
   {name:'West Ridge Lift', short:'B', color:'#1e88e5', b:[-335, 455], t:[-628, 222], serves:['Forest Singletrack','Meadow Flow']},
   {name:'East Hills Lift', short:'C', color:'#8e24aa', b:[585, 215], t:[712, 412], serves:['Pump Line','Hilltop Jumps']},
+  {name:'Boreal Chair', short:'D', color:'#6d4c41', b:[-1080, -980], t:[-470, -1100], serves:['Boreal Enduro','Drop Zone']},
+  {name:'East Ridge Chair', short:'E', color:'#00897b', b:[1080, -330], t:[880, -1100], serves:['Ridgeback Flow','Rock Garden','Eastern Traverse']},
 ];
 // pick the bottom/top pair whose straight line needs the fewest/highest trail crossings; stations clear of trails and jumps
 const crossings = (bx, bz, tx, tz) => { const len = Math.hypot(tx-bx, tz-bz); let n = 0, on = false; for (let d = 0; d <= len; d += 3){ const u = d/len, x = bx+(tx-bx)*u, z = bz+(tz-bz)*u, c = trailDist(x,z) < W + 4 || featClear(x,z) < 3; if (c && !on) n++; on = c; } return n; };
@@ -347,6 +353,8 @@ const CONN_DEFS = [
   [T_(2), tBeg('Pump Line')], [T_(2), tBeg('Hilltop Jumps')],
   [tEnd('Summit DH'), [-280, 420], L_(1)], [tEnd('Meadow Flow'), [-345, 330], L_(1)], [tEnd('Flow Line'), L_(2)],
   [tEnd('Forest Singletrack'), [-420, 640], parkGate], [tEnd('Hilltop Jumps'), [560, 620], [540, 350], L_(2)], [tEnd('Pump Line'), [880, 380], [700, 250], L_(2)],
+  [T_(3), tBeg('Boreal Enduro')], [T_(3), tBeg('Drop Zone')], [tEnd('Boreal Enduro'), L_(3)], [tEnd('Drop Zone'), L_(3)],
+  [T_(4), [815, -1110], tBeg('Ridgeback Flow')], [T_(4), tBeg('Rock Garden')], [tEnd('Ridgeback Flow'), tBeg('Eastern Traverse')], [tEnd('Rock Garden'), L_(4)], [tEnd('Eastern Traverse'), L_(4)],
 ];
 export const connectors = CONN_DEFS.map(wp => { const pts = [];
   for (let k = 0; k < wp.length-1; k++){ const [ax,az] = wp[k], [bx,bz] = wp[k+1], n = Math.max(1, Math.ceil(Math.hypot(bx-ax, bz-az)/2));
