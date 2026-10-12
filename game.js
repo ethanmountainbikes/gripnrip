@@ -658,8 +658,9 @@ function frame(){
   renderer.render(scene, camera);
   // HUD
   const kmh = S.speed*3.6; S.maxKmh = Math.max(S.maxKmh, kmh);
-  $('speedVal').textContent = Math.round(kmh);
-  arc.style.strokeDasharray = `${Math.min(1,kmh/90)*arcLen} 1000`;
+  const shownKmh = Math.max(0, kmh - 10);   // HUD only: display reads 10 km/h under the real speed
+  $('speedVal').textContent = Math.round(shownKmh);
+  arc.style.strokeDasharray = `${Math.min(1,shownKmh/90)*arcLen} 1000`;
   $('airVal').textContent = (S.air && S.airT > 0.1 ? S.airT : 0).toFixed(1)+'s';
   $('airBest').textContent = `best ${S.bestAir.toFixed(1)}s`;
   $('scoreVal').textContent = '$' + S.score.toLocaleString();
