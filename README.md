@@ -128,6 +128,9 @@ Run it locally with `python3 -m http.server`, then open http://localhost:8000.
 - Quality Low / Med / High (High adds SSAO + bloom) under Settings.
 - Main menu with 3D flyover: Ride, Trails, Bike Shop, Settings, Credits; works with controller (D-pad/stick + A/B) and keyboard/mouse. Pause → Main Menu.
 
+## Sound effects
+All sound effects (chain clicks following pedal cadence, tyre roll by speed and surface, wind, landing thuds scaled by impact, skids, crashes, chairlift hum) are synthesized live with the Web Audio API in `sfx.js`. No sample files are used, so there is nothing to license. Adjust them with **Sound volume** in the settings menu (0% = mute).
+
 ## Music
 NCS was considered, but its FAQ says: *"Q. Can I use NCS music in my game? … Please get in touch via our commercial licensing form"*, so CC0 tracks from OpenGameArt are used instead:
 - "Action Track" and "Simple Action Beat": LushoGames (CC0)

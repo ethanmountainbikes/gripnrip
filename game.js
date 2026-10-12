@@ -8,6 +8,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featBase, featAxis, BOULDERS, boulderH, bigBouldersNear, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL, LIFTS, connectors, CW, SHOP, WORLD, RAMPAGE } from './world.js';
+import { initSfx, setSfxVolume, updateSfx, sfxLand, sfxCrash, sfxLiftStart } from './sfx.js';
 const RAMP = WORLD === 'rampage';   // Red Bull Rampage-inspired desert world
 
 const G = 9.81;
@@ -299,7 +300,8 @@ if (RAMP){ const C0 = RAMPAGE.corral, wood = new THREE.MeshStandardMaterial({col
   const N = 64, posts = new THREE.InstancedMesh(post, wood, N), rails = new THREE.InstancedMesh(rail, wood, N*2), M = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
   for (let i = 0; i < N; i++){ const a = i/N*Math.PI*2, b = (i+1)/N*Math.PI*2, x = C0.x + Math.cos(a)*C0.r, z = C0.z + Math.sin(a)*C0.r, x2 = C0.x + Math.cos(b)*C0.r, z2 = C0.z + Math.sin(b)*C0.r, h = terrainH(x, z);
     M.compose(new THREE.Vector3(x, h + 0.6, z), q.identity(), new THREE.Vector3(1,1,1)); posts.setMatrixAt(i, M);
-    const L = Math.hypot(x2-x, z2-z), yaw = Math.atan2(x2-x, z2-z), gap = Math.abs(Math.sin(a) + 1) < 0.08;   // opening at the uphill side where the lines come in
+    const L = Math.hypot(x2-x, z2-z), yaw = Math.atan2(x2-x, z2-z), gap = Math.abs(Math.abs(Math.sin(a)) - 1) < 0.08, gapPrev = Math.abs(Math.abs(Math.sin(a - Math.PI*2/N)) - 1) < 0.08;   // openings uphill (lines in) and downhill (exit path)   // opening at the uphill side where the lines come in
+    if (gap && gapPrev){ M.compose(new THREE.Vector3(x, -999, z), q.identity(), new THREE.Vector3(0,0,0)); posts.setMatrixAt(i, M); }
     for (const [k, y] of [[0, 0.5], [1, 1.0]]){ M.compose(new THREE.Vector3((x+x2)/2, (h + terrainH(x2, z2))/2 + y, (z+z2)/2), q.setFromEuler(e.set(0, yaw, 0)), new THREE.Vector3(1, 1, gap ? 0.001 : L)); rails.setMatrixAt(i*2+k, M); } }
   scene.add(posts, rails);
   const cols = [0xd9772b, 0x1f3d27, 0xe8dcc0, 0xc0392b];
@@ -307,13 +309,14 @@ if (RAMP){ const C0 = RAMPAGE.corral, wood = new THREE.MeshStandardMaterial({col
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 4.6, 6), steel); pole.position.set(x, h + 2.3, z); scene.add(pole);
     const fl = new THREE.Mesh(flagG, new THREE.MeshStandardMaterial({color:cols[i%4], side:THREE.DoubleSide, roughness:0.8})); fl.position.set(x + 0.45, h + 3.2, z); fl.rotation.y = a; scene.add(fl); }
   for (const tr of trails){ const [x, z] = tr.pts[0], yaw = tr.yaw[0], h = terrainH(x, z);
-    const deck = new THREE.Mesh(new THREE.BoxGeometry(6, 0.3, 6), wood); deck.position.set(x - Math.sin(yaw)*-4, h - 0.12, z - Math.cos(yaw)*-4); deck.rotation.y = yaw; deck.receiveShadow = true; scene.add(deck);
-    for (const [sx, sz] of [[-2.8,-2.8],[2.8,-2.8],[-2.8,2.8],[2.8,2.8]]){ const t = new THREE.Mesh(new THREE.BoxGeometry(0.12, 4.5, 0.12), steel); t.position.set(deck.position.x + Math.cos(yaw)*sx + Math.sin(yaw)*sz, h + 2.1, deck.position.z - Math.sin(yaw)*sx + Math.cos(yaw)*sz); scene.add(t); } } }
+    const bx = x - Math.sin(yaw)*-3.2, bz = z - Math.cos(yaw)*-3.2, hb = Math.max(h, terrainH(bx, bz));   // deck butts onto the start of the ribbon and sits on the ground (no scaffold towers)
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(6, 0.3, 6.4), wood); deck.position.set(bx, hb + 0.02, bz); deck.rotation.y = yaw; deck.receiveShadow = true; scene.add(deck);
+    const skirt = new THREE.Mesh(new THREE.BoxGeometry(6, 2, 6.4), wood); skirt.position.set(bx, hb - 1.05, bz); skirt.rotation.y = yaw; scene.add(skirt); } }
 // ---------- trail markers, start/finish banners ----------
 { const poleG = new THREE.CylinderGeometry(0.06,0.06,1.3,6); poleG.translate(0,0.65,0);
   let total = 0; for (const tr of trails) total += 2*Math.ceil(tr.pts.length/8);
   const poles = new THREE.InstancedMesh(poleG, new THREE.MeshLambertMaterial({color:0xffffff}), total), M = new THREE.Matrix4(), c = new THREE.Color(); let n = 0;
-  for (const tr of trails){ c.set(tr.color);
+  for (const tr of trails){ c.set(tr.color); if (RAMP) continue;   // Rampage: no marker poles
     for (let i=4;i<tr.pts.length;i+=8) for (const side of [-1,1]){ const yw = tr.yaw[i], x = tr.pts[i][0] + Math.cos(yw)*side*(W+0.9), z = tr.pts[i][1] - Math.sin(yw)*side*(W+0.9);
       M.makeTranslation(x, terrainH(x,z), z); poles.setMatrixAt(n, M); poles.setColorAt(n++, c); } }
   poles.count = n; poles.computeBoundingSphere(); scene.add(poles);
@@ -324,7 +327,7 @@ if (RAMP){ const C0 = RAMPAGE.corral, wood = new THREE.MeshStandardMaterial({col
     if (sub){ cx2.font='bold 40px Arial'; cx2.fillText(label,256,42,490); cx2.font='bold 28px Arial'; cx2.fillText(sub,256,84,490); }
     else { cx2.font='bold 52px Arial'; cx2.fillText(label,256,68,490); }
     const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace;
-    const b = new THREE.Mesh(new THREE.PlaneGeometry(2*half,1.2), new THREE.MeshBasicMaterial({map:t,side:THREE.DoubleSide})); b.position.y=4; grp.add(b);
+    for (const r of [0, Math.PI]){ const b = new THREE.Mesh(new THREE.PlaneGeometry(2*half,1.2), new THREE.MeshBasicMaterial({map:t})); b.position.set(0, 4, r ? -0.01 : 0.01); b.rotation.y = r; grp.add(b); }   // two single-sided faces back to back so the text reads correctly from both sides
     grp.position.set(x, terrainH(x,z), z); grp.rotation.y = yaw; scene.add(grp); };
   for (const tr of trails){ const i0 = 1, i1 = tr.pts.length-3;
     banner(tr.pts[i0][0], tr.pts[i0][1], tr.yaw[i0], tr.color === '#111111' ? '#333' : tr.color, 'START · ' + tr.name.toUpperCase(), W+1, `${DIFF[tr.diff].icon} ${DIFF[tr.diff].label.toUpperCase()} · ${tr.type.toUpperCase()}`);
@@ -440,7 +443,7 @@ function resetGame(){
   Object.assign(S,{lives:3,bestAir:0,totalAir:0,time:0,maxKmh:0,clean:0,spins:0,flips:0,finishes:0,parkClean:0,state:'riding',paused:false});
   teleport(spotI, true); $('overlay').classList.add('hidden'); closeMenu();
 }
-function crash(reason){ S.lastCrash = reason;
+function crash(reason){ S.lastCrash = reason; sfxCrash();
   if (S.crashT>0) return;
   S.crashT = 2.0; S.air = false; trickEl.textContent = reason;
   // health only counts during a trail run; in free roam a crash just respawns you
@@ -700,7 +703,7 @@ function land(gh, gp){
   const fwd = Math.hypot(tvx, tvz) * Math.max(0, Math.cos(wrapA(S.yaw - S.travel)));   // keep the along-heading part
   S.speed = Math.max(0, fwd)*0.96;
   { const gr = (groundH(S.x - Math.sin(S.yaw)*S.speed/120, S.z - Math.cos(S.yaw)*S.speed/120) - gh)*120; S.vy = Math.min(tvy, gr); S.lastVyG = S.vy; } S.gf = 0; S.landCool = 0.3;
-  const impact = -vn; S.suspV = (S.suspV||0) + Math.min(impact,15)*0.12; S.dustBurst = Math.min(1, impact/8);
+  const impact = -vn; S.suspV = (S.suspV||0) + Math.min(impact,15)*0.12; S.dustBurst = Math.min(1, impact/8); sfxLand(impact);
   if (Math.abs(pe) > 0.75*BIKE.stab || Math.abs(se) > 0.85*BIKE.stab){ crash(Math.abs(se)>0.85*BIKE.stab ? 'Landed sideways!' : 'Over the bars!'); return; }
   if (impact > 20){ crash('Too hard a landing!'); return; }
   if (S.trick){ crash('Still mid-trick!'); return; }
@@ -755,6 +758,7 @@ function frame(){
     acc += dt; const h = 1/120; while (acc >= h){ step(h, inp); acc -= h; }
     trackWorld(dt); shopProximity(dt); liftProximity(dt);
   } else if (S.state!=='riding' && S.state!=='menu') { step(dt, {steer:0,pedal:0,brake:1,jump:false,tx:0,ty:0}); }
+  updateSfx({riding: S.state==='riding' && !S.paused, speed:S.speed||0, air:!!S.air && S.crashT<=0, lift:!!S.lift, sliding:!!S.sliding, brake:inp.brake||0, crank:BR.crank(), surface: S.rockT > 0 ? 'rock' : isDirt(S.x,S.z) ? 'dirt' : 'grass'});
   windU.value += dt; grassField.update();
   if (menu.open) menuFrame(dt, inp);
   const flyF = S.state === 'menu' ? flyover(dt) : null, fX = flyF ? flyF[0] : S.x, fZ = flyF ? flyF[1] : S.z;
@@ -958,7 +962,7 @@ function musicVol(){ music.el.volume = SETTINGS.musicOn ? SETTINGS.musicVol : 0;
 function nextSong(){ if (!SETTINGS.musicOn) return; if (++music.i >= music.order.length){ music.order = shuffle(TRACKS.map((_, k) => k)); music.i = 0; }
   const t = TRACKS[music.order[music.i]]; music.el.src = t.file; musicVol(); music.el.play().then(() => toast(`♪ Now playing: ${t.title} — ${t.artist} (CC0)`)).catch(() => {}); }
 music.el.addEventListener('ended', nextSong);
-function startMusic(){ if (music.started || !SETTINGS.musicOn) return; music.started = true; nextSong(); }
+function startMusic(){ initSfx(); setSfxVolume(SETTINGS.volume); if (music.started || !SETTINGS.musicOn) return; music.started = true; nextSong(); }
 for (const ev of ['keydown', 'pointerdown']) addEventListener(ev, startMusic, {once:false});
 function setMusicOn(on){ SETTINGS.musicOn = on; saveSettings(); if (on){ if (!music.started){ music.started = true; nextSong(); } else if (music.el.paused){ musicVol(); music.el.play().catch(()=>{}); } } else music.el.pause(); }
 
@@ -969,7 +973,7 @@ function trailItems(){ return trails.map((tr, i) => { const d = DIFF[tr.diff], o
   return {label:`<span class="dIcon" style="color:${d.color === '#111' ? '#e8e2d0' : d.color}">${d.icon}</span> ${open ? '' : '🔒 '}${tr.name}`, sub:`${d.label} · ${tr.type}${open ? '' : ' · finish it once to unlock'}`, disabled:!open, act:() => { spotI = i; startRide(); }}; }); }
 const PAGES = {
   main: () => ({title:null, items:[
-    {label:'Ride', sub:RAMP ? 'Free roam from the Finish Corral' : 'Free roam from the Valley Meadow', act:() => { spotI = spots.findIndex(s => s.name.startsWith(RAMP ? 'Finish Corral' : 'Valley')); startRide(); }},
+    {label:'Ride', sub:RAMP ? 'Free roam from the Valley Overlook' : 'Free roam from the Valley Meadow', act:() => { spotI = spots.findIndex(s => s.name.startsWith(RAMP ? 'Valley Overlook' : 'Valley')); startRide(); }},
     {label:'World', value:RAMP ? 'RAMPAGE' : 'MOUNTAIN', sub:RAMP ? 'Utah desert freeride venue (Red Bull Rampage style)' : 'Alpine bike park', adj:() => switchWorld(), act:() => switchWorld()},
     {label:'Trails', sub:`${trails.filter((_, i) => isOpen(i)).length}/${trails.length} unlocked — drop in at a trail start`, act:() => go('trails')},
     {label:'Bike Shop', sub:`$${S.score.toLocaleString()} DOLLAHS`, act:() => openShop()},
@@ -980,7 +984,7 @@ const PAGES = {
     {label:'Quality', value:SETTINGS.quality.toUpperCase(), adj:d => { const q = ['low','med','high'], k = Math.max(0, Math.min(2, q.indexOf(SETTINGS.quality) + d)); if (q[k] !== SETTINGS.quality) applyQuality(q[k]); }, act:() => { const q = ['low','med','high']; applyQuality(q[(q.indexOf(SETTINGS.quality)+1)%3]); }},
     {label:'Music', value:ON(SETTINGS.musicOn), adj:() => setMusicOn(!SETTINGS.musicOn), act:() => setMusicOn(!SETTINGS.musicOn)},
     {label:'Music volume', value:PCT(SETTINGS.musicVol), adj:d => { SETTINGS.musicVol = Math.max(0, Math.min(1, Math.round((SETTINGS.musicVol + d*0.1)*10)/10)); saveSettings(); musicVol(); }},
-    {label:'Sound volume', value:PCT(SETTINGS.volume), sub:'for sound effects (coming later)', adj:d => { SETTINGS.volume = Math.max(0, Math.min(1, Math.round((SETTINGS.volume + d*0.1)*10)/10)); saveSettings(); }},
+    {label:'Sound volume', value:PCT(SETTINGS.volume), sub:'sound effects (0% = mute)', adj:d => { SETTINGS.volume = Math.max(0, Math.min(1, Math.round((SETTINGS.volume + d*0.1)*10)/10)); saveSettings(); setSfxVolume(SETTINGS.volume); }},
     {label:'Invert lean / flip (left stick ↕)', value:ON(SETTINGS.invertY), adj:() => { SETTINGS.invertY = !SETTINGS.invertY; saveSettings(); }, act:() => { SETTINGS.invertY = !SETTINGS.invertY; saveSettings(); }},
     {label:'Invert whip / tweak (right stick ↔)', value:ON(SETTINGS.invertX), adj:() => { SETTINGS.invertX = !SETTINGS.invertX; saveSettings(); }, act:() => { SETTINGS.invertX = !SETTINGS.invertX; saveSettings(); }},
     {label:'Controls / help', value:$('help').classList.contains('hidden') ? 'SHOW' : 'HIDE', act:() => $('help').classList.toggle('hidden')},
@@ -1234,7 +1238,7 @@ function animateLifts(dt){ for (const o of liftObjs){ o.phase = (o.phase + dt*LI
 { const el = document.getElementById('liftLegend'); el.innerHTML = LIFTS.map(L => `<div><b style="background:${L.color}"></b>Lift ${L.short}: ${L.serves.join(', ')}</div>`).join(''); }
 function liftProximity(dt){ S.liftCool = Math.max(0, (S.liftCool||0) - dt); if (S.lift || S.liftCool > 0 || S.air || S.crashT > 0) return;
   for (let i=0;i<LIFTS.length;i++){ const L = LIFTS[i]; if (Math.hypot(S.x-L.bx, S.z-L.bz) < 4.5){ startLift(i); return; } } }
-function startLift(i){ const L = LIFTS[i]; S.lift = {i, d:0}; S.run = null; S.speed = 0; S.vy = 0; S.air = false; S.crumbs = []; S.liftWas = S.yaw;
+function startLift(i){ sfxLiftStart(); const L = LIFTS[i]; S.lift = {i, d:0}; S.run = null; S.speed = 0; S.vy = 0; S.air = false; S.crumbs = []; S.liftWas = S.yaw;
   $('liftRide').style.display = 'block'; $('liftRide').textContent = `🚡 ${L.name} → ${L.serves.join(' · ')}   (A / Enter to skip)`; camInit = false; }
 function liftRide(dt, inp){ const o = liftObjs[S.lift.i], L = o.L;
   S.lift.d += dt*LIFT_SPEED*6;   // the ride itself is sped up so it takes ~10-25 s

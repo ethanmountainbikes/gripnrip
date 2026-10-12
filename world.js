@@ -374,7 +374,7 @@ const tStart = (tr, s=12) => { const i = Math.round(s/2); return {x:tr.pts[i][0]
 const parkYaw = Math.atan2(-PARK.dir[0], -PARK.dir[1]);
 export const spots = [
   ...trails.map(tr => ({name: tr.id===0 ? 'Summit · Summit DH' : tr.name, trail:tr.id, ...tStart(tr)})),
-  ...(RAMP ? [{name:'Finish Corral (free roam)', x:RAMPAGE.corral.x, z:RAMPAGE.corral.z + 20, yaw:Math.PI}, {name:'Summit Ridge', x:20, z:-470, yaw:0}] :
+  ...(RAMP ? [{name:'Valley Overlook (free roam)', x:-55, z:420, yaw:Math.PI}, {name:'Summit Ridge', x:20, z:-470, yaw:0}] :
   [{name:'Dirt Jump Park', x:PARK.x - PARK.dir[0]*95, z:PARK.z - PARK.dir[1]*95 - 10*PARK.dir[0], yaw:parkYaw},
   {name:'Valley Meadow (free roam)', x:-60, z:300, yaw:Math.PI}]),
 ];
@@ -414,7 +414,7 @@ export const LIFTS = LIFT_DEFS.map(L => {
 const tEnd = name => { const t = trails.find(t => t.name === name), p = t.pts[t.pts.length-1]; return p; };
 const tBeg = name => { const t = trails.find(t => t.name === name); return t.pts[0]; };
 const L_ = i => [LIFTS[i].bx, LIFTS[i].bz], T_ = i => [LIFTS[i].tx, LIFTS[i].tz];
-const valley = RAMP ? [0, 330] : [-60, 300], J = RAMP ? [120, 330] : [-36, 260];   // J: junction on the valley -> Summit Express path where the shop spur branches off
+const valley = RAMP ? [0, 385] : [-60, 300], J = RAMP ? [120, 330] : [-36, 260];   // J: junction on the valley -> Summit Express path where the shop spur branches off
 // bike shop: nearest spot to J whose whole yard (r ~ 13 m) stays >= 10 m from every trail, jump, lift line and path waypoint segment
 const segD = (x, z, a, b) => { const dx = b[0]-a[0], dz = b[1]-a[1], l2 = dx*dx+dz*dz || 1, u = Math.max(0, Math.min(1, ((x-a[0])*dx + (z-a[1])*dz)/l2)); return Math.hypot(x-a[0]-dx*u, z-a[1]-dz*u); };
 const mainLegs = [[valley, J], [J, [LIFTS[0].bx, LIFTS[0].bz]]];
@@ -429,7 +429,7 @@ spots.push({name:'Bike Shop', shop:true, x: SHOP.x - Math.sin(SHOP.yaw)*20, z: S
 // waypoints on a ring 105 m from the park centre so paths go around the pad and its jump lines, never through them
 const ring = (...degs) => degs.map(a => [PARK.x + 150*Math.cos(a*Math.PI/180), PARK.z + 105*Math.sin(a*Math.PI/180)]);
 const CONN_DEFS = RAMP ? [
-  [valley, J, L_(0)], [J, shopDoor], ...RAMP_DEFS.map(d => [T_(0), [250, -470], [d.start[0], -470], tBeg(d.name)]), ...RAMP_DEFS.map(d => { const e = tEnd(d.name); return [e, [e[0], 330], valley]; }),
+  [valley, J, L_(0)], [J, shopDoor], ...RAMP_DEFS.map(d => [T_(0), [250, -470], [d.start[0], -470], tBeg(d.name)]), ...RAMP_DEFS.map(d => { const e = tEnd(d.name), C = RAMPAGE.corral; return Math.abs(e[0] - C.x) < C.r ? [e, [C.x, C.z], [C.x, C.z + C.r + 12], valley] : [e, [e[0], 385], valley]; }),   // inner lines exit through the corral's south gate; outer ones go round it
 ] : [
   [valley, J, L_(0)], [J, shopDoor], [valley, [-140, 430], [-230, 420], L_(1)], [L_(1), [-400, 480], [-410, 560], parkGate],
   [T_(0), tBeg('Summit DH')], [T_(0), tBeg('Flow Line')], [T_(0), tBeg('Freeride Ridge')], [T_(0), tBeg('North Face')],

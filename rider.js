@@ -211,5 +211,5 @@ export function buildBikeRider(frameMat){
     root.rotation.x = tilt;   // tuck no-hander: bike pulled up into the lap
   }
   for (const k of ['frame','jersey','helmet']) patternize(M[k]);
-  return { root, wheels, update, POSES, TRICK_OF, M };
+  return { root, wheels, update, POSES, TRICK_OF, M, crank: () => crankA };
 }
