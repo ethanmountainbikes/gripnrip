@@ -550,7 +550,7 @@ function frame(){
   // pose bike
   bike.position.set(S.x, S.y, S.z);
   bike.rotation.y = S.yaw + S.spin;
-  pitchG.rotation.x = S.pitch + (S.nose||0)*0.5; leanG.rotation.z = -S.lean - (S.tweak||0)*0.7; leanG.rotation.y = -(S.tweak||0)*0.45;
+  pitchG.rotation.x = S.pitch + (S.nose||0)*0.5; leanG.rotation.z = -S.lean + (S.tweak||0)*0.7; leanG.rotation.y = (S.tweak||0)*0.45;   // whip/scrub: stick right = bike whips right
   const tp_ = S.trick; rig.rotation.x = tp_==='up' ? 0.25 : tp_==='down' ? -0.15 : 0; rig.rotation.z = tp_==='left' ? 0.35 : tp_==='right' ? -0.35 : 0;
   rig.position.z = (tp_ ? 0.15 : 0) + (S.weight||0)*0.12;      // visible fore/aft weight transfer
   rig.position.y = -(S.susp||0)*0.8; rig.scale.y = 1 - (S.susp||0)*0.5;
