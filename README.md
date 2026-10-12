@@ -22,6 +22,7 @@ A low-poly downhill mountain-bike game in the browser, inspired by Descenders / 
 - Gravity sets your speed on a 2 km procedurally shaped downhill trail with wooden kickers and rollers.
 - Grass slows you down, so stay on the dirt between the caution tape.
 - Spin and flip in the air for rep. Land straight and level to get a clean landing. A sideways or nose-first landing, or hitting a tree, costs a life (you start with 3).
+- Controller (Xbox One tested layout): works in Chrome, Edge and Firefox, including Firefox's non-standard layout where triggers are axes. Press any button after loading so the browser exposes the pad.
 - Complete the objectives (top right) and reach the finish line.
 
 Run it locally with `python3 -m http.server`, then open http://localhost:8000.

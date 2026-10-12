@@ -226,19 +226,46 @@ addEventListener('keydown', e => { keys[e.code]=true; if(['Space','ArrowUp','Arr
 addEventListener('keyup', e => { keys[e.code]=false; });
 const toastEl = document.getElementById('toast'); let toastT;
 function toast(msg){ toastEl.textContent = msg; toastEl.style.opacity = 1; clearTimeout(toastT); toastT = setTimeout(()=>toastEl.style.opacity=0, 2500); }
-addEventListener('gamepadconnected', e => toast('🎮 Controller connected: ' + e.gamepad.id.slice(0,40)));
-addEventListener('gamepaddisconnected', () => toast('Controller disconnected'));
+addEventListener('gamepadconnected', e => { knownPads[e.gamepad.index]=true; toast('🎮 Controller connected: ' + e.gamepad.id.slice(0,40)); });
+addEventListener('gamepaddisconnected', e => { delete knownPads[e.gamepad.index]; toast('Controller disconnected'); });
+setTimeout(()=>{ if (!Object.keys(knownPads).length) toast(window.isSecureContext ? '🎮 Using a controller? Press any button on it to connect' : 'Controllers need https (or localhost)'); }, 800);
 const dz = (v, z=0.15) => Math.abs(v)<z ? 0 : (v - Math.sign(v)*z)/(1-z);
-let prevBtn = [];
+let prevBtn = {};
+const knownPads = {};
+// Gamepad mapping. Chrome/Edge report mapping==='standard' for Xbox pads.
+// Firefox (esp. Windows) often reports an Xbox One pad with mapping '' in XInput order:
+// axes 0,1 left stick; 2 LT; 3,4 right stick; 5 RT (triggers rest at -1, full at +1, sometimes 0 until first touched);
+// buttons 0 A, 1 B, 2 X, 3 Y, 4 LB, 5 RB, 6 View/Back, 7 Menu/Start, 8 LS, 9 RS.
+const trigSeenNeg = {};
+function trigAxis(gp, i){ const v = gp.axes[i]; if (v === undefined) return 0; const k = gp.index+'_'+i;
+  if (v < -0.05) trigSeenNeg[k] = true;
+  const t = trigSeenNeg[k] ? (v+1)/2 : v; return t < 0.04 ? 0 : Math.min(1, t); }
+function padMap(gp){
+  const bv = i => { const b = gp.buttons[i]; if (!b) return 0; if (typeof b !== 'object') return b; return (b.pressed && !b.value) ? 1 : b.value; };
+  const ax = i => gp.axes[i] || 0;
+  if (gp.mapping === 'standard'){
+    return { lx:ax(0), rx:ax(2), ry:ax(3), lt:bv(6), rt:bv(7),
+      btn:{A:bv(0)>0.5, Y:bv(3)>0.5, Back:bv(8)>0.5, Start:bv(9)>0.5} };
+  }
+  if (gp.axes.length >= 6){   // Firefox XInput-style: triggers on axes 2 & 5
+    return { lx:ax(0), rx:ax(3), ry:ax(4), lt:trigAxis(gp,2), rt:trigAxis(gp,5),
+      btn:{A:bv(0)>0.5, Y:bv(3)>0.5, Back:bv(6)>0.5, Start:bv(7)>0.5} };
+  }
+  // other non-standard layouts: right stick on 2,3, triggers as buttons 6,7
+  return { lx:ax(0), rx:ax(2), ry:ax(3), lt:Math.max(bv(6), 0), rt:Math.max(bv(7), 0),
+    btn:{A:bv(0)>0.5, Y:bv(3)>0.5, Back:bv(8)>0.5, Start:bv(9)>0.5} };
+}
+
 function readInput(){
   const inp = {steer:0, pedal:0, brake:0, jump:false, tx:0, ty:0, pressed:{}};
   const pads = navigator.getGamepads ? navigator.getGamepads() : [];
-  for (const gp of pads){ if (!gp) continue;
-    const b = i => gp.buttons[i] ? gp.buttons[i].value : 0;
-    inp.steer += dz(gp.axes[0]||0); inp.tx += dz(gp.axes[2]||0); inp.ty += dz(gp.axes[3]||0);
-    inp.pedal = Math.max(inp.pedal, b(7)); inp.brake = Math.max(inp.brake, b(6));
-    if (b(0)>0.5) inp.jump = true;
-    for (const [i,name] of [[0,'A'],[3,'Y'],[9,'Start'],[8,'Back']]){ const now=b(i)>0.5; if(now && !prevBtn[gp.index+'_'+i]) inp.pressed[name]=true; prevBtn[gp.index+'_'+i]=now; }
+  for (const gp of pads){ if (!gp || !gp.connected) continue;
+    if (!knownPads[gp.index]){ knownPads[gp.index]=true; toast('🎮 Controller connected: ' + gp.id.slice(0,40)); }
+    const m = padMap(gp);
+    inp.steer += dz(m.lx); inp.tx += dz(m.rx); inp.ty += dz(m.ry);
+    inp.pedal = Math.max(inp.pedal, m.rt); inp.brake = Math.max(inp.brake, m.lt);
+    if (m.btn.A) inp.jump = true;
+    for (const name of ['A','Y','Start','Back']){ const now=!!m.btn[name], key=gp.index+'_'+name; if(now && !prevBtn[key]) inp.pressed[name]=true; prevBtn[key]=now; }
     break; }
   if (keys.KeyA||keys.ArrowLeft) inp.steer -= 1; if (keys.KeyD||keys.ArrowRight) inp.steer += 1;
   const up = keys.KeyW||keys.ArrowUp, down = keys.KeyS||keys.ArrowDown;
@@ -424,6 +451,6 @@ function frame(){
   if (S.flashT > 0){ S.flashT -= dt; if (S.flashT<=0) centerEl.textContent=''; }
   fpsN++; fpsT+=dt; if (fpsT>1){ window.__fps = fpsN/fpsT; fpsN=0; fpsT=0; }
 }
-window.__game = S;
+window.__game = S; window.__readInput = readInput;
 window.__sim = (secs, inp) => { const h=1/120; const base={steer:0,pedal:0,brake:0,jump:false,tx:0,ty:0}; for(let t=0;t<secs;t+=h) step(h, Object.assign({}, base, typeof inp==='function'?inp(t):inp)); return {d:-S.z, kmh:S.speed*3.6, air:S.air, lives:S.lives, clean:S.clean, score:S.score, u:S.x-cx(-S.z)}; };
 frame();
