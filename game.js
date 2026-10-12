@@ -671,7 +671,7 @@ function frame(){
   renderer.render(scene, camera);
   // HUD
   const kmh = S.speed*3.6; S.maxKmh = Math.max(S.maxKmh, kmh);
-  const shownKmh = Math.max(0, kmh - 10);   // HUD only: display reads 10 km/h under the real speed
+  const shownKmh = Math.max(0, kmh - 5);   // HUD only: display reads 5 km/h under the real speed
   $('speedVal').textContent = Math.round(shownKmh);
   arc.style.strokeDasharray = `${Math.min(1,shownKmh/90)*arcLen} 1000`;
   $('airVal').textContent = (S.air && S.airT > 0.1 ? S.airT : 0).toFixed(1)+'s';
@@ -781,12 +781,11 @@ const liftObjs = [];
     g.traverse(o=>{ if (o.isMesh){ o.castShadow = true; o.receiveShadow = true; } });
     g.position.set(x, y, z); g.rotation.y = yaw; scene.add(g); };
   for (const L of LIFTS){ station(L.bx, L.bz, L.yaw, L, false); station(L.tx, L.tz, L.yaw, L, true);
-    // cable path: towers every ~55 m, cable 9 m above the ground at each tower, sagging a little between
-    const nT = Math.max(2, Math.round(L.len/55)), heights = [];
-    for (let i=0;i<=nT;i++){ const u = i/nT, x = L.bx + (L.tx-L.bx)*u, z = L.bz + (L.tz-L.bz)*u, h = terrainH(x,z) + (i===0||i===nT ? 7 : 10); heights.push(h);
-      if (i>0 && i<nT){ const t = new THREE.Mesh(new THREE.CylinderGeometry(0.35,0.5,h-terrainH(x,z),8), steel); t.position.set(x, (h+terrainH(x,z))/2, z); t.castShadow = true; scene.add(t);
-        const bar = new THREE.Mesh(new THREE.BoxGeometry(5,0.3,0.3), steel); bar.position.set(x, h, z); bar.rotation.y = L.yaw; scene.add(bar); } }
-    const cableY = u => { const f = u*nT, i = Math.min(nT-1, Math.floor(f)), k = f - i; return heights[i] + (heights[i+1]-heights[i])*k - Math.sin(Math.PI*k)*0.8; };
+    // towers and cable heights come from world.js (placed clear of trails, jumps and paths; see liftLayoutProblems)
+    for (const t of L.towers.slice(1, -1)){ const g0 = terrainH(t.x, t.z), top = g0 + t.h;
+      const tw = new THREE.Mesh(new THREE.CylinderGeometry(0.35,0.5,t.h,8), steel); tw.position.set(t.x, g0 + t.h/2, t.z); tw.castShadow = true; scene.add(tw);
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(5,0.3,0.3), steel); bar.position.set(t.x, top, t.z); bar.rotation.y = L.yaw; scene.add(bar); }
+    const nT = Math.max(2, L.towers.length - 1), cableY = u => L.cableAt(u*L.len);
     const off = 2.2, sx = Math.cos(L.yaw), sz = -Math.sin(L.yaw);   // up cable on one side, down on the other
     for (const sd of [-1,1]){ const pts = []; for (let i=0;i<=nT*8;i++){ const u = i/(nT*8); pts.push(new THREE.Vector3(L.bx + (L.tx-L.bx)*u + sx*off*sd, cableY(u), L.bz + (L.tz-L.bz)*u + sz*off*sd)); }
       scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), cableM)); }
