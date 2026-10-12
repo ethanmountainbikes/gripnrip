@@ -201,6 +201,7 @@ const farU = { value: new THREE.Vector3(0,0,0) };
   for (const tr of trails){ const i0 = 1, i1 = tr.pts.length-3;
     banner(tr.pts[i0][0], tr.pts[i0][1], tr.yaw[i0], tr.color === '#111111' ? '#333' : tr.color, 'START · ' + tr.name.toUpperCase(), W+1, `${DIFF[tr.diff].icon} ${DIFF[tr.diff].label.toUpperCase()} · ${tr.type.toUpperCase()}`);
     banner(tr.pts[i1][0], tr.pts[i1][1], tr.yaw[i1], '#1c9c3a', 'FINISH · ' + tr.name.toUpperCase()); }
+  for (const tr of trails) tr.cps.forEach((cp, k) => banner(cp.x, cp.z, cp.yaw, '#f2b800', `CHECKPOINT ${k+1}/${tr.cps.length}`, W+1, tr.name.toUpperCase()));
   const pyaw = Math.atan2(-PARK.dir[0], -PARK.dir[1]);
   banner(PARK.x - PARK.dir[0]*(PARK.r-12), PARK.z - PARK.dir[1]*(PARK.r-12), pyaw, '#ff7a00', 'DIRT JUMP PARK', 42, `${DIFF.pro.icon} PRO LINE · DIRT JUMP`); }
 // ---------- Bike + rider ----------
@@ -404,6 +405,8 @@ const OOB = HALF - 60, inside = (x,z) => Math.max(Math.abs(x), Math.abs(z)) < OO
 function respawnSafe(){
   if (S.failedRun !== undefined && S.failedRun !== null){ const tr = trails[S.failedRun]; S.failedRun = null;   // failed run: back to just above that trail's START arch
     placeAt(tr.pts[0][0], tr.pts[0][1], tr.yaw[0]); S.crumbs = []; S.crumbT = 0; camInit = false; return; }
+  if (S.run){ const tr = trails[S.run.t], cp = S.run.cp != null ? tr.cps[S.run.cp] : {x:tr.pts[3][0], z:tr.pts[3][1], yaw:tr.yaw[3]};   // run: last checkpoint (or the start), timer keeps going
+    updateChunks(cp.x, cp.z, 1e9, 160); placeAt(cp.x, cp.z, cp.yaw); S.speed = 3.5; S.crumbs = []; S.crumbT = 0; camInit = false; return; }
   // back to where you were riding safely ~1.5 s ago (Mavrix-style), facing the way you were going
   const ok = (S.crumbs||[]).filter(c => inside(c.x, c.z));
   const c = ok.find(c => S.time - c.t >= 1.5) || ok[0];
@@ -423,6 +426,7 @@ function trackWorld(dt){
   if (cur){ const tr = trails[cur.t];
     if (cur.s < 18 && (!S.run || S.run.t !== cur.t)) { S.run = {t:cur.t, start:S.time, s:cur.s}; S.lives = 3; trickEl.textContent = `⏱ ${tr.name} — run started`; S.trickMsgT = 2; }
     if (S.run && S.run.t === cur.t){ S.run.s = Math.max(S.run.s, cur.s);
+      const cps = tr.cps || []; while ((S.run.cp ?? -1) + 1 < cps.length && cur.s >= cps[(S.run.cp ?? -1) + 1].s - 2 && cur.s < cps[(S.run.cp ?? -1) + 1].s + 25){ S.run.cp = (S.run.cp ?? -1) + 1; toast(`🚩 Checkpoint ${S.run.cp+1}/${cps.length} · ${tr.name}`); flash('CHECKPOINT', 1.0); }
       if (cur.s > tr.len - 8){ const time = S.time - S.run.start, bonus = Math.round((1000 + tr.len/2)*EARN);
         S.finishes++; S.score += bonus; flash('FINISH!', 2.5); trickEl.textContent = `${tr.name} in ${fmtTime(time)}  +$${bonus}`; S.trickMsgT = 3.5;
         S.best ||= {}; if (!S.best[tr.name] || time < S.best[tr.name]){ S.best[tr.name] = time; toast(`🏁 New best on ${tr.name}: ${fmtTime(time)}`); }
@@ -456,11 +460,12 @@ function step(dt, inp){
     const h0 = groundH(S.x,S.z), h1 = groundH(S.x+tx_*0.5, S.z+tz_*0.5);
     const slope = (h1-h0)/0.5;
     let a = -G*slope/Math.sqrt(1+slope*slope);
-    // pedalling: ~2.5 m/s² from a standstill, fading to zero at 30 km/h, weaker uphill; above 30 km/h speed only comes from gravity and pumping
-    a += inp.pedal * 2.5 * Math.max(0, 1 - S.speed/11.11) / (1 + 4*Math.max(0, slope));
+    // pedalling: ~2.5 m/s² from a standstill, fading to zero at 55 km/h (65 uphill); above that speed only comes from gravity and pumping
+    { const up = Math.max(0, slope), cap = 15.28 + 2.78*Math.min(1, up/0.05);   // 55 km/h on the flat, 65 km/h uphill
+      a += inp.pedal * (2.5 + Math.min(3.5, up*12)) * Math.max(0, 1 - S.speed/cap); }   // stronger stroke uphill so typical grades are climbable
     a -= inp.brake * 9 * Math.min(1,S.speed);
-    a -= 0.0045*BIKE.drag*S.speed*S.speed + 0.25;
-    if (!onTrail) a -= 0.35*S.speed + 1.5;
+    a -= 0.0038*BIKE.drag*S.speed*S.speed + 0.2;
+    if (!onTrail) a -= (0.35*S.speed + 1.5) * (slope > 0.03 && inp.pedal > 0 ? 0.5 : 1);   // grass drag, eased while pedalling uphill
     // pumping: compress into backsides (downslope) and extend over faces (upslope) to gain speed; wrong timing costs speed
     const prevPre = S.preload;
     if (inp.pumpHold) { S.preload = Math.min(1, S.preload + dt*2.2); S.hopWin = 0.35; }
@@ -508,13 +513,15 @@ function step(dt, inp){
         } else vyFeat = (fAlong - f0)/dt; } }
     // vertical speed from ground-following never exceeds slope x horizontal speed along the travel direction
     const fdx = -Math.sin(S.travel), fdz = -Math.cos(S.travel), g0 = groundH(S.x, S.z);
-    const gradeF = Math.max(0, (groundH(S.x + fdx*0.5, S.z + fdz*0.5) - g0)/0.5, (ng - g0)/Math.max(0.05, S.speed*dt));
+    const gradeF = Math.max(0, (groundH(S.x + fdx*0.5, S.z + fdz*0.5) - g0)/0.5, (g0 - groundH(S.x - fdx*0.5, S.z - fdz*0.5))/0.5, (ng - g0)/Math.max(0.05, S.speed*dt));
     let vyG = vyFeat === null ? (ng - S.y)/dt : (terrainH(nx,nz) - (S.y - featH(S.x,S.z)))/dt + vyFeat;
-    vyG = Math.max(-1.5*S.speed - 3, Math.min(vyG, Math.min(1.5, gradeF)*S.speed + 0.3));
+    vyG = Math.max(-1.5*S.speed - 3, Math.min(vyG, (vyFeat !== null ? 1.5 : Math.min(1.5, gradeF))*S.speed + 0.3));   // ramp faces keep their full lip speed
     S.landCool = Math.max(0, (S.landCool||0) - dt);
     S.gf = (S.gf||0) + 1;
     const crestG = inp.counter ? G*2.2 : G*1.15;   // counter-pump (RS up) keeps you glued over rollers
-    let crest = S.gf > 3 && S.landCool <= 0 && (S.lastVyG - vyG)/dt > crestG && S.speed > 6;
+    let crest = S.gf > 3 && S.landCool <= 0 && (S.lastVyG - vyG)/dt > crestG && S.speed > 4;
+    const edge = (ng - S.y) < -0.12 && (S.lastVyG - vyG)/dt > G_AIR*3 && S.speed > 1.5;   // rolling off a ledge/lip: the ground drops away faster than you can fall
+    if (edge && !crest) crest = true;
     if (crest){ // only leave the ground if the ballistic path really clears the terrain (no micro-hops)
       let clear = 0; for (let t=0.03; t<=0.18; t+=0.03){ const bx=S.x+S.vx*t, bz=S.z+S.vz*t, by=S.y+S.lastVyG*t-0.5*G_AIR*t*t; clear=Math.max(clear, by-groundH(bx,bz)); }
       if (clear < 0.4) crest = false; }
@@ -528,6 +535,9 @@ function step(dt, inp){
       S.x = nx; S.z = nz; S.y += S.vy*dt;
     } else { S.x = nx; S.z = nz; S.y = ng; S.vy = vyG; S.lastVyG = vyG;
       S.pitch = THREE.MathUtils.lerp(S.pitch, Math.atan(slope), Math.min(1,dt*12)); }
+    // came up short against a face too steep to roll up: that's a case, not a place to get stuck
+    S.stuckT = (S.speed < 0.6 && slope > 0.25 && featH(S.x, S.z) > 0.05) ? (S.stuckT||0) + dt : 0;
+    if (S.stuckT > 1.2 && S.crashT <= 0){ S.stuckT = 0; crash('Cased it!'); }
     S.spin *= Math.exp(-dt*12); S.tweak = (S.tweak||0)*Math.exp(-dt*10); S.nose = (S.nose||0)*Math.exp(-dt*10);
     S.dust = (S.sliding ? 1 : 0) + (inp.brake > 0.5 && S.speed > 6 ? 0.5 : 0) + (!onTrail && S.speed > 4 ? 0.6 : 0);
     if (S.speed > 4) for (const t of nearTrees(S.x, S.z)) if ((t.x-S.x)**2 + (t.z-S.z)**2 < 0.55) { crash('Hit a tree!'); return; }
@@ -689,6 +699,8 @@ const mm = $('minimap'), mmx = mm.getContext('2d'), MMS = mm.width, mmBg = docum
   const P = (wx,wz) => [(wx+HALF)/sc, (wz+HALF)/sc];
   for (const tr of trails){ const pa = new Path2D(); tr.pts.forEach((p,i)=>{ if (i%3 && i < tr.pts.length-1) return; const [a,b] = P(p[0],p[1]); i ? pa.lineTo(a,b) : pa.moveTo(a,b); }); tr.mmPath = pa; }
   x.fillStyle = 'rgba(160,110,60,.9)'; { const [a,b] = P(PARK.x,PARK.z); x.beginPath(); x.arc(a,b,PARK.r/sc,0,7); x.fill(); }
+  x.fillStyle = '#f2b800'; x.strokeStyle = '#000'; x.lineWidth = 1; for (const tr of trails) for (const cp of tr.cps){ const [a,b] = P(cp.x, cp.z); x.beginPath(); x.moveTo(a, b-4); x.lineTo(a+3.5, b+2.5); x.lineTo(a-3.5, b+2.5); x.closePath(); x.fill(); x.stroke(); }   // checkpoints
+  if (PARK.drop){ const D = PARK.drop, [a,b] = P(D.x + D.dx*D.lip, D.z + D.dz*D.lip); x.fillStyle = '#5a3418'; x.fillRect(a-3,b-3,6,6); x.strokeStyle = '#ffd36b'; x.lineWidth = 1.5; x.strokeRect(a-3,b-3,6,6); x.fillStyle = '#ffd36b'; x.font = 'bold 9px sans-serif'; x.fillText('DROP', a+5, b+3); }
 }
 function drawMinimap(){
   mmx.drawImage(mmBg, 0, 0); const sc = 2*HALF/MMS, a = (S.x+HALF)/sc, b = (S.z+HALF)/sc, yw = S.yaw + (S.spin||0);

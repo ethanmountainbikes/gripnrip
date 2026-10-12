@@ -21,7 +21,7 @@ const smooth = (a,b,x) => { const t = Math.min(1, Math.max(0, (x-a)/(b-a))); ret
 export const PEAK = {x:150, z:-450, h:340, s:300};
 const HILLS = [ {x:-700, z:250, h:150, s:210}, {x:680, z:420, h:120, s:240}, {x:-450, z:-850, h:90, s:260}, {x:900, z:-800, h:160, s:230} ];
 // Dirt-jump park: a flattened, gently sloping dirt pad in the valley
-export const PARK = {x:-250, z:560, r:75, dir:[1,0], slope:0.08};
+export const PARK = {x:-250, z:560, r:75, dir:[1,0], slope:0};
 
 function rawH(x, z){
   let h = 40*(noise(x/420+3.1, z/420-7.7) + 0.5*noise(x/210+5.2, z/210+1.3) + 0.12*noise(x/105+9.1, z/105+3.7));   // smooth hills: no small-scale octaves
@@ -166,6 +166,15 @@ for (const tr of trails){ if (!['flow','flowg','dh','enduro','jumps','pump','xc'
     {off: 48, name:'Gaps & Steps',  make:k => [PROF.gap(1.6, 4.5, 2.5, 6), PROF.stepup(1.3, 4.5, 1.8, 1.8, 3, 5), {...PROF.gap(1.7, 5, 3.5, 6), road:true}, PROF.stepdown(1.6, 4.5, 2, 1.0, 5)][k%4]},
   ];
   PARK.lines = lines;
+  // big drop: a wooden deck built straight out from the roll-in hill at 5 m above the pad, a lip,
+  // a short knuckle and a long smooth transition landing
+  { const off = -48, t0 = -106, LIP = 46, HT = 5.0, RUN = 4.4, KN = 2.5, HK = 3.2, LL = 10;
+    const ox = PARK.x + d[0]*t0 + sx*off, oz = PARK.z + d[1]*t0 + sz*off; let pad = null; const cache = new Map();
+    const raw = k => { let v = cache.get(k); if (v === undefined){ const u = Math.min(1, k/4/LIP); v = pad + HT + RUN*(1-u) - terrainH(ox + d[0]*k/4, oz + d[1]*k/4); cache.set(k, v); } return v; };
+    const deck = t => { if (pad === null) pad = terrainH(PARK.x, PARK.z); const k = Math.floor(t*4), f = t*4 - k; return Math.max(0, raw(k)*(1-f) + raw(k+1)*f); };
+    const prof = {L: LIP+KN+LL, wood:true, p: t => t<0 ? 0 : t<=LIP ? deck(t) : t<=LIP+KN ? HK : t<=LIP+KN+LL ? (u => HK*(1 - u*u*(3-2*u)))((t-LIP-KN)/LL) : 0};
+    const f = addFeature('drop', ox, oz, yaw, 2.4, prof, -1);
+    f.tower = true; PARK.drop = {x:f.x, z:f.z, dx:f.dx, dz:f.dz, L:prof.L, lip:LIP, h:HT, off, name:'Big Drop'}; }
   for (const ln of lines){ for (let k=0, t=-60; t < 55; k++){ const p = ln.make(k);
       addFeature(ln.name==='Big Kickers' ? 'kicker' : ln.name==='Doubles' ? 'double' : ln.name==='Gaps & Steps' ? 'gap' : 'table', PARK.x + d[0]*t + sx*ln.off, PARK.z + d[1]*t + sz*ln.off, yaw, 2.4, p, -1);
       t += p.L + 13; } } }
@@ -202,7 +211,7 @@ export function nearTrails(x, z){
 }
 export function trailDist(x,z){ let m = 1e9; for (const n of nearTrails(x,z)) m = Math.min(m, n.d); return m; }
 export function inPark(x,z){ return Math.hypot(x-PARK.x, z-PARK.z) <= PARK.r+6; }
-export function isDirt(x,z){ return trailDist(x,z) <= W+0.3 || inPark(x,z); }
+export function isDirt(x,z){ return trailDist(x,z) <= W+0.3 || inPark(x,z) || Math.hypot(x-PARK.x, z-PARK.z) <= PARK.r+35 || featH(x,z) > 0.05; }   // wooden decks ride like trail
 
 // terrain without features: hillside with benched trails cut in, plus small off-trail bumps
 export function terrainH(x, z){
@@ -246,7 +255,7 @@ export function treesInCell(ci, cj){
     const forest = noise(x/260+40, z/260-12) + 0.25;
     if (r() > forest*1.6) continue;
     const b = base(x,z); if (b > PEAK.h*0.75 + 40) continue;                  // tree line
-    if (inPark(x,z) || Math.hypot(x-PARK.x, z-PARK.z) < PARK.r+12) continue;
+    if (inPark(x,z) || Math.hypot(x-PARK.x, z-PARK.z) < PARK.r+38) continue;
     if (Math.hypot(x+40, z-250) < 22) continue;   // bike shop clearing
     if (trailDist(x,z) < W+2.5 || featH(x,z) > 0) continue;
     a.push({x, z, y:terrainH(x,z)-0.2, h:hgt, rot, hue});
@@ -261,10 +270,15 @@ export function nearTrees(x, z){
 }
 
 // ---------- teleport spots ----------
+// checkpoints: gates every ~170-250 m along each trail (nudged off jumps), used as respawn points during a run
+for (const tr of trails){ const cnt = Math.max(0, Math.ceil(tr.len/250) - 1); tr.cps = [];
+  for (let k=1; k<=cnt; k++){ let i = Math.round(tr.len*k/(cnt+1)/2);
+    for (let tries=0; tries<15 && i < tr.pts.length-10; tries++, i+=2){ let clear = true; for (let d=-6; d<=6; d+=1.5){ const j = Math.max(0, Math.min(tr.pts.length-1, i + Math.round(d/2))); if (featH(tr.pts[j][0], tr.pts[j][1]) > 0.02) { clear = false; break; } } if (clear) break; }
+    tr.cps.push({s:i*2, x:tr.pts[i][0], z:tr.pts[i][1], yaw:tr.yaw[i]}); } }
 const tStart = (tr, s=12) => { const i = Math.round(s/2); return {x:tr.pts[i][0], z:tr.pts[i][1], yaw:tr.yaw[i]}; };
 const parkYaw = Math.atan2(-PARK.dir[0], -PARK.dir[1]);
 export const spots = [
   ...trails.map(tr => ({name: tr.id===0 ? 'Summit · Summit DH' : tr.name, trail:tr.id, ...tStart(tr)})),
-  {name:'Dirt Jump Park', x:PARK.x - PARK.dir[0]*74, z:PARK.z - PARK.dir[1]*74 - 10*PARK.dir[0], yaw:parkYaw},
+  {name:'Dirt Jump Park', x:PARK.x - PARK.dir[0]*95, z:PARK.z - PARK.dir[1]*95 - 10*PARK.dir[0], yaw:parkYaw},
   {name:'Valley Meadow (free roam)', x:-60, z:300, yaw:Math.PI},
 ];

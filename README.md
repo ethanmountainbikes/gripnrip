@@ -74,3 +74,8 @@ Run it locally with `python3 -m http.server`, then open http://localhost:8000.
 | Dirt Jumper | $1,500 | 1.05 | 1.00 | 1.22 | 1.08 |
 | Enduro Bike | $2,500 | 0.88 | 1.12 | 1.05 | 1.12 |
 | DH Bike | $4,000 | 0.80 | 1.18 | 0.95 | 1.20 |
+
+## Checkpoints, the Big Drop and climbing
+- Every trail has yellow CHECKPOINT gates every ~170-250 m (shown as yellow triangles on the minimap). During a run, a crash, the respawn button or going out of bounds puts you back at the last checkpoint (or the start) with a little speed; the timer keeps running. In free roam you respawn at your last safe spot.
+- The Dirt Jump Park pad is now level, with a tall roll-in hill. On its north side, a 5 m wooden **Big Drop** deck runs off the roll-in to a lip, a knuckle and a long transition landing.
+- Pedalling now pushes up to 55 km/h on the flat (65 km/h uphill, shown 10 lower on the speedometer), and climbing is much easier.
