@@ -108,8 +108,8 @@ export function buildBikeRider(frameMat){
   makeWheel(FA, steerG, false); makeWheel(RA, frameG, true);
   // crankset: arms + flat pedals with pins (rotating group on the frame)
   const crank = new THREE.Group(); crank.position.copy(BB); frameG.add(crank); const pedals = [];
-  { const cb = new Bucket(); for (const s of [1, -1]) cb.add(new THREE.BoxGeometry(0.018, 0.17, 0.03), M.black, at(s*0.085, -s*0.085, 0)); cb.add(new THREE.CylinderGeometry(0.012, 0.012, 0.19, 8), M.steel, at(0,0,0,0,0,Math.PI/2)); cb.build(crank);
-    for (const s of [-1, 1]){ const p = new THREE.Group(); p.position.set(s*0.135, -s*0.17, 0); crank.add(p); const pb = new Bucket(); pb.add(new THREE.BoxGeometry(0.1, 0.018, 0.1), M.black); for (let k = 0; k < 8; k++) pb.add(new THREE.CylinderGeometry(0.003, 0.003, 0.03, 4), M.steel, at(-0.04 + (k%4)*0.027, 0, k < 4 ? -0.045 : 0.045)); pb.build(p); pedals.push(p); } }
+  { const cb = new Bucket(); for (const s of [1, -1]) cb.add(new THREE.BoxGeometry(0.018, 0.17, 0.03), M.black, at(s*0.1, -s*0.085, 0)); cb.add(new THREE.CylinderGeometry(0.012, 0.012, 0.22, 8), M.steel, at(0,0,0,0,0,Math.PI/2)); cb.build(crank);
+    for (const s of [-1, 1]){ const p = new THREE.Group(); p.position.set(s*0.165, -s*0.17, 0); crank.add(p); const pb = new Bucket(); pb.add(new THREE.BoxGeometry(0.1, 0.018, 0.1), M.black); for (let k = 0; k < 8; k++) pb.add(new THREE.CylinderGeometry(0.003, 0.003, 0.03, 4), M.steel, at(-0.04 + (k%4)*0.027, 0, k < 4 ? -0.045 : 0.045)); pb.build(p); pedals.push(p); } }
   fb.build(frameG); sb.build(steerG);
 
   // ---- rider: capsule limbs placed from solved joint positions ----
@@ -193,7 +193,7 @@ export function buildBikeRider(frameMat){
     // head stays level and looks ahead (or over the shoulder in a 360)
     head.position.copy(neck).addScaledVector(up, 0.1).add(V(0, 0.1, -0.02)); head.rotation.set(-0.1 + flipW*0.3*Math.sign(S.wPitch || 0), -spinW*0.9 + twist*0.5, 0);
     const shoulder = [neck.clone().addScaledVector(side, -0.19).addScaledVector(up, -0.05), neck.clone().addScaledVector(side, 0.19).addScaledVector(up, -0.05)];
-    const hipJ = [hip.clone().addScaledVector(side, -0.1), hip.clone().addScaledVector(side, 0.1)];
+    const hipJ = [hip.clone().addScaledVector(side, -0.125), hip.clone().addScaledVector(side, 0.125)];
     const handOff = W.nohander + W.tuck + W.barspin; const footOff = [W.nofooter + W.superman + W.cancan + W.nacnac + W.tailwhip, W.nofooter + W.superman + W.tailwhip];
     const mid = V(), end = V();
     for (let i = 0; i < 2; i++){ const sx = i ? 1 : -1;
@@ -205,7 +205,7 @@ export function buildBikeRider(frameMat){
       const ft = tmp.pedal[i].clone(); let fw = 0; const free = V();
       for (const key of ['nofooter','superman','cancan','nacnac','tailwhip']){ const P = POSES[key], w = W[key]; if (w > 1e-3 && P.feet[i]){ free.addScaledVector(P.feet[i], w); fw += w; } }
       if (fw > 0) ft.lerp(free.multiplyScalar(1/fw), Math.min(1, fw));
-      ik(hipJ[i], ft, L.thigh, L.shin, V(sx*0.25, 0.2, -1), mid, end); place(seg[i ? 'thighR' : 'thighL'], hipJ[i], mid); place(seg[i ? 'shinR' : 'shinL'], mid, end);
+      ik(hipJ[i], ft, L.thigh, L.shin, V(sx*0.45, 0.15, -1), mid, end); place(seg[i ? 'thighR' : 'thighL'], hipJ[i], mid); place(seg[i ? 'shinR' : 'shinL'], mid, end);
       kneePad[i].position.copy(mid).add(V(0, -0.04, -0.05)); kneePad[i].quaternion.copy(seg[i ? 'shinR' : 'shinL'].quaternion);
       foot[i].position.copy(end).add(V(0, -0.06, 0)); foot[i].rotation.set(fw > 0.3 ? -0.6*Math.min(1, fw) : 0, 0, 0); }
     root.rotation.x = tilt;   // tuck no-hander: bike pulled up into the lap
