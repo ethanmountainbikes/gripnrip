@@ -88,6 +88,7 @@ const TRAIL_DEFS = RAMP ? RAMP_DEFS : [
   {name:'Drop Zone',          color:'#c0392b', start:[-450,-800], goal:[-850,-560], grade:0.16, kind:'drops', type:'Freeride', diff:'dblack'},
   {name:'Meadow Flow',        color:'#1abc9c', start:[-560,250],  goal:[-330,120],  grade:0.10, kind:'flowg', type:'Flow', diff:'green'},
   {name:'Pump Line',          color:'#f1c40f', start:[750,450],   goal:[1000,720],  grade:0.08, kind:'pump', type:'Pump track', diff:'green'},
+  {name:'MEGA SEND',          color:'#ff1f8f', line:[[420,0],[-216,636]], grade:0.2, kind:'mega', type:'Slopestyle pro line', diff:'dblack'},
   {name:'Hilltop Jumps',      color:'#ff9a1a', start:[680,380],   goal:[620,840],  grade:0.09, kind:'jumps', type:'Jump line', diff:'blue'},
   // outer-band trails (added with the map expansion)
   {name:'Boreal Enduro',      color:'#5d4037', start:[-450,-1180], goal:[-1180,-1050], grade:0.13, kind:'enduro', type:'Enduro', diff:'black', outer:true},
@@ -122,7 +123,7 @@ function resample(p, step){ const o=[p[0]]; let carry=0;
     while (t <= L){ o.push([a[0]+(b[0]-a[0])*t/L, a[1]+(b[1]-a[1])*t/L]); t += step; } carry = L - (t-step); }
   return o; }
 export const trails = TRAIL_DEFS.map((def, id) => {
-  let pts = resample(chaikin(chaikin(walk(def))), 2);
+  let pts = def.line ? resample(def.line, 2) : resample(chaikin(chaikin(walk(def))), 2);
   let raw = pts.map(p => base(p[0],p[1]));
   { let lo = Math.floor(pts.length*0.6); for (let i=lo;i<pts.length;i++) if (raw[i] < raw[lo]) lo = i;   // trim any climb at the very end
     pts = pts.slice(0, lo+1); raw = raw.slice(0, lo+1); }
@@ -136,7 +137,7 @@ export const trails = TRAIL_DEFS.map((def, id) => {
 // Each feature has an origin, a forward direction, a half width and a height profile p(t) along it. Heights add to the terrain.
 export const features = [];
 const KL = 5.5, KH = 1.5, KW = 2.3;   // original wooden kicker
-import { JUMP_SPEEDS } from './jumpspeeds.js';
+import { JUMP_SPEEDS, MEGA_LIP, MEGA_FIX } from './jumpspeeds.js';
 const PROF = {
   kicker: (H,L) => ({L, p: t => t>=0 && t<=L ? H*Math.pow(t/L,1.7) : 0, wood:true}),
   table:  (H,L1,deck,L3) => ({L:L1+deck+L3, p: t => t<0 ? 0 : t<=L1 ? H*Math.pow(t/L1,1.6) : t<=L1+deck ? H-0.15 : t<=L1+deck+L3 ? (H-0.15)*0.5*(1+Math.cos(Math.PI*(t-L1-deck)/L3)) : 0}),
@@ -177,6 +178,7 @@ const scaleProf = (pr, g) => g === 1 ? pr : {...pr, L: pr.L*g, p: (t, us) => g*p
 for (const tr of trails){
   const n = tr.pts.length;
   // features match the trail type (spacing = run-out after each feature)
+  if (tr.kind === 'mega') continue;
   const spacing = {rampage:62, dh:55, enduro:50, flow:40, flowg:45, xc:60, tech:28, freeride:60, drops:60, pump:6, jumps:24}[tr.kind];
   let i = 40, k = 0;
   const sp = (JUMP_SPEEDS[tr.name] || []).filter(Boolean).sort((a,b)=>a-b), vRef = sp.length ? sp[sp.length>>1] : 30;   // the trail's typical speed = current jump size
@@ -216,6 +218,27 @@ for (const tr of trails){
     i += 3;
   }
 }
+// ---------- MEGA SEND: slopestyle pro line with huge gaps, step-downs, step-ups and a 28 m finale ----------
+// Each lip is shaped for the speed a coasting rider actually carries into it (MEGA_LIP, measured by a bot, km/h at the lip):
+// the lip angle is solved so the ballistic arc lands ~35% down the landing's transition (its sweet spot).
+const megaP = (H, L1, gap, HL, L3) => { const back = 3; return {L:L1+gap+back+L3, lip:L1, gapLen:gap, p: t => t<0 ? 0 : t<=L1 ? H*Math.pow(t/L1,1.6) : t<=L1+gap ? 0 : t<=L1+gap+back ? HL*Math.sin(0.5*Math.PI*(t-L1-gap)/back) : t<=L1+gap+back+L3 ? HL*0.5*(1+Math.cos(Math.PI*(t-L1-gap-back)/L3)) : 0}; };
+export const MEGA = [];
+for (const tr of trails){ if (tr.kind !== 'mega') continue;
+  const PLAN = [{H:6, gap:20, HL:5.6}, {H:7, gap:24, HL:6.5}, {H:7.5, gap:22, HL:4, kind:'stepdown'}, {H:5, gap:18, HL:6.5, kind:'stepup'}, {H:7, gap:26, HL:6.5}, {H:6, gap:28, HL:1.5, finale:true}];
+  let i = 75, k = 0; const n = tr.pts.length;   // 150 m run-in before the first lip
+  for (const J of PLAN){ if (i >= n - 40) break;
+    const s = Math.max(0.05, (tr.h[i] - tr.h[Math.min(n-1, i+30)])/60), v = ((MEGA_LIP[k] ?? 62)/3.6), g = 9.81, back = 3;
+    // landing length: first guess, then match the transition's slope at the sweet spot to the arc's descent angle (soft landing)
+    let L3 = Math.max(14, 2.6*J.HL), rel = 0.4;
+    for (let it = 0; it < 6; it++){
+      const D = J.gap + back + 0.35*L3 + (MEGA_FIX[k] || 0), c = J.HL*0.5*(1+Math.cos(0.35*Math.PI)) - J.H;   // lip -> sweet spot: distance, height change (before terrain fall)
+      const tw = c/D - s + g*D/(2*v*v); rel = Math.max(0.18, Math.min(1.1, tw + s));
+      const desc = g*D/(v*v) - tw - s;                                  // arc's descent slope relative to the terrain at the sweet spot
+      L3 = Math.max(26, Math.min(60, J.HL*Math.PI*Math.sin(0.35*Math.PI)/(2*Math.max(0.15, desc)))); }
+    const L1 = 1.6*J.H/rel;   // lip slope relative to the terrain -> ramp length
+    const [x, z] = tr.pts[i], yaw = tr.yaw[i+2], f = addFeature('gap', x, z, yaw, 3.2, megaP(J.H, L1, J.gap, J.HL, L3), tr.id);
+    f.k = k; f.mega = true; f.lipRel = rel; f.finale = !!J.finale; MEGA.push({k, H:J.H, gap:J.gap, HL:J.HL, L1:+L1.toFixed(1), lipDeg:+(Math.atan(rel)*180/Math.PI).toFixed(1), vLip:+(v*3.6).toFixed(0), x, z});
+    k++; i += Math.round((f.L + 24)/2); } }
 // berms on the outside of corners
 for (const tr of trails){ if (!['flow','flowg','dh','enduro','jumps','pump','xc'].includes(tr.kind)) continue;
   const n = tr.pts.length; let i = 30;
@@ -225,12 +248,14 @@ for (const tr of trails){ if (!['flow','flowg','dh','enduro','jumps','pump','xc'
     i += 2; } }
 // dirt-jump park lines (across the pad, downhill along PARK.dir)
 if (!RAMP) { const d = PARK.dir, yaw = Math.atan2(-d[0], -d[1]), sx = -d[1], sz = d[0];
+  // four lines, each from its own roll-in mound (height sets the speed: no pedalling needed), plus a pump-track loop
+  const spine = (H, L) => ({L, p: t => t>=0 && t<=L ? H*Math.pow(1 - Math.abs(2*t/L - 1), 1.4) : 0});
+  const whale = (H, L1, L3) => ({L:L1+L3, p: t => t<0 ? 0 : t<=L1 ? H*Math.pow(t/L1, 2.2) : t<=L1+L3 ? H*Math.pow(1-(t-L1)/L3, 0.8) : 0});
   const lines = [
-    {off:-30, name:'Mellow Tables', make:k => PROF.table(1.1, 4, 3, 4)},
-    {off:-10, name:'Pro Tables',    make:k => PROF.table(1.7+0.2*(k%2), 4.5, 4, 5)},
-    {off: 10, name:'Doubles',       make:k => PROF.double(1.7, 4.5, 2.5, 5)},
-    {off: 30, name:'Big Kickers',   make:k => PROF.kicker(1.8, 6)},
-    {off: 48, name:'Gaps & Steps',  make:k => [PROF.gap(1.6, 4.5, 2.5, 6), PROF.stepup(1.3, 4.5, 1.8, 1.8, 3, 5), {...PROF.gap(1.7, 5, 3.5, 6), road:true}, PROF.stepdown(1.6, 4.5, 2, 1.0, 5)][k%4]},
+    {off:-30, name:'Beginner Tables', diff:'green', roll:4.5, items:[k => ['table', PROF.table(0.7, 3.5, 2.5, 3.5)], k => ['roller', PROF.roller(0.35, 7)], k => ['table', PROF.table(0.8, 3.5, 3, 3.5)], k => ['roller', PROF.roller(0.35, 7)], k => ['table', PROF.table(0.8, 3.5, 3, 3.5)], k => ['table', PROF.table(0.7, 3.5, 2.5, 3.5)]]},
+    {off:-10, name:'Intermediate Doubles', diff:'blue', roll:6, items:[k => ['double', PROF.double(1.1, 3.8, 1.6, 4)], k => ['double', PROF.double(1.2, 4, 1.8, 4.5)], k => ['stepup', PROF.stepup(1.0, 4, 1.4, 1.3, 2.5, 4.5)], k => ['stepdown', PROF.stepdown(1.2, 4, 1.6, 0.8, 4.5)], k => ['double', PROF.double(1.2, 4, 1.8, 4.5)]]},
+    {off:12, name:'Pro Big Doubles', diff:'black', roll:8, items:[k => ['double', PROF.double(1.7, 4.5, 2.6, 5)], k => ['double', PROF.double(1.8, 4.6, 2.8, 5.2)], k => ['double', PROF.double(1.8, 4.6, 2.8, 5.2)], k => ['double', PROF.double(1.9, 4.8, 3.0, 5.4)]]},
+    {off:32, name:'Slopestyle Mix', diff:'black', roll:9, items:[k => ['kicker', PROF.kicker(1.3, 5), -0.3], k => ['spine', spine(1.4, 8)], k => ['kicker', whale(1.2, 3.2, 3)], k => ['table', PROF.table(1.3, 4, 4, 4)], k => ['kicker', PROF.kicker(1.3, 5), 0.3], k => ['roller', PROF.roller(0.4, 6)], k => ['roller', PROF.roller(0.4, 6)], k => ['berm', PROF.berm(1.6, 14, 1, 5)]]},
   ];
   PARK.lines = lines;
   // big drop: a wooden deck built straight out from the roll-in hill at 5 m above the pad, a lip,
@@ -242,9 +267,19 @@ if (!RAMP) { const d = PARK.dir, yaw = Math.atan2(-d[0], -d[1]), sx = -d[1], sz 
     const prof = {L: LIP+KN+LL, wood:true, p: t => t<0 ? 0 : t<=LIP ? deck(t) : t<=LIP+KN ? HK : t<=LIP+KN+LL ? (u => HK*(1 - u*u*(3-2*u)))((t-LIP-KN)/LL) : 0};
     const f = addFeature('drop', ox, oz, yaw, 2.4, prof, -1);
     f.tower = true; PARK.drop = {x:f.x, z:f.z, dx:f.dx, dz:f.dz, L:prof.L, lip:LIP, h:HT, off, name:'Big Drop'}; }
-  for (const ln of lines){ for (let k=0, t=-60; t < 55; k++){ const p = ln.make(k);
-      addFeature(ln.name==='Big Kickers' ? 'kicker' : ln.name==='Doubles' ? 'double' : ln.name==='Gaps & Steps' ? 'gap' : 'table', PARK.x + d[0]*t + sx*ln.off, PARK.z + d[1]*t + sz*ln.off, yaw, 2.4, p, -1);
-      t += p.L + 13; } } }
+  const rollin = (H) => ({L: 4 + 3 + 4*H, p: t => t<0 ? 0 : t<=4 ? H*t/4 : t<=7 ? H : t<=7+4*H ? H*0.5*(1+Math.cos(Math.PI*(t-7)/(4*H))) : 0});   // steep back, deck, long smooth roll-in
+  for (const ln of lines){ let t = -92; const r = addFeature('roller', PARK.x + d[0]*t + sx*ln.off, PARK.z + d[1]*t + sz*ln.off, yaw, 2.6, rollin(ln.roll), -1); r.rollin = true; ln.start = t + 5.5;
+    t += r.L + 6;
+    for (let k = 0; k < ln.items.length && t < 62; k++){ const [kind, p, yo] = ln.items[k](k);
+      const f = addFeature(kind === 'spine' ? 'table' : kind, PARK.x + d[0]*t + sx*ln.off, PARK.z + d[1]*t + sz*ln.off, yaw + (yo || 0), kind === 'berm' ? 5 : 2.4, p, -1); f.park = ln.name;
+      t += p.L + (kind === 'roller' ? 1 : 9); } }
+  // pump-track loop: rollers around an oval with berms at both ends (ride it laps, no pedalling)
+  { const cx = PARK.x + sx*56, cz = PARK.z + sz*56, A = 26, B = 9;
+    for (let k = 0; k < 12; k++){ const a = k/12*Math.PI*2, x = cx + d[0]*A*Math.cos(a) + sx*B*Math.sin(a), z = cz + d[1]*A*Math.cos(a) + sz*B*Math.sin(a);
+      const tx = -d[0]*A*Math.sin(a) + sx*B*Math.cos(a), tz = -d[1]*A*Math.sin(a) + sz*B*Math.cos(a), ty = Math.atan2(-tx, -tz);
+      if (Math.abs(Math.cos(a)) > 0.85) addFeature('berm', x, z, ty, 4, PROF.berm(1.2, 8, Math.cos(a) > 0 ? -1 : 1, 4), -1).park = 'Pump Track';
+      else addFeature('roller', x, z, ty, 2.4, PROF.roller(0.45, 5), -1).park = 'Pump Track'; }
+    PARK.pump = {x:cx, z:cz}; } }
 // real 3D boulders replace the old sine-bump rock gardens. Small rocks (<= 0.45 m) are part of the ground: wheels roll
 // over their real dome shape (a jolt and some speed loss, never a launch). Big rocks (>= 0.6 m) are solid obstacles beside
 // the line: ride round them or hop them. A >= 2 m clear lane is always left down the middle of every garden.
@@ -432,8 +467,9 @@ const CONN_DEFS = RAMP ? [
   [valley, J, L_(0)], [J, shopDoor], ...RAMP_DEFS.map(d => [T_(0), [250, -470], [d.start[0], -470], tBeg(d.name)]), ...RAMP_DEFS.map(d => { const e = tEnd(d.name), C = RAMPAGE.corral; return Math.abs(e[0] - C.x) < C.r ? [e, [C.x, C.z], [C.x, C.z + C.r + 12], valley] : [e, [e[0], 385], valley]; }),   // inner lines exit through the corral's south gate; outer ones go round it
 ] : [
   [valley, J, L_(0)], [J, shopDoor], [valley, [-140, 430], [-230, 420], L_(1)], [L_(1), [-400, 480], [-410, 560], parkGate],
+  [T_(0), tBeg('MEGA SEND')], [tEnd('MEGA SEND'), L_(1)],
   [T_(0), tBeg('Summit DH')], [T_(0), tBeg('Flow Line')], [T_(0), tBeg('Freeride Ridge')], [T_(0), tBeg('North Face')],
-  [T_(1), tBeg('Forest Singletrack')], [T_(1), tBeg('Meadow Flow')],
+  [T_(1), tBeg('Forest Singletrack')], [T_(1), tBeg('Meadow Flow')], 
   [T_(2), tBeg('Pump Line')], [T_(2), tBeg('Hilltop Jumps')],
   [tEnd('Summit DH'), [-280, 420], L_(1)], [tEnd('Meadow Flow'), [-345, 330], L_(1)], [tEnd('Flow Line'), L_(2)],
   [tEnd('Forest Singletrack'), [-420, 640], parkGate], [tEnd('Hilltop Jumps'), [560, 620], [540, 350], L_(2)], [tEnd('Pump Line'), [880, 380], [700, 250], L_(2)],

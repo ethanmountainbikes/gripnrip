@@ -356,6 +356,10 @@ bike.traverse(o=>{ if(o.isMesh) o.castShadow=true; });
 const keys = {};
 addEventListener('keydown', e => { keys[e.code]=true; if(['Space','Tab','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault(); onPress(e.code); });
 addEventListener('keyup', e => { keys[e.code]=false; });
+// focus loss (alt-tab, clicking outside, Cmd-shortcuts) swallows keyup: clear every held key so W can't stay stuck and pedal forever
+const releaseKeys = () => { for (const k in keys) keys[k] = false; };
+addEventListener('blur', releaseKeys); document.addEventListener('visibilitychange', () => { if (document.hidden) releaseKeys(); });
+addEventListener('keyup', e => { if (e.key === 'Meta') releaseKeys(); });
 const toastEl = document.getElementById('toast'); let toastT;
 function toast(msg){ toastEl.textContent = msg; toastEl.style.opacity = 1; clearTimeout(toastT); toastT = setTimeout(()=>toastEl.style.opacity=0, 2500); }
 addEventListener('gamepadconnected', e => { knownPads[e.gamepad.index]=true; toast('🎮 Controller connected: ' + e.gamepad.id.slice(0,40)); });
@@ -418,7 +422,7 @@ const DRV = (() => { const COGS = [51,45,39,33,28,24,21,18,16,14,12,10], RING = 
     D.crankRpm = D.rpmAt(sp, D.gear);
     // spun out (>125 rpm in top gear) -> stop pedalling and coast; from a standstill the crank turns at least ~40 rpm while pushing off
     D.cadence = pedal ? (D.crankRpm > 125 ? 0 : Math.max(D.crankRpm, 40*(inp.pedal || 0))) : 0;
-    D.standing += ((pedal && up > 0.14 && (inp.pedal || 0) > 0.6 ? 1 : 0) - D.standing) * Math.min(1, dt*3);
+    D.standing = D.cadence > 0 ? 1 : 0;   // rider pose: standing pedalling vs standing attack (coasting); rider.js eases between them
     const el = document.getElementById('gearVal'); if (el){ const t = `${D.gear}/12`; if (el.textContent !== t) el.textContent = t; el.classList.toggle('shifting', !!D.pending); } };
   return D; })();
 window.__drv = DRV;
@@ -429,7 +433,7 @@ function readInput(){
     if (!knownPads[gp.index]){ knownPads[gp.index]=true; toast('🎮 Controller connected: ' + gp.id.slice(0,40)); }
     const m = padMap(gp), rx = dz(m.rx), ry = dz(m.ry);
     inp.steer += dz(m.lx); inp.lean += dz(m.ly);
-    inp.pedal = Math.max(inp.pedal, m.rt); inp.brake = Math.max(inp.brake, m.lt);
+    inp.pedal = Math.max(inp.pedal, dz(m.rt, 0.12)); inp.brake = Math.max(inp.brake, dz(m.lt, 0.12));   // trigger deadzone: a resting trigger that reads 0.05-0.1 must not pedal
     if (m.btn.LB){ const mag = Math.hypot(rx,ry);   // LB + right stick: 8 directions (diagonals = tuck no-hander, X-up, nac-nac, tailwhip), RS click = barspin; stick amount = trick strength
       if (m.btn.RS){ inp.trick = 'bar'; inp.trickAmt = 1; }
       else if (mag > 0.35){ const sec = Math.round(Math.atan2(ry, rx)/(Math.PI/4)); inp.trick = {0:'right', 1:'dr', 2:'down', 3:'dl', 4:'left', '-4':'left', '-3':'ul', '-2':'up', '-1':'ur'}[sec]; inp.trickAmt = Math.min(1, (mag-0.35)/0.6); } }
@@ -460,7 +464,7 @@ const S = { x:0,y:0,z:0, yaw:0, speed:0, vy:0, vx:0, vz:0, air:false, airT:0, pi
   maxKmh:0, clean:0, spins:0, flips:0, finishes:0 };
 const $ = id => document.getElementById(id);
 const trickEl = $('trick'), centerEl = $('center');
-function flash(msg, t=1.2){ centerEl.textContent = msg; S.flashT = t; }
+function flash(msg, t=1.2){ centerEl.textContent = msg; centerEl.style.opacity = 1; S.flashT = t; }
 function placeAt(x, z, yaw){
   S.x = x; S.z = z; S.y = groundH(S.x,S.z); S.yaw = yaw;
   S.speed = 0; S.vy = 0; S.air = false; S.travel = S.yaw; S.wYaw = S.wPitch = 0; S.nose = 0; S.susp = S.suspV = 0; S.pitch = 0; S.spin = 0; S.lean = 0; S.preload = 0; S.crashT = 0; S.tweak = 0; S.trick = null; S.landCool = 0.3;
@@ -492,7 +496,8 @@ function onPress(code){
   if (code==='Enter' || code==='A'){ if (S.state==='menu'||S.state==='over'||S.state==='finished'){ resetGame(); return; } }
   if (code==='Space' && (S.state==='menu'||S.state==='over'||S.state==='finished')) { resetGame(); return; }
   if (code==='KeyP'||code==='Escape'||code==='Start') togglePause();
-  if (code==='KeyV'||code==='KeyC'||code==='Y'){ camMode = (camMode+1)%CAM_NAMES.length; LS.set('trailDescent.cam', camMode); camInit = false; drone.t = 0; toast('🎥 Camera: ' + CAM_NAMES[camMode]); }
+  if (code==='KeyV'||code==='Y'){   // (C is the keyboard trick modifier, so the camera stays on V)
+  camMode = (camMode+1)%CAM_NAMES.length; LS.set('trailDescent.cam', camMode); camInit = false; drone.t = 0; toast('🎥 Camera: ' + CAM_NAMES[camMode]); }
   if (code==='KeyX'||code==='X') camInit = false;
   if (code==='KeyH') $('help').classList.toggle('hidden');
   if ((code==='KeyR'||code==='B') && S.state==='riding' && !S.paused) { respawnSafe(); flash('RESPAWN',0.8); }
@@ -533,6 +538,12 @@ function respawnSafe(){
     placeAt(tr.pts[0][0], tr.pts[0][1], tr.yaw[0]); S.crumbs = []; S.crumbT = 0; camInit = false; return; }
   if (S.run){ const tr = trails[S.run.t], cp = S.run.cp != null ? tr.cps[S.run.cp] : {x:tr.pts[3][0], z:tr.pts[3][1], yaw:tr.yaw[3]};   // run: last checkpoint (or the start), timer keeps going
     updateChunks(cp.x, cp.z, 1e9, 160); placeAt(cp.x, cp.z, cp.yaw); S.speed = 3.5; S.crumbs = []; S.crumbT = 0; camInit = false; return; }
+  // inside the dirt jump park: back to the top of the roll-in of the line you were on (nearest by lateral offset), facing down it, stopped
+  if (!RAMP && PARK.lines && inPark(S.x, S.z)){ const d = PARK.dir, sx = -d[1], sz = d[0], lat = (S.x-PARK.x)*sx + (S.z-PARK.z)*sz;
+    const opts = [...PARK.lines.map(l => ({off:l.off, t:l.start})), ...(PARK.drop ? [{off:PARK.drop.off, x:PARK.drop.x + PARK.drop.dx*3, z:PARK.drop.z + PARK.drop.dz*3}] : [])];
+    const o = opts.reduce((a, b) => Math.abs(b.off - lat) < Math.abs(a.off - lat) ? b : a);
+    const x = o.x ?? PARK.x + d[0]*o.t + sx*o.off, z = o.z ?? PARK.z + d[1]*o.t + sz*o.off;
+    placeAt(x, z, Math.atan2(-d[0], -d[1])); S.speed = 0; S.crumbs = []; S.crumbT = 0; camInit = false; S.parkRespawn = o.off; return; }
   // back to where you were riding safely ~1.5 s ago (Mavrix-style), facing the way you were going
   const ok = (S.crumbs||[]).filter(c => inside(c.x, c.z));
   const c = ok.find(c => S.time - c.t >= 1.5) || ok[0];
@@ -632,8 +643,9 @@ function step(dt, inp){
     let nx = S.x + S.vx*dt, nz = S.z + S.vz*dt, ng = groundH(nx,nz);
     // jump collision: only a feature's ramp face (along its forward axis) adds launch speed. Its sides are climbed
     // (rounded dirt) or block/deflect you with a speed loss (steep / wooden walls), never launch you.
-    let vyFeat = null;
+    let vyFeat = null, backFeat = false;
     { const fa = featAxis(nx, nz) || featAxis(S.x, S.z);
+      if (fa) backFeat = (S.vx*fa.dx + S.vz*fa.dz) < -0.2*S.speed;   // riding a jump the wrong way (up a landing / over the back of a lip)
       if (fa){ const mx = nx - S.x, mz = nz - S.z, dA = mx*fa.dx + mz*fa.dz;
         const ax = S.x + fa.dx*dA, az = S.z + fa.dz*dA, f0 = featH(S.x, S.z), fAlong = featH(ax, az), f1 = featH(nx, nz);
         const latRise = f1 - fAlong, latLen = Math.hypot(mx - fa.dx*dA, mz - fa.dz*dA) + 1e-6;
@@ -648,7 +660,7 @@ function step(dt, inp){
           const dYaw = wrapA(tgt - S.travel); S.travel += dYaw; S.yaw += dYaw*0.7; S.speed *= 0.45;
           S.vx = -Math.sin(S.travel)*S.speed; S.vz = -Math.cos(S.travel)*S.speed;
           nx = S.x; nz = S.z; ng = groundH(nx, nz); S.sideHits = (S.sideHits||0) + 1; vyFeat = 0;
-        } else vyFeat = (fAlong - f0)/dt; } }
+        } else if (!backFeat) vyFeat = (fAlong - f0)/dt; } }   // backwards: no ramp lip speed, it's just a hill
     // vertical speed from ground-following never exceeds slope x horizontal speed along the travel direction
     const fdx = -Math.sin(S.travel), fdz = -Math.cos(S.travel), g0 = groundH(S.x, S.z);
     const gradeF = Math.max(0, (groundH(S.x + fdx*0.5, S.z + fdz*0.5) - g0)/0.5, (g0 - groundH(S.x - fdx*0.5, S.z - fdz*0.5))/0.5, (ng - g0)/Math.max(0.05, S.speed*dt));
@@ -664,12 +676,13 @@ function step(dt, inp){
     S.rockT = Math.max(0, (S.rockT||0) - dt);
     let crest = S.gf > 3 && S.landCool <= 0 && (S.lastVyG - vyG)/dt > crestG && S.speed > 4 && S.rockT <= 0;
     const edge = (ng - S.y) < -0.12 && (S.lastVyG - vyG)/dt > G_AIR*3 && S.speed > 1.5;   // rolling off a ledge/lip: the ground drops away faster than you can fall
+    if (backFeat && !edge) crest = false;   // wrong-way over a jump: roll over it, never pop off its crest
     if (edge && !crest && S.rockT <= 0 && S.landCool <= 0) crest = true;   // never re-launch right after touching down (no landing bounce)
     if (crest){ // only leave the ground if the ballistic path really clears the terrain (no micro-hops)
       let clear = 0; for (let t=0.03; t<=0.18; t+=0.03){ const bx=S.x+S.vx*t, bz=S.z+S.vz*t, by=S.y+S.lastVyG*t-0.5*G_AIR*t*t; const gap_=by-groundH(bx,bz); if (t < 0.065 && gap_ < 0.03){ clear = 0; break; } clear=Math.max(clear, gap_); }   // must actually separate right away (no 1-frame micro-hops)
       if (clear < 0.4) crest = false; }
     if (pop > 0 || crest){
-      S.air = true; S.airT = 0; S.vy = S.lastVyG + pop; S.takeoffPitch = S.pitch; S.spin = 0; S.popped = pop > 0;
+      S.air = true; S.airT = 0; S.vy = (backFeat ? Math.min(S.lastVyG, 0.1*S.speed) : S.lastVyG) + pop; S.takeoffPitch = S.pitch; S.spin = 0; S.popped = pop > 0;
       S.tweakT = 0; S.tricksDone = new Set(); S.wYaw = 0; S.wPitch = 0; S.yaw = S.travel + slip*0.5; S.travel = S.yaw; S.nose = 0;
       // scrub: laying the bike over (right stick sideways) at takeoff keeps you low and fast
       const lay = Math.abs(inp.tweak);
@@ -859,7 +872,7 @@ function frame(){
   $('timer').textContent = run ? `${run.name}  ${fmtTime(S.time - S.run.start)}` : (S.onTrailName || 'Free roam');
   drawMinimap(); updateWaypoints(dt); if (bigMap.open) mapFrame(dt, inp);
   if (S.trickMsgT > 0){ S.trickMsgT -= dt; if (S.trickMsgT<=0) trickEl.textContent=''; }
-  if (S.flashT > 0){ S.flashT -= dt; if (S.flashT<=0) centerEl.textContent=''; }
+  if (S.flashT > 0){ S.flashT -= dt; if (S.flashT<=0) centerEl.style.opacity = 0; }   // fade out (text stays until the next message)
   fpsN++; fpsT+=dt; if (fpsT>1){ window.__fps = fpsN/fpsT; fpsN=0; fpsT=0; }
 }
 // ---------- minimap ----------
@@ -1313,7 +1326,7 @@ function shopProximity(dt){ S.shopCool = Math.max(0, (S.shopCool||0) - dt);
 S.score = LS.get('trailDescent.dollahs', 0); S.savedScore = S.score; applyBike();
 openMenu('main'); setTimeout(() => $('loading').classList.add('done'), 300);
 teleport(spotI, true);
-window.__game = S; window.__readInput = readInput; window.__groundH = groundH; window.__lift = i => startLift(i); window.__world = { LIFTS, connectors, trails, features, spots, PARK, SHOP, terrainH, featH, isDirt, nearTrails, base, inPark };
-window.__BR = BR; window.__teleport = i => teleport(i); window.__unlocked = unlocked; window.__isOpen = isOpen; window.__chunks = () => chunks.size; window.__renderer = renderer;
+window.__features = features; window.__respawn = () => respawnSafe(); window.__game = S; window.__readInput = readInput; window.__groundH = groundH; window.__lift = i => startLift(i); window.__world = { LIFTS, connectors, trails, features, spots, PARK, SHOP, terrainH, featH, isDirt, nearTrails, base, inPark };
+window.__BR = BR; window.__teleport = i => teleport(i); window.__unlocked = unlocked; window.__isOpen = isOpen; window.__chunks = () => chunks.size; window.__renderer = renderer; window.__place = (x, z, yaw) => { placeAt(x, z, yaw); S.air = false; };
 window.__sim = (secs, inp) => { const h=1/120; const base={steer:0,pedal:0,brake:0,jump:false,tx:0,ty:0}; for(let t=0;t<secs;t+=h){ step(h, Object.assign({}, base, typeof inp==='function'?inp(t):inp)); trackWorld(h); } return {x:S.x, z:S.z, kmh:S.speed*3.6, air:S.air, lives:S.lives, clean:S.clean, score:S.score}; };
 frame();window.__shop = { open: openShop, key: shopKey, close: closeShop };

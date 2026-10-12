@@ -1,10 +1,10 @@
 # Grip 'N Rip
 
-*(repo: trail-descent)*
+*(repo: gripnrip)*
 
 A low-poly open-world mountain-bike game in the browser, inspired by Descenders / Mavrix. Built with Three.js (r160 from a CDN via an import map). It's plain static files with no build step.
 
-**Play:** https://ethanmountainbikes.github.io/trail-descent/
+**Play:** https://ethanmountainbikes.github.io/gripnrip/
 
 ## Controls (Descenders default Xbox layout)
 

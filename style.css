@@ -93,3 +93,11 @@ body.inshop #shop{left:auto;right:3vw;transform:translateY(-50%);width:min(500px
 .skinNote{font-size:13px;opacity:.75;margin:0 0 6px}
 #gear{position:absolute;left:0;right:0;bottom:4px;text-align:center;font:600 14px "Barlow Condensed",sans-serif;color:#fff;letter-spacing:1px;text-shadow:0 1px 2px #000}#gearVal.shifting{color:#d9772b}
 .logo span:nth-child(2){color:var(--cream,#f2e8d0);margin-left:14px;font-size:.62em;vertical-align:middle}.logo span:last-child{margin-left:14px}
+/* ===== fades: panels/menus fade + slide instead of popping; hidden ones never block input ===== */
+#menu,#overlay,#shop,#bigmapWrap,#help,#liftRide{transition:opacity .25s ease,visibility 0s linear 0s,translate .25s ease,scale .25s ease}
+#menu.hidden,#overlay.hidden,#bigmapWrap.hidden,#help.hidden{display:flex!important;opacity:0;visibility:hidden;pointer-events:none;transition:opacity .25s ease,visibility 0s linear .25s}
+#help.hidden{display:block!important}
+#shop.hidden{display:block!important;opacity:0;visibility:hidden;pointer-events:none;scale:.97;transition:opacity .22s ease,scale .22s ease,visibility 0s linear .22s}
+#menu.hidden #menuPanel{translate:-18px 0}#menuPanel{transition:translate .25s ease}
+#overlay.hidden #overlayBox{scale:.96}#overlayBox{transition:scale .25s ease}
+#trick,#center,#flash,#toast{transition:opacity .25s ease}

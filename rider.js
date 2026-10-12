@@ -193,6 +193,7 @@ export function buildBikeRider(frameMat){
 
   // ---- pose library (keyframes in bike space). w = blend weight; null = keep on grip/pedal ----
   const base = { hip: V(0, 1.03, 0.2), lean: 0.78, twist: 0, look: 0 };
+  const ATTACK = { hip: V(0, 1.06, 0.34), lean: 0.95 }, PEDAL = { hip: V(0, 1.1, 0.15), lean: 0.74 };   // both clear of the saddle (top ~1.0 m)
   const POSES = {
     nohander: { hip: V(0, 1.1, 0.24), lean: 0.3, hands: [V(-0.78, 1.62, 0.12), V(0.78, 1.62, 0.12)] },               // suicide-style: arms thrown out wide, knees pinch the seat
     tuck:     { hip: V(0, 1.0, -0.02), lean: 1.0, hands: [V(-0.62, 1.42, 0.5), V(0.62, 1.42, 0.5)], tilt: 0.25 },   // bars tucked into the lap, shoulders over the bars, arms swept back
@@ -206,7 +207,7 @@ export function buildBikeRider(frameMat){
   };
   const TRICK_OF = { up:'nohander', ul:'tuck', down:'nofooter', left:'superman', right:'cancan', dl:'nacnac', ur:'xup', dr:'tailwhip', bar:'barspin' };
   const W = Object.fromEntries(Object.keys(POSES).map(k => [k, 0]));
-  let barA = 0, tailA = 0, crankA = 0, flipW = 0, spinW = 0;
+  let barA = 0, tailA = 0, crankA = 0, flipW = 0, spinW = 0, pw = 0;
   const tmp = { grip: [V(), V()], pedal: [V(), V()] };
   const axisRot = (ang) => { const m = new THREE.Matrix4().makeTranslation(FA.x, FA.y, FA.z).multiply(new THREE.Matrix4().makeRotationAxis(AX, ang)).multiply(new THREE.Matrix4().makeTranslation(-FA.x, -FA.y, -FA.z)); return m; };
   const ik = (A, T, l1, l2, pole, outMid, outEnd) => { const d0 = T.clone().sub(A); let d = d0.length(); const dir = d0.normalize(); d = Math.min(l1 + l2 - 1e-3, Math.max(Math.abs(l1 - l2) + 1e-3, d));
@@ -238,11 +239,14 @@ export function buildBikeRider(frameMat){
     for (let i = 0; i < 2; i++){ tmp.grip[i].copy(GRIP[i]).applyMatrix4(steerG.matrix);
       const p = pedals[i]; tmp.pedal[i].set(p.position.x, 0, 0).add(V(0, Math.cos(crankA)*p.position.y, Math.sin(crankA)*p.position.y)).add(BB).add(V(0, 0.03, 0)).applyMatrix4(frameG.matrix); }
     // body: blend hip / spine lean / twist from all active poses (+ flip tuck, 360 head turn, whip counter-twist)
-    const hip = base.hip.clone(); let lean = base.lean, twist = -(S.tweak || 0)*0.35 + spinW*0.25, tilt = 0;
+    // always standing: coasting = attack position (level pedals, hips back over the rear wheel, chest low);
+    // pedalling = standing up over the cranks. pw blends the two smoothly.
+    pw = easeTo(pw, (inp?.standing || 0), 1 - Math.exp(-dt/0.18));
+    const hip = ATTACK.hip.clone().lerp(PEDAL.hip, pw); let lean = ATTACK.lean + (PEDAL.lean - ATTACK.lean)*pw, twist = -(S.tweak || 0)*0.35 + spinW*0.25, tilt = 0;
     hip.y += -flipW*0.08 - (S.susp || 0)*0.25; hip.z -= flipW*0.1; lean += flipW*0.2;
     for (const key in W){ const w = W[key]; if (w < 1e-3) continue; const P = POSES[key]; hip.lerp(P.hip, w); lean += (P.lean - base.lean)*w; twist += (P.twist || 0)*w; tilt += (P.tilt || 0)*w; }
     hip.x += (S.tweak || 0)*0.08;
-    { const st = inp?.standing || 0, ph = -crankA; hip.y += st*0.1 + st*0.025*Math.abs(Math.cos(ph)); hip.z -= st*0.1; lean += st*0.12; hip.x += st*0.035*Math.sin(ph); twist += st*0.06*Math.sin(ph); }   // out of the saddle: bob + sway with the pedal stroke
+    { const st = pw, ph = -crankA; hip.y += st*0.025*Math.abs(Math.cos(ph)); hip.x += st*0.035*Math.sin(ph); twist += st*0.06*Math.sin(ph); }   // out of the saddle: bob + sway with the pedal stroke
     const up = V(0, Math.cos(lean), -Math.sin(lean)), side = V(Math.cos(twist), 0, Math.sin(twist)), back = side.clone().cross(up).normalize(); side.copy(up.clone().cross(back)).normalize();
     torso.position.copy(hip); torso.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(side, up, back));
     const neck = hip.clone().addScaledVector(up, L.spine);
@@ -264,7 +268,7 @@ export function buildBikeRider(frameMat){
       ik(hipJ[i], ft, L.thigh, L.shin, V(sx*0.45, 0.15, -1), mid, end); place(seg[i ? 'thighR' : 'thighL'], hipJ[i], mid); place(seg[i ? 'shinR' : 'shinL'], mid, end);
       kneePad[i].position.copy(mid).add(V(0, -0.04, -0.05)); kneePad[i].quaternion.copy(seg[i ? 'shinR' : 'shinL'].quaternion);
       foot[i].position.copy(end).add(V(0, -0.06, 0)); foot[i].rotation.set(fw > 0.3 ? -0.6*Math.min(1, fw) : 0, 0, 0); }
-    root.rotation.x = tilt;   // tuck no-hander: bike pulled up into the lap
+    root.rotation.x = tilt; root.rotation.z = pw*0.07*Math.sin(-crankA);   // bike rocks side to side under a standing rider   // tuck no-hander: bike pulled up into the lap
   }
   for (const k of ['frame','jersey','helmet']) patternize(M[k]);
   const armLen = RA.clone().sub(BB).length();
