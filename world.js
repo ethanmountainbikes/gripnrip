@@ -1,6 +1,7 @@
 // Open-world terrain, trails, jump spots and features. Pure math (no Three.js) so it can be unit-tested in Node.
 export const W = 3.6;                 // trail half width (same as the original downhill trail)
-export const HALF = 1200;             // world is 2.4 km x 2.4 km (5.76 km²)
+export const HALF = 1380;             // world is 2.76 km x 2.76 km (7.6 km², ~32% more than the original 2.4 km)
+const CORE = 1200;                    // original map half-size: trail/lift layout stays inside it so nothing moves
 const BLEND = W + 7;                  // trail bench blends back into the hillside over this distance
 
 // ---------- noise ----------
@@ -29,6 +30,8 @@ function rawH(x, z){
   h += PEAK.h*Math.exp(-dp) * (1 + 0.05*noise(x/220+11, z/220));
   for (const k of HILLS) h += k.h*Math.exp(-((x-k.x)**2 + (z-k.z)**2)/(2*k.s*k.s));
   const e = Math.max(Math.abs(x), Math.abs(z)) - (HALF-90);      // beyond the map edge: irregular distant mountain ranges (no uniform wall/ring)
+  { const eb = Math.max(Math.abs(x), Math.abs(z)) - (CORE-90);   // new outer band: extra rolling forested hills
+    if (eb > 0) h += smooth(0, 120, eb)*(25 + 35*noise(x/160+13, z/160-6)); }
   if (e > 0){ const m = smooth(0, 600, e), r = noise(x/700+21, z/700-4), r2 = noise(x/260-3, z/260+8);
     h += e*0.12 + m*(120 + 420*Math.max(0, r + 0.35) + 90*r2); }
   return h;
@@ -67,7 +70,7 @@ function walk(def){
     const gyaw = Math.atan2(-gx,-gz); let best = null;
     for (const dy of [-0.22,-0.11,0,0.11,0.22]){
       const ny = yaw+dy, nx = x - Math.sin(ny)*STEP, nz = z - Math.cos(ny)*STEP;
-      if (Math.abs(nx) > HALF-130 || Math.abs(nz) > HALF-130) continue;
+      if (Math.abs(nx) > CORE-130 || Math.abs(nz) > CORE-130) continue;
       const sl = (base(x,z) - base(nx,nz))/STEP;      // >0 downhill
       const ga = Math.atan2(Math.sin(ny-gyaw), Math.cos(ny-gyaw));
       const gw = gd < 120 ? 5 : 1.5;
@@ -261,11 +264,11 @@ export function treesInCell(ci, cj){
   const r = mulberry(ci*7919 + cj*104729 + 17);
   for (let n=0;n<70;n++){
     const x = (ci + r())*TCELL, z = (cj + r())*TCELL, hgt = 9 + r()*13, rot = r()*6, hue = r();
-    const forest = noise(x/260+40, z/260-12) + 0.25;
+    const forest = noise(x/260+40, z/260-12) + 0.25 + (Math.max(Math.abs(x), Math.abs(z)) > CORE-90 ? 0.3 : 0);   // denser forest in the new outer band
     if (r() > forest*1.6) continue;
     const b = base(x,z); if (b > PEAK.h*0.75 + 40) continue;                  // tree line
     if (inPark(x,z) || Math.hypot(x-PARK.x, z-PARK.z) < PARK.r+38) continue;
-    if (Math.hypot(x+40, z-250) < 22) continue;   // bike shop clearing
+    if (Math.hypot(x-SHOP.x, z-SHOP.z) < 24 || Math.hypot(x+40, z-250) < 22) continue;   // bike shop clearing (+ old valley clearing)
     if (trailDist(x,z) < W+2.5 || featH(x,z) > 0) continue;
     if (connDist(x,z) < CW+2 || nearLiftStation(x,z,16) || liftLineDist(x,z) < 16) continue;   // keep paths, stations and lift lines clear
     a.push({x, z, y:terrainH(x,z)-0.2, h:hgt, rot, hue});
@@ -294,11 +297,11 @@ export const spots = [
 ];
 
 // ---------- chairlifts: each serves a cluster of trail starts ----------
-const featClear = (x, z) => { let m = 1e9; for (const f of features){ if (f.trail === -1 && !inPark(x,z) && Math.hypot(x-PARK.x, z-PARK.z) > PARK.r+40) continue;
+export const featClear = (x, z) => { let m = 1e9; for (const f of features){ if (f.trail === -1 && !inPark(x,z) && Math.hypot(x-PARK.x, z-PARK.z) > PARK.r+40) continue;
     const rx = x-f.x, rz = z-f.z, t = Math.max(0, Math.min(f.L, rx*f.dx + rz*f.dz)), u = Math.max(0, Math.abs(rx*f.dz - rz*f.dx) - f.hw); m = Math.min(m, Math.hypot(rx*f.dx + rz*f.dz - t, u)); } return m; };
 const SHOP_XZ = [-40, 250], LIFT_CLEAR = 15;
 const flatEnough = (x, z) => { const h0 = terrainH(x,z); let mx = 0; for (const [a,b] of [[-6,-6],[6,-6],[-6,6],[6,6],[0,7],[7,0],[0,-7],[-7,0]]) mx = Math.max(mx, Math.abs(terrainH(x+a,z+b)-h0)); return mx; };
-const stationOK = (x, z) => trailDist(x,z) >= LIFT_CLEAR + 5 && featClear(x,z) >= LIFT_CLEAR + 5 && !inPark(x,z) && Math.hypot(x-PARK.x, z-PARK.z) > PARK.r + 20 && Math.hypot(x-SHOP_XZ[0], z-SHOP_XZ[1]) > 30 && Math.max(Math.abs(x), Math.abs(z)) < HALF - 200;
+const stationOK = (x, z) => trailDist(x,z) >= LIFT_CLEAR + 5 && featClear(x,z) >= LIFT_CLEAR + 5 && !inPark(x,z) && Math.hypot(x-PARK.x, z-PARK.z) > PARK.r + 20 && Math.hypot(x-SHOP_XZ[0], z-SHOP_XZ[1]) > 30 && Math.max(Math.abs(x), Math.abs(z)) < CORE - 200;
 // deterministic search for a flat, clear station spot near a preferred point
 function findStation(px, pz, maxR = 160){ let best = null, bs = 1e9; const rnd = mulberry(Math.round(px*7 + pz*13) + 99);
   for (let n = 0; n < 900; n++){ const r = maxR*Math.sqrt(rnd()), a = rnd()*6.283, x = px + Math.cos(a)*r, z = pz + Math.sin(a)*r;
@@ -324,13 +327,25 @@ export const LIFTS = LIFT_DEFS.map(L => {
 const tEnd = name => { const t = trails.find(t => t.name === name), p = t.pts[t.pts.length-1]; return p; };
 const tBeg = name => { const t = trails.find(t => t.name === name); return t.pts[0]; };
 const L_ = i => [LIFTS[i].bx, LIFTS[i].bz], T_ = i => [LIFTS[i].tx, LIFTS[i].tz];
-const shopDoor = [-40, 244], valley = [-60, 300], parkGate = [PARK.x - PARK.r + 6, PARK.z - 10];
+const valley = [-60, 300], J = [-36, 260];   // J: junction on the valley -> Summit Express path where the shop spur branches off
+// bike shop: nearest spot to J whose whole yard (r ~ 13 m) stays >= 10 m from every trail, jump, lift line and path waypoint segment
+const segD = (x, z, a, b) => { const dx = b[0]-a[0], dz = b[1]-a[1], l2 = dx*dx+dz*dz || 1, u = Math.max(0, Math.min(1, ((x-a[0])*dx + (z-a[1])*dz)/l2)); return Math.hypot(x-a[0]-dx*u, z-a[1]-dz*u); };
+const mainLegs = [[valley, J], [J, [LIFTS[0].bx, LIFTS[0].bz]]];
+const liftSeg = (x, z) => Math.min(...LIFTS.map(L => segD(x, z, [L.bx, L.bz], [L.tx, L.tz])));
+export const SHOP = (() => { let best = null;
+  for (let r = 24; r < 90 && !best; r += 3) for (let a = 0; a < 24 && !best; a++){ const t = a/24*Math.PI*2, x = J[0] + r*Math.cos(t), z = J[1] + r*Math.sin(t);
+    const c = Math.min(trailDist(x,z), featClear(x,z), liftSeg(x,z), ...mainLegs.map(([p,q]) => segD(x, z, p, q))) - 13;
+    if (c >= 10 && Math.hypot(x-LIFTS[0].bx, z-LIFTS[0].bz) > 35) best = {x, z, yaw: Math.atan2(x - J[0], z - J[1])}; }   // door faces the junction
+  return best; })();
+const shopDoor = [SHOP.x - Math.sin(SHOP.yaw)*12, SHOP.z - Math.cos(SHOP.yaw)*12], parkGate = [PARK.x + 100*Math.cos(2.88), PARK.z + 100*Math.sin(2.88)];
+// waypoints on a ring 105 m from the park centre so paths go around the pad and its jump lines, never through them
+const ring = (...degs) => degs.map(a => [PARK.x + 150*Math.cos(a*Math.PI/180), PARK.z + 105*Math.sin(a*Math.PI/180)]);
 const CONN_DEFS = [
-  [shopDoor, L_(0)], [valley, shopDoor], [valley, [-110, 480], [-225, 525], parkGate], [parkGate, L_(1)],
+  [valley, J, L_(0)], [J, shopDoor], [valley, [-140, 430], [-230, 420], L_(1)], [L_(1), [-400, 480], [-410, 560], parkGate],
   [T_(0), tBeg('Summit DH')], [T_(0), tBeg('Flow Line')], [T_(0), tBeg('Freeride Ridge')], [T_(0), tBeg('North Face')],
   [T_(1), tBeg('Forest Singletrack')], [T_(1), tBeg('Meadow Flow')],
   [T_(2), tBeg('Pump Line')], [T_(2), tBeg('Hilltop Jumps')],
-  [tEnd('Summit DH'), parkGate], [tEnd('Meadow Flow'), [-345, 330], L_(1)], [tEnd('Flow Line'), L_(2)],
+  [tEnd('Summit DH'), [-280, 420], L_(1)], [tEnd('Meadow Flow'), [-345, 330], L_(1)], [tEnd('Flow Line'), L_(2)],
   [tEnd('Forest Singletrack'), [-420, 640], parkGate], [tEnd('Hilltop Jumps'), [560, 620], [540, 350], L_(2)], [tEnd('Pump Line'), [880, 380], [700, 250], L_(2)],
 ];
 export const connectors = CONN_DEFS.map(wp => { const pts = [];
@@ -377,6 +392,7 @@ for (const L of LIFTS){
   L.cableAt = cab;   // cable height at distance d from the bottom station
 }
 // automated layout check: returns a list of problems (empty = OK)
+const jumpClear = (x, z) => { let m = 1e9; for (const f of features){ if (f.kind === 'roller' || f.kind === 'berm') continue; const L = f.L||0, u = Math.max(-2, Math.min(L, (x-f.x)*f.dx + (z-f.z)*f.dz)), d = Math.hypot(x-f.x-f.dx*u, z-f.z-f.dz*u) - (f.hw||2); if (d < m) m = d; } return m; };
 export function liftLayoutProblems(){ const out = [];
   for (const L of LIFTS){
     for (const [nm, x, z] of [['bottom station', L.bx, L.bz], ['top station', L.tx, L.tz]]){ const td = trailDist(x,z), fd = featClear(x,z); if (td < LIFT_CLEAR || fd < LIFT_CLEAR) out.push(`${L.name} ${nm} ${Math.min(td,fd).toFixed(1)} m from a trail/jump`); const pd = connectors.filter(c => !(Math.hypot(c.pts[0][0]-x, c.pts[0][1]-z) < 20 || Math.hypot(c.pts[c.pts.length-1][0]-x, c.pts[c.pts.length-1][1]-z) < 20)).reduce((m, c) => Math.min(m, ...c.pts.map(p => Math.hypot(p[0]-x, p[1]-z))), 1e9); if (pd < LIFT_CLEAR) out.push(`${L.name} ${nm} ${pd.toFixed(1)} m from a path`); }
@@ -384,4 +400,7 @@ export function liftLayoutProblems(){ const out = [];
     for (let dd = 0; dd <= L.len; dd += 2){ const x = L.bx + L.dx*dd, z = L.bz + L.dz*dd, g = terrainH(x,z) + featH(x,z), c = L.cableAt(dd);
       if (c - 3.2 < g + 2.0) out.push(`${L.name} chairs only ${(c-3.2-g).toFixed(1)} m above ground at ${dd} m`);
       if ((trailDist(x,z) < W + 3 || connDist(x,z) < CW + 3) && c - g < 8) out.push(`${L.name} cable only ${(c-g).toFixed(1)} m over a trail/path at ${dd} m`); } }
+  // connector paths must stay >= 15 m clear of the park pad and of every jump corridor
+  connectors.forEach((c, i) => { let worst = 1e9, wp = null; for (const p of c.pts){ const d = Math.min(Math.hypot(p[0]-PARK.x, p[1]-PARK.z) - PARK.r, jumpClear(p[0], p[1])); if (d < worst){ worst = d; wp = p; } }
+    if (worst < 15) out.push(`connector ${i} passes ${worst.toFixed(1)} m from the park/a jump at (${wp[0].toFixed(0)},${wp[1].toFixed(0)})`); });
   return out; }

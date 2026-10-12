@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featAxis, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL, LIFTS, connectors, CW } from './world.js';
+import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featAxis, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL, LIFTS, connectors, CW, SHOP } from './world.js';
 
 const G = 9.81;
 // ---------- bikes (shop) ----------
@@ -331,16 +331,6 @@ function readInput(){
 const S = { x:0,y:0,z:0, yaw:0, speed:0, vy:0, vx:0, vz:0, air:false, airT:0, pitch:0, spin:0, takeoffPitch:0, lean:0,
   preload:0, lives:3, score:0, bestAir:0, totalAir:0, crashT:0, time:0, state:'menu', paused:false, lastVyG:0, trickMsgT:0,
   maxKmh:0, clean:0, spins:0, flips:0, finishes:0 };
-const objectives = [
-  {text:'Get 1 clean landing(s)', n:1, val:()=>S.clean},
-  {text:'Reach 50 km/h', n:50, val:()=>Math.floor(S.maxKmh)},
-  {text:'Land a 360 spin', n:1, val:()=>S.spins},
-  {text:'Get 5 clean landing(s)', n:5, val:()=>S.clean},
-  {text:'Land a flip', n:1, val:()=>S.flips},
-  {text:'Finish any trail (ride through its FINISH arch)', n:1, val:()=>S.finishes},
-  {text:'Land 3 jumps in the Dirt Jump Park', n:3, val:()=>S.parkClean||0},
-];
-let objI = 0;
 const $ = id => document.getElementById(id);
 const trickEl = $('trick'), centerEl = $('center');
 function flash(msg, t=1.2){ centerEl.textContent = msg; S.flashT = t; }
@@ -350,7 +340,7 @@ function placeAt(x, z, yaw){
 }
 function resetGame(){
   Object.assign(S,{lives:3,bestAir:0,totalAir:0,time:0,maxKmh:0,clean:0,spins:0,flips:0,finishes:0,parkClean:0,state:'riding',paused:false});
-  objI = 0; teleport(spotI, true); $('overlay').classList.add('hidden'); setTimeout(()=>$('help').classList.add('hidden'), 12000);
+  teleport(spotI, true); $('overlay').classList.add('hidden'); setTimeout(()=>$('help').classList.add('hidden'), 12000);
 }
 function crash(reason){ S.lastCrash = reason;
   if (S.crashT>0) return;
@@ -575,6 +565,7 @@ function step(dt, inp){
   else { const g = groundH(S.x,S.z); if (S.y < g - 1){ S.y = g; if (S.air){ S.air = false; S.airT = 0; S.vy = 0; S.lastVyG = 0; } } }
   S.time += dt;
 }
+const _eY = new THREE.Euler(), _qT = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
 function land(gh, gp){
   S.y = gh; S.air = false;
   S.air = false; const pe = wrapA(S.pitch + (S.nose||0)*0.5 - gp), se = wrapA(S.spin);
@@ -595,6 +586,7 @@ function land(gh, gp){
   if (Math.abs(S.tweak||0) > 0.6){ crash('Didn\'t straighten the tweak!'); return; }
   // within tolerance: keep current orientation and let the ground solver damp it smoothly to the surface
   S.spin = se; S.trick = null;
+  S.pitch = gp + wrapA(S.pitch - gp);   // drop whole flip turns so the bike settles by the shortest way (no unwinding a full loop)
   if (S.airT > 0.35){
     const parts = []; let pts = Math.round(S.airT*120);
     if (flips){ parts.push((Math.abs(flips)>1? `${Math.abs(flips)}x `:'') + (flips<0?'Frontflip':'Backflip')); pts += 600*Math.abs(flips); S.flips += Math.abs(flips); }
@@ -645,8 +637,12 @@ function frame(){
   animateLifts(dt); updateChunks(S.x, S.z); farU.value.set(S.x, S.z, coveredR);
   // pose bike
   bike.position.set(S.x, S.y, S.z);
-  bike.rotation.y = S.yaw + S.spin;
-  pitchG.rotation.x = S.pitch + (S.nose||0)*0.5; leanG.rotation.z = -S.lean + (S.tweak||0)*0.7; leanG.rotation.y = (S.tweak||0)*0.45;   // whip/scrub: stick right = bike whips right
+  // whole-bike orientation as one quaternion (yaw * pitch * lean/tweak); after a landing it slerps to the target over ~0.15 s instead of snapping
+  _eY.set(0, S.yaw + S.spin, 0); _qT.setFromEuler(_eY); _eY.set(S.pitch + (S.nose||0)*0.5, 0, 0); _qT.multiply(_q2.setFromEuler(_eY));
+  _eY.set(0, (S.tweak||0)*0.45, -S.lean + (S.tweak||0)*0.7, 'YXZ'); _qT.multiply(_q2.setFromEuler(_eY)); _eY.order = 'XYZ';
+  if (S.air) S.landBlend = 0.15; else if (S.landBlend > 0) S.landBlend -= dt;
+  if (!S.air && S.landBlend > 0) bike.quaternion.slerp(_qT, 1 - Math.exp(-dt/0.04)); else bike.quaternion.copy(_qT);
+  pitchG.rotation.set(0,0,0); leanG.rotation.set(0,0,0);   // whip/scrub: stick right = bike whips right
   const tp_ = S.trick; rig.rotation.x = tp_==='up' ? 0.25 : tp_==='down' ? -0.15 : 0; rig.rotation.z = tp_==='left' ? 0.35 : tp_==='right' ? -0.35 : 0;
   rig.position.z = (tp_ ? 0.15 : 0) + (S.weight||0)*0.12;      // visible fore/aft weight transfer
   rig.position.y = -(S.susp||0)*0.8; rig.scale.y = 1 - (S.susp||0)*0.5;
@@ -685,9 +681,6 @@ function frame(){
   $('progressBar').style.background = run ? run.color : '#fff';
   $('timer').textContent = run ? `${run.name}  ${fmtTime(S.time - S.run.start)}` : (S.onTrailName || 'Free roam');
   drawMinimap();
-  while (objI < objectives.length && objectives[objI].val() >= objectives[objI].n){ objI++; if (objI<objectives.length) toast('✔ Objective complete!'); }
-  if (objI < objectives.length){ const o = objectives[objI]; $('objText').textContent = o.n>1 && o.text.includes('km/h') ? `${o.text} ${Math.min(o.val(),o.n)}/${o.n}` : `${o.text} ${Math.min(o.val(),o.n)}/${o.n}`; }
-  else $('objText').textContent = 'All objectives complete!';
   if (S.trickMsgT > 0){ S.trickMsgT -= dt; if (S.trickMsgT<=0) trickEl.textContent=''; }
   if (S.flashT > 0){ S.flashT -= dt; if (S.flashT<=0) centerEl.textContent=''; }
   fpsN++; fpsT+=dt; if (fpsT>1){ window.__fps = fpsN/fpsT; fpsN=0; fpsT=0; }
@@ -748,16 +741,70 @@ function shopKey(code){
   renderShop();
 }
 // shop building in the valley: ride up to the door to open the shop
-const SHOP_POS = {x:-40, z:250, yaw:0};
-{ const g = new THREE.Group(), y = terrainH(SHOP_POS.x, SHOP_POS.z);
-  const wall = new THREE.MeshLambertMaterial({color:0xc9a77a}), roof = new THREE.MeshLambertMaterial({color:0x8b2e1f}), dark = new THREE.MeshLambertMaterial({color:0x3a2a1c});
-  const body = new THREE.Mesh(new THREE.BoxGeometry(12,5,9), wall); body.position.y = 2.5; g.add(body);
-  const rf = new THREE.Mesh(new THREE.ConeGeometry(8.6,3,4), roof); rf.position.y = 6.5; rf.rotation.y = Math.PI/4; rf.scale.set(1,1,0.75); g.add(rf);
-  const door = new THREE.Mesh(new THREE.BoxGeometry(3.2,3.4,0.2), dark); door.position.set(0,1.7,-4.55); g.add(door);
-  const cv = document.createElement('canvas'); cv.width=512; cv.height=128; const c2 = cv.getContext('2d'); c2.fillStyle='#ffd84d'; c2.fillRect(0,0,512,128); c2.fillStyle='#222'; c2.font='bold 76px Arial'; c2.textAlign='center'; c2.fillText('$ BIKE SHOP',256,92);
-  const tx = new THREE.CanvasTexture(cv); tx.colorSpace = THREE.SRGBColorSpace; const sign = new THREE.Mesh(new THREE.PlaneGeometry(8,2), new THREE.MeshBasicMaterial({map:tx})); sign.position.set(0,4.2,-4.62); sign.rotation.y = Math.PI; g.add(sign);
-  g.traverse(o=>{ if (o.isMesh){ o.castShadow = o.receiveShadow = true; } });
-  g.position.set(SHOP_POS.x, y-0.3, SHOP_POS.z); scene.add(g); }
+const SHOP_POS = {x:SHOP.x, z:SHOP.z, yaw:SHOP.yaw};   // placed in world.js >= 10 m clear of every path, trail and lift; a spur path runs to the porch
+// detailed cabin: every part is baked into one merged geometry per material (≈8 draw calls for the whole yard)
+{ const parts = new Map(), M = (c, e) => { const k = c + (e ? 'e' : ''); if (!parts.has(k)) parts.set(k, {mat: e ? new THREE.MeshBasicMaterial({color:c}) : new THREE.MeshLambertMaterial({color:c}), geos: []}); return parts.get(k); };
+  const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler();
+  const put = (geo, col, x, y, z, rx=0, ry=0, rz=0, emissive=false) => { _e.set(rx, ry, rz); _m.compose(new THREE.Vector3(x,y,z), _q.setFromEuler(_e), new THREE.Vector3(1,1,1)); const gg = (geo.index ? geo.toNonIndexed() : geo.clone()); gg.applyMatrix4(_m); gg.deleteAttribute('uv'); M(col, emissive).geos.push(gg); };
+  const box = (w,h,d,col,x,y,z,ry=0,rx=0,rz=0) => put(new THREE.BoxGeometry(w,h,d), col, x, y, z, rx, ry, rz);
+  const cyl = (r,h,col,x,y,z,rx=0,ry=0,rz=0,seg=8) => put(new THREE.CylinderGeometry(r,r,h,seg), col, x, y, z, rx, ry, rz);
+  const LOG = 0x8a5a33, LOG2 = 0x7a4e2c, ROOF = 0x4a3326, TRIM = 0xd9c7a0, DARK = 0x2b1d12, GLASS = 0x9fd3ef, METAL = 0x555a60, TIRE = 0x1b1b1b, FENCE = 0x9b7a52;
+  const Wd = 12, Dp = 9, Hw = 4.2;   // cabin footprint; front (door) side is local -z
+  for (let i = 0; i < 9; i++){ const y = 0.25 + i*0.47, c = i%2 ? LOG : LOG2;     // stacked log walls with crossed corners
+    cyl(0.25, Wd+0.8, c, 0, y, -Dp/2, 0, 0, Math.PI/2); cyl(0.25, Wd+0.8, c, 0, y, Dp/2, 0, 0, Math.PI/2);
+    cyl(0.25, Dp+0.8, c, -Wd/2, y+0.23, 0, Math.PI/2); cyl(0.25, Dp+0.8, c, Wd/2, y+0.23, 0, Math.PI/2); }
+  box(Wd-0.3, Hw, Dp-0.3, 0x6e4526, 0, Hw/2, 0);   // inner fill so there are no gaps between logs
+  // gables + pitched roof (ridge along x), overhanging the porch
+  const gab = new THREE.BufferGeometry(); gab.setAttribute('position', new THREE.Float32BufferAttribute([-Dp/2,0,0, Dp/2,0,0, 0,2.8,0],3)); gab.computeVertexNormals();
+  for (const s of [-1,1]){ put(new THREE.BufferGeometry().copy(gab), LOG, s*Wd/2*0.98, Hw, 0, 0, Math.PI/2*(s>0?1:-1)); put(new THREE.BufferGeometry().copy(gab), LOG, s*Wd/2*0.98, Hw, 0, 0, Math.PI/2*(s>0?-1:1)); }
+  const pitch = Math.atan2(2.8, Dp/2), rl = Math.hypot(2.8, Dp/2) + 2.6;
+  box(Wd+1.6, 0.25, rl, ROOF, 0, Hw + 1.4 + 0.15, -Dp/4 - 0.9, 0, -pitch);   // front slope runs out over the porch
+  box(Wd+1.6, 0.25, rl-2.4, ROOF, 0, Hw + 1.4 + 0.15, Dp/4 + 0.3, 0, pitch);
+  cyl(0.18, Wd+1.8, LOG2, 0, Hw+2.85, 0, 0, 0, Math.PI/2);
+  box(0.7, 2.6, 0.7, 0x777068, Wd/2-2, Hw+1.8, 1.5);   // stone chimney
+  // porch: deck, posts, rail, steps
+  box(Wd+1, 0.3, 3.2, 0x9c7449, 0, 0.35, -Dp/2-1.6);
+  for (const px of [-Wd/2, -2, 2, Wd/2]) cyl(0.14, 3.4, LOG2, px, 2.0, -Dp/2-3.0);
+  for (const px of [-Wd/2+2, Wd/2-2]) { box(3.4, 0.12, 0.12, TRIM, px*0.78 + (px<0?-0.6:0.6), 1.3, -Dp/2-3.0); }
+  box(3.2, 0.15, 0.6, 0x9c7449, 0, 0.12, -Dp/2-3.5);
+  // door + windows with frames and warm glass
+  box(1.6, 2.6, 0.12, DARK, 0, 1.6, -Dp/2-0.27); box(1.9, 0.15, 0.14, TRIM, 0, 2.95, -Dp/2-0.28);
+  for (const wx of [-3.6, 3.6]){ box(2.0, 1.4, 0.1, GLASS, wx, 2.2, -Dp/2-0.27); box(2.2, 0.14, 0.14, TRIM, wx, 2.95, -Dp/2-0.3); box(2.2, 0.14, 0.14, TRIM, wx, 1.45, -Dp/2-0.3); box(0.12, 1.5, 0.14, TRIM, wx, 2.2, -Dp/2-0.3); }
+  for (const wz of [-1.5, 1.5]){ box(0.1, 1.3, 1.8, GLASS, -Wd/2-0.27, 2.2, wz); box(0.1, 1.3, 1.8, GLASS, Wd/2+0.27, 2.2, wz); }
+  // lanterns either side of the door (glowing)
+  for (const lx of [-1.4, 1.4]){ put(new THREE.BoxGeometry(0.28,0.4,0.28), 0xffc86b, lx, 3.0, -Dp/2-0.5, 0,0,0, true); box(0.34, 0.06, 0.34, DARK, lx, 3.23, -Dp/2-0.5); }
+  // bike racks with parked bikes
+  const bikeAt = (x, z, ry, col) => { for (const s of [-0.55, 0.55]) put(new THREE.TorusGeometry(0.34, 0.06, 6, 16), TIRE, x + Math.sin(ry)*s, 0.4, z + Math.cos(ry)*s, 0, ry + Math.PI/2);
+    box(0.06, 0.06, 1.0, col, x, 0.62, z, ry, 0.35); box(0.06, 0.5, 0.06, col, x - Math.sin(ry)*0.1, 0.65, z - Math.cos(ry)*0.1, ry); box(0.5, 0.05, 0.05, DARK, x + Math.sin(ry)*0.5, 0.95, z + Math.cos(ry)*0.5, ry); };
+  for (const [rx, cols] of [[-Wd/2+0.5, [0xd8382f, 0x2f7bd8, 0x3fb04a]], [Wd/2-3.0, [0xf0b429, 0x222222, 0xe0e0e0]]]){
+    box(3.0, 0.08, 0.08, METAL, rx + 1.25, 0.5, -Dp/2-5.6); box(0.08, 0.5, 0.08, METAL, rx-0.2, 0.25, -Dp/2-5.6); box(0.08, 0.5, 0.08, METAL, rx+2.7, 0.25, -Dp/2-5.6);
+    cols.forEach((c, i) => bikeAt(rx + i*1.0, -Dp/2-5.6, 0, c)); }
+  // work stand with a bike clamped on it, tyre stack, tool board
+  box(0.08, 1.5, 0.08, METAL, Wd/2+2.2, 0.75, -Dp/2-1.2); box(0.9, 0.06, 0.06, METAL, Wd/2+2.2, 0.03, -Dp/2-1.2); box(0.06, 0.06, 0.9, METAL, Wd/2+2.2, 0.03, -Dp/2-1.2);
+  bikeAt(Wd/2+2.2, -Dp/2-1.2, Math.PI/2, 0x8e44ad);
+  for (let i = 0; i < 4; i++) put(new THREE.TorusGeometry(0.36, 0.11, 6, 16), TIRE, -Wd/2-1.6, 0.12 + i*0.22, -1.5, Math.PI/2);
+  for (let i = 0; i < 3; i++) put(new THREE.TorusGeometry(0.36, 0.11, 6, 16), TIRE, -Wd/2-1.6, 0.12 + i*0.22, 0.2, Math.PI/2);
+  box(0.08, 1.6, 2.4, 0xb08a5a, -Wd/2-0.35, 2.0, 2.4);
+  for (let i = 0; i < 5; i++) box(0.06, 0.5 - i*0.05, 0.08, METAL, -Wd/2-0.42, 2.1, 1.5 + i*0.45);
+  box(1.6, 0.9, 0.8, 0xc0392b, Wd/2+1.0, 0.45, 2.6);   // tool chest
+  // small fenced yard behind and around the sides, open at the front
+  const yd = [-Wd/2-3.5, Wd/2+3.5, -Dp/2-1, Dp/2+3.5];
+  const fence = (ax, az, bx, bz) => { const l = Math.hypot(bx-ax, bz-az), ry = Math.atan2(bx-ax, bz-az), n = Math.ceil(l/2.2);
+    for (let i = 0; i <= n; i++) box(0.14, 1.1, 0.14, FENCE, ax + (bx-ax)*i/n, 0.55, az + (bz-az)*i/n);
+    for (const h of [0.45, 0.9]) box(0.06, 0.1, l, FENCE, (ax+bx)/2, h, (az+bz)/2, ry); };
+  fence(yd[0], yd[2], yd[0], yd[3]); fence(yd[1], yd[2], yd[1], yd[3]); fence(yd[0], yd[3], yd[1], yd[3]);
+  // sign board on the porch roof edge
+  const cv = document.createElement('canvas'); cv.width=512; cv.height=128; const c2 = cv.getContext('2d'); c2.fillStyle='#5a3a1e'; c2.fillRect(0,0,512,128); c2.strokeStyle='#e9d29a'; c2.lineWidth=8; c2.strokeRect(6,6,500,116);
+  c2.fillStyle='#ffe08a'; c2.font='bold 80px Georgia'; c2.textAlign='center'; c2.fillText('BIKE SHOP',256,92);
+  const tx = new THREE.CanvasTexture(cv); tx.colorSpace = THREE.SRGBColorSpace;
+  const g = new THREE.Group(), y = terrainH(SHOP_POS.x, SHOP_POS.z);
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(5,1.25), new THREE.MeshBasicMaterial({map:tx, side:THREE.DoubleSide})); sign.position.set(0, Hw+0.2, -Dp/2-3.1); sign.rotation.y = Math.PI; g.add(sign);
+  for (const {mat, geos} of parts.values()){ let n = 0; for (const q of geos) n += q.attributes.position.count;
+    const pos = new Float32Array(n*3), nor = new Float32Array(n*3); let o = 0; for (const q of geos){ if (!q.attributes.normal) q.computeVertexNormals(); pos.set(q.attributes.position.array, o*3); nor.set(q.attributes.normal.array, o*3); o += q.attributes.position.count; }
+    const bg = new THREE.BufferGeometry(); bg.setAttribute('position', new THREE.BufferAttribute(pos,3)); bg.setAttribute('normal', new THREE.BufferAttribute(nor,3));
+    const mesh = new THREE.Mesh(bg, mat); mesh.castShadow = mesh.receiveShadow = !(mat.isMeshBasicMaterial); g.add(mesh); }
+  const lamp = new THREE.PointLight(0xffb85c, 6, 14, 2); lamp.position.set(0, 3.0, -Dp/2-1.2); g.add(lamp);
+  g.position.set(SHOP_POS.x, y-0.15, SHOP_POS.z); g.rotation.y = SHOP_POS.yaw; scene.add(g); }
 // ---------- connector paths (narrow gravel ribbons draped on the terrain) ----------
 { const v = [], idx = [], col = []; const c1 = new THREE.Color(0xb59a6e), c2 = new THREE.Color(0x9c845c);
   for (const c of connectors){ const P = c.pts, b0 = v.length/3;
@@ -819,12 +866,12 @@ function endLift(){ const L = LIFTS[S.lift.i]; S.lift = null; myChair.visible = 
   const tr = trails.find(t => t.name === L.serves[0]), x = L.tx + L.dx*7, z = L.tz + L.dz*7, yaw = Math.atan2(-(tr.pts[0][0]-x), -(tr.pts[0][1]-z));
   updateChunks(x, z, 1e9, 160); placeAt(x, z, yaw); S.liftCool = 3; camInit = false; toast(`🚡 ${L.name} — top station · ${L.serves.join(' · ')}`); }
 function shopProximity(dt){ S.shopCool = Math.max(0, (S.shopCool||0) - dt);
-  const dx = S.x - SHOP_POS.x, dz = S.z - (SHOP_POS.z - 6);
+  const dx = S.x - (SHOP_POS.x - Math.sin(SHOP_POS.yaw)*8), dz = S.z - (SHOP_POS.z - Math.cos(SHOP_POS.yaw)*8);   // porch steps
   if (!shopOpen && S.shopCool <= 0 && !S.air && dx*dx + dz*dz < 9) openShop(); }
 S.score = LS.get('trailDescent.dollahs', 0); S.savedScore = S.score; applyBike();
 showOverlay('TRAIL DESCENT', menuMsg());
 teleport(spotI, true);
-window.__game = S; window.__readInput = readInput; window.__groundH = groundH; window.__lift = i => startLift(i); window.__world = { LIFTS, connectors, trails, features, spots, PARK, terrainH, featH, isDirt, nearTrails, base, inPark };
+window.__game = S; window.__readInput = readInput; window.__groundH = groundH; window.__lift = i => startLift(i); window.__world = { LIFTS, connectors, trails, features, spots, PARK, SHOP, terrainH, featH, isDirt, nearTrails, base, inPark };
 window.__teleport = i => teleport(i); window.__unlocked = unlocked; window.__isOpen = isOpen; window.__chunks = () => chunks.size; window.__renderer = renderer;
 window.__sim = (secs, inp) => { const h=1/120; const base={steer:0,pedal:0,brake:0,jump:false,tx:0,ty:0}; for(let t=0;t<secs;t+=h){ step(h, Object.assign({}, base, typeof inp==='function'?inp(t):inp)); trackWorld(h); } return {x:S.x, z:S.z, kmh:S.speed*3.6, air:S.air, lives:S.lives, clean:S.clean, score:S.score}; };
 frame();
