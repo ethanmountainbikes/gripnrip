@@ -46,7 +46,7 @@ canvas{display:block}
 .wpMarker.edge{opacity:.85;background:rgba(0,30,40,.55);padding:3px 7px;border-radius:10px;border:1px solid #3ef0ff}
 #bigmapWrap.hidden{display:none}
 
-/* ===== SICK RIPZ: rugged MTB theme (dirt orange, forest green, cream; topo lines + dirt grain) ===== */
+/* ===== Grip 'N Rip: rugged MTB theme (dirt orange, forest green, cream; topo lines + dirt grain) ===== */
 :root{--dirt:#d9772b;--dirt2:#a8541c;--forest:#2f5d3a;--forest2:#1f3d27;--cream:#f3e9d2;--ink:#17140f;--panel:rgba(26,22,15,.84);
   --grain:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .55 0 0 0 0 .4 0 0 0 0 .25 0 0 0 .22 0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E")}
 html,body{font-family:"Barlow Condensed","Arial Narrow",Arial,sans-serif;color:var(--cream)}
@@ -92,3 +92,4 @@ body.inshop #shop{left:auto;right:3vw;transform:translateY(-50%);width:min(500px
 #shopTabs .tab.on{background:rgba(217,119,43,.25);border-bottom-color:var(--dirt);color:#fff}
 .skinNote{font-size:13px;opacity:.75;margin:0 0 6px}
 #gear{position:absolute;left:0;right:0;bottom:4px;text-align:center;font:600 14px "Barlow Condensed",sans-serif;color:#fff;letter-spacing:1px;text-shadow:0 1px 2px #000}#gearVal.shifting{color:#d9772b}
+.logo span:nth-child(2){color:var(--cream,#f2e8d0);margin-left:14px;font-size:.62em;vertical-align:middle}.logo span:last-child{margin-left:14px}

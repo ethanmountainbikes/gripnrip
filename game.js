@@ -492,7 +492,7 @@ function onPress(code){
   if (code==='Enter' || code==='A'){ if (S.state==='menu'||S.state==='over'||S.state==='finished'){ resetGame(); return; } }
   if (code==='Space' && (S.state==='menu'||S.state==='over'||S.state==='finished')) { resetGame(); return; }
   if (code==='KeyP'||code==='Escape'||code==='Start') togglePause();
-  if (code==='KeyV'||code==='Y'){ camMode = (camMode+1)%3; toast(['Camera: chase','Camera: far','Camera: close'][camMode]); }
+  if (code==='KeyV'||code==='KeyC'||code==='Y'){ camMode = (camMode+1)%CAM_NAMES.length; LS.set('trailDescent.cam', camMode); camInit = false; drone.t = 0; toast('🎥 Camera: ' + CAM_NAMES[camMode]); }
   if (code==='KeyX'||code==='X') camInit = false;
   if (code==='KeyH') $('help').classList.toggle('hidden');
   if ((code==='KeyR'||code==='B') && S.state==='riding' && !S.paused) { respawnSafe(); flash('RESPAWN',0.8); }
@@ -506,7 +506,8 @@ function onPress(code){
   } else if (S.state==='menu' && (code==='DL'||code==='DR'||code==='BracketLeft'||code==='BracketRight')){
     spotI = nextOpen(spotI, code==='DL'||code==='BracketLeft' ? -1 : 1); $('overlayMsg').innerHTML = menuMsg(); }
 }
-let camMode = 0;
+const CAM_NAMES = ['Chase', 'Far chase', 'Low chase', 'Helmet cam', 'GoPro chest', 'Side tracking', 'Trackside drone'];
+let camMode = Math.min(CAM_NAMES.length-1, LS.get('trailDescent.cam', 0) | 0); const drone = {t: 0, p: new THREE.Vector3()};
 // ---------- open world: spots, safe respawn, trail runs ----------
 // teleport unlocks: a trail's spot unlocks after you finish that trail once. Flow Line, the park and the meadow are always open.
 const UKEY = RAMP ? 'trailDescent.unlocked.rampage' : 'trailDescent.unlocked';
@@ -802,15 +803,18 @@ function frame(){
   DRV.update(S, inp, dt); inp.cadence = DRV.cadence; inp.standing = DRV.standing;
   BR.update(S, inp, dt);                                       // rider pose: IK on grips/pedals, blended trick keyframes, barspin/tailwhip bike parts
   rig.position.z = (S.weight||0)*0.12;                         // visible fore/aft weight transfer
-  rig.position.y = -(S.susp||0)*0.8; rig.scale.y = 1 - (S.susp||0)*0.5;
+  { // sag 25% at rest; susp (-0.05..0.3) maps onto the rest of the travel; bottom-out at full travel
+    const tr_ = THREE.MathUtils.clamp(0.25 + (S.susp||0)/0.3*0.75, 0, 1), [df, dr] = BR.setSusp(tr_, tr_*0.97);
+    rig.position.y = -(df + dr)/2 + 0.04; rig.scale.y = 1;
+    if (tr_ >= 0.995 && !S.bottomed){ S.bottomed = true; sfxLand(18); } else if (tr_ < 0.8) S.bottomed = false; }
   spawnDust(dt);
   for (const w of wheels) w.rotation.x -= S.speed*dt/0.36;
   // camera
   const ch = S.travel ?? S.yaw; const fx = -Math.sin(ch), fz = -Math.cos(ch);
-  const back = [5.2,8,3.4][camMode] + S.speed*0.04;
+  const cm = camMode < 3 ? camMode : 0, back = [5.2,8,3.4][cm] + S.speed*0.04;
   const fov = 66 + Math.min(14, S.speed*0.45); if (Math.abs(camera.fov-fov) > 0.05){ camera.fov += (fov-camera.fov)*Math.min(1,dt*3); camera.updateProjectionMatrix(); }
   const tp = new THREE.Vector3(S.x - fx*back, 0, S.z - fz*back);
-  tp.y = Math.max(groundH(tp.x,tp.z), S.y) + [2.3,3.4,1.7][camMode];
+  tp.y = Math.max(groundH(tp.x,tp.z), S.y) + [2.3,3.4,1.7][cm];
   const tl = new THREE.Vector3(S.x + fx*4, S.y + 1.0, S.z + fz*4);
   if (!camInit || camPos.distanceTo(tp) > 40){ camPos.copy(tp); camLook.copy(tl); camInit = true; }
   const k = 1 - Math.exp(-dt*6);
@@ -818,6 +822,19 @@ function frame(){
   camera.position.copy(camPos);
   camRoll = THREE.MathUtils.lerp(camRoll, -S.lean*0.18 + (S.sliding ? S.slip*0.1 : 0), Math.min(1, dt*4));
   camera.up.set(Math.sin(camRoll)*Math.cos(ch), Math.cos(camRoll), -Math.sin(camRoll)*Math.sin(ch)); camera.lookAt(camLook);
+  BR.head.visible = !(camMode === 3 && !S.lift && S.state === 'riding');
+  if (camMode >= 3 && !S.lift && S.state === 'riding'){ const sx = -fz, sz = fx, up = 1;
+    if (camMode === 3 || camMode === 4){   // first person: helmet (bars in view) / chest mount
+      const hy = camMode === 3 ? 1.78 : 1.32, fw = camMode === 3 ? 0.32 : 0.36, pitchDn = camMode === 3 ? 0.55 : 0.35;
+      camera.position.set(S.x + fx*fw, S.y + hy, S.z + fz*fw); camera.up.set(0,1,0); camera.lookAt(S.x + fx*6, S.y + hy - 6*pitchDn*0.4 + (S.vy||0)*0.05, S.z + fz*6);
+      if (camera.near !== 0.05){ camera.near = 0.05; camera.updateProjectionMatrix(); } }
+    else if (camMode === 5){ const t = new THREE.Vector3(S.x + sx*5 - fx*1, Math.max(groundH(S.x + sx*5, S.z + sz*5), S.y) + 1.2, S.z + sz*5 - fz*1);   // side tracking
+      camPos.lerp(t, 1 - Math.exp(-dt*5)); camera.position.copy(camPos); camera.up.set(0,1,0); camera.lookAt(S.x, S.y + 0.9, S.z); }
+    else { // drone: parks ahead beside the trail, pans as you pass, then leapfrogs ahead
+      const d = Math.hypot(drone.p.x - S.x, drone.p.z - S.z); drone.t -= dt;
+      if (drone.t <= 0 || d > 55){ const side = Math.random() < 0.5 ? -1 : 1, ax = S.x + fx*35 + sx*side*12, az = S.z + fz*35 + sz*side*12; drone.p.set(ax, Math.max(groundH(ax, az), S.y - 8) + 9, az); drone.t = 6; }
+      camera.position.copy(drone.p); camera.up.set(0,1,0); camera.lookAt(S.x, S.y + 0.8, S.z); } }
+  else if (camera.near !== 0.1){ camera.near = 0.1; camera.updateProjectionMatrix(); }
   if (window.__camSide){ const o = window.__camSide, c = Math.cos(S.yaw), s_ = Math.sin(S.yaw); camera.position.set(S.x + c*o.d + Math.sin(S.yaw)*(o.b||0), S.y + (o.h||1.2), S.z - s_*o.d + Math.cos(S.yaw)*(o.b||0)); camera.up.set(0,1,0); camera.lookAt(S.x, S.y + 0.9, S.z); }   // test hook: side camera for pose screenshots
   if (flyF) flyover(0);
   else if (shopOpen) shopCam(dt);   // main menu: flyover camera replaces the chase cam
@@ -1018,7 +1035,7 @@ const PAGES = {
     {label:'Invert whip / tweak (right stick ↔)', value:ON(SETTINGS.invertX), adj:() => { SETTINGS.invertX = !SETTINGS.invertX; saveSettings(); }, act:() => { SETTINGS.invertX = !SETTINGS.invertX; saveSettings(); }},
     {label:'Controls / help', value:$('help').classList.contains('hidden') ? 'SHOW' : 'HIDE', act:() => $('help').classList.toggle('hidden')},
     {label:'‹ Back', act:back} ]}),
-  credits: () => ({title:'CREDITS', html:`<div class="credits"><p><b>SICK RIPZ</b> — an open-world mountain bike game in the browser.</p>
+  credits: () => ({title:'CREDITS', html:`<div class="credits"><p><b>Grip 'N Rip</b> — an open-world mountain bike game in the browser.</p>
     <p><b>Game, code, world, rider and bike models, textures:</b> made procedurally for this project (Three.js r160).</p>
     <p><b>Music (CC0, from OpenGameArt.org):</b><br>${TRACKS.map(t => `${t.title} — ${t.artist} <small>(${t.src})</small>`).join('<br>')}</p>
     <p><b>Fonts:</b> Bebas Neue & Barlow Condensed (SIL Open Font License, Google Fonts).</p>
@@ -1076,8 +1093,8 @@ const SKINS = {
     {id:'camo', name:'Woodland Camo', price:650, mode:3, a:0x4b5a32, b:0x2b2a1f, c:0x8a7a52, r:0.8, m:0.05, desc:'Three-colour woodland camo.'},
     {id:'decal', name:'Factory Race Decals', price:800, mode:5, a:0xf2f2f2, b:0xd9772b, c:0x1f3d27, r:0.35, m:0.2, desc:'White with orange and green race stripes.'},
     {id:'carbon', name:'Raw Carbon', price:900, mode:4, a:0x0c0c0e, b:0x3a3b40, r:0.25, m:0.4, desc:'Exposed carbon weave, clear coat.'},
-    {id:'bean', name:'Buckle Bean', price:2000, mode:5, a:0x9a5a2e, b:0x1f5fbf, c:0xf2b705, r:0.35, m:0.3, desc:'Bean brown with royal-blue cape stripes and gold buckle bands.'},
-    {id:'chrome', name:'Mirror Chrome', price:1500, mode:0, a:0xe8ecf2, r:0.06, m:1.0, env:true, desc:'Polished chrome. Very loud.'} ],
+    {id:'chrome', name:'Mirror Chrome', price:1500, mode:0, a:0xe8ecf2, r:0.06, m:1.0, env:true, desc:'Polished chrome. Very loud.'},
+    {id:'bean', name:'Buckle Bean', price:2000, mode:5, a:0x9a5a2e, b:0x1f5fbf, c:0xf2b705, r:0.35, m:0.3, desc:'Bean brown with royal-blue cape stripes and gold buckle bands.'} ],
   jersey: [ {id:'stock', name:'Stock Orange', price:0, mode:0, a:0xff7a12},
     {id:'forest', name:'Forest Stripes', price:200, mode:5, a:0x2f5d3a, b:0xe8dcc0, c:0xd9772b},
     {id:'hoops', name:'Retro Hoops', price:250, mode:6, a:0x1e4fd8, b:0xf5f5f5},
@@ -1096,11 +1113,11 @@ const SKINS = {
     {id:'neon', name:'Neon Fade', price:700, mode:2, a:0x39ff14, b:0xff2fa8, r:0.3, m:0.2},
     {id:'gcarbon', name:'Gloss Carbon', price:900, mode:4, a:0x0c0c0e, b:0x45464c, r:0.12, m:0.4},
     {id:'gold', name:'Gold Premium', price:1500, mode:0, a:0xd4a52a, r:0.2, m:1.0},
-    {id:'bean', name:'Buckle Bean', price:2000, mode:5, a:0x9a5a2e, b:0x1f5fbf, c:0xf2b705, r:0.45, m:0.1, desc:'Bean brown shell, smiley face, blue cape stripe, gold buckle.'},
     {id:'stripe', name:'Race Stripe', price:250, mode:5, a:0xf5f5f5, b:0xd9772b, c:0x1f3d27},
     {id:'check', name:'Checkerboard', price:400, mode:8, a:0xf5f5f5, b:0x111111},
     {id:'carbon', name:'Carbon Shell', price:600, mode:4, a:0x0c0c0e, b:0x3a3b40},
-    {id:'flames', name:'Flames', price:700, mode:9, a:0xffe14d, b:0x151515, c:0xff4b12} ],
+    {id:'flames', name:'Flames', price:700, mode:9, a:0xffe14d, b:0x151515, c:0xff4b12},
+    {id:'bean', name:'Buckle Bean', price:2000, mode:5, a:0x9a5a2e, b:0x1f5fbf, c:0xf2b705, r:0.45, m:0.1, desc:'Bean brown shell, smiley face, blue cape stripe, gold buckle.'} ],
   goggles: [ {id:'stock', name:'Blue Mirror', price:0, a:0x3a6ea8}, {id:'clear', name:'Clear', price:100, a:0xcfd8dc, m:0.2}, {id:'gold', name:'Gold Mirror', price:150, a:0xd4a017}, {id:'red', name:'Fire Red', price:200, a:0xd62a1e}, {id:'smoke', name:'Smoke', price:120, a:0x222428}, {id:'bean', name:'Buckle Bean', price:300, a:0xf2b705, m:0.95, desc:'Gold buckle lenses with a royal-blue strap.'} ] };
 const SKIN_CATS = ['paint','jersey','pants','helmet','goggles'], SHOP_TABS = ['bikes', ...SKIN_CATS];
 const TAB_LABEL = {bikes:'Bikes', paint:'Paint', jersey:'Jersey', pants:'Pants', helmet:'Helmet', goggles:'Goggles'};

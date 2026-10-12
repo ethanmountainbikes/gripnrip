@@ -1,4 +1,4 @@
-// SICK RIPZ sound effects: 100% synthesized with Web Audio (no sample files), mixed under the music.
+// Grip 'N Rip sound effects: 100% synthesized with Web Audio (no sample files), mixed under the music.
 let ctx = null, master, noiseBuf, roll, rollF, wind, windF, skid, skidF, lift, liftG, vol = 0.8, crankPrev = 0;
 const MIX = 0.55;   // overall SFX trim so effects sit under the music
 function loop(src, filterType, f){ const s = ctx.createBufferSource(); s.buffer = noiseBuf; s.loop = true; const fl = ctx.createBiquadFilter(); fl.type = filterType; fl.frequency.value = f; const g = ctx.createGain(); g.gain.value = 0; s.connect(fl).connect(g).connect(master); s.start(); return [g, fl]; }

@@ -1,4 +1,4 @@
-# SICK RIPZ
+# Grip 'N Rip
 
 *(repo: trail-descent)*
 

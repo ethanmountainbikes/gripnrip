@@ -57,11 +57,14 @@ export function buildBikeRider(frameMat){
   const SEATJ = V(0, 0.86, 0.12), SADDLE = V(0, 0.98, 0.20), ROCK = V(0, 0.70, 0.10), ROCK2 = V(0, 0.76, 0.24), SHOCK0 = V(0, 0.50, -0.14);
   const frameG = new THREE.Group(), steerG = new THREE.Group(); frameG.matrixAutoUpdate = steerG.matrixAutoUpdate = false; root.add(frameG, steerG);
   const tube = (B, a, b, r, mat, x=0, seg=10) => { const A = a.clone(), Bv = b.clone(); A.x += x; Bv.x += x; B.add(new THREE.CylinderGeometry(r, r, A.distanceTo(Bv), seg), mat, between(A, Bv)); };
-  const fb = new Bucket(), sb = new Bucket();
+  const fb = new Bucket(), sb = new Bucket(), lb = new Bucket(), swb = new Bucket();
+  // suspension: fork lowers + front wheel slide up the steer axis (160 mm); swingarm + rear wheel pivot about the main pivot (150 mm at the axle)
+  const forkLow = new THREE.Group(); steerG.add(forkLow);
+  const swing = new THREE.Group(); swing.position.copy(BB); frameG.add(swing); const swingIn = new THREE.Group(); swingIn.position.copy(BB).multiplyScalar(-1); swing.add(swingIn);
   // frame: hydroformed main tubes, rear triangle, linkage
   tube(fb, HB, HT, 0.032, M.frame); tube(fb, HB, BB.clone().add(V(0,0.04,-0.03)), 0.036, M.frame); tube(fb, HT, SEATJ, 0.029, M.frame);
   tube(fb, BB, SEATJ, 0.03, M.frame); tube(fb, SEATJ, SADDLE.clone().add(V(0,-0.06,0)), 0.016, M.black);
-  for (const sx of [-0.055, 0.055]){ tube(fb, BB, RA, 0.017, M.frame, sx); tube(fb, RA, ROCK2, 0.014, M.frame, sx);
+  for (const sx of [-0.055, 0.055]){ tube(swb, BB, RA, 0.017, M.frame, sx); tube(fb, RA, ROCK2, 0.014, M.frame, sx);
     fb.add(new THREE.BoxGeometry(0.012, 0.05, 0.2), M.black, between(ROCK.clone().add(V(sx*0.8,0,0)), ROCK2.clone().add(V(sx*0.8,0,0)))); }
   fb.add(new THREE.BoxGeometry(0.05, 0.05, 0.1), M.frame, at(0, 0.32, 0.04));           // BB shell / main pivot
   tube(fb, SHOCK0, ROCK, 0.022, M.black); tube(fb, SHOCK0.clone().lerp(ROCK, 0.45), ROCK, 0.03, M.steel);
@@ -80,9 +83,9 @@ export function buildBikeRider(frameMat){
   fb.add(new THREE.BoxGeometry(0.03, 0.06, 0.08), M.black, at(-0.085, RA.y + 0.09, RA.z - 0.06));
   // fork (steer group): crown, stanchions, lowers, arch, steerer; stem, riser bar, grips, levers; front caliper
   sb.add(new THREE.BoxGeometry(0.2, 0.045, 0.07), M.black, new THREE.Matrix4().compose(CROWN, new THREE.Quaternion().setFromUnitVectors(UP, AX), V(1,1,1)));
-  for (const sx of [-0.085, 0.085]){ const s0 = CROWN.clone(), s1 = onAxis(0.2); tube(sb, s0, s1, 0.018, M.gold, sx, 14); tube(sb, onAxis(0.26), FA, 0.027, M.lower, sx, 14);
-    sb.add(new THREE.CylinderGeometry(0.03, 0.03, 0.03, 12), M.lower, new THREE.Matrix4().compose(onAxis(0.26).add(V(sx,0,0)), new THREE.Quaternion().setFromUnitVectors(UP, AX), V(1,1,1))); }
-  sb.add(new THREE.TorusGeometry(0.085, 0.014, 6, 16, Math.PI), M.lower, new THREE.Matrix4().compose(onAxis(0.3), new THREE.Quaternion().setFromUnitVectors(V(0,1,0), AX).multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI/2, 0, 0))), V(1,1,1)));
+  for (const sx of [-0.085, 0.085]){ const s0 = CROWN.clone(), s1 = onAxis(0.2); tube(sb, s0, s1, 0.018, M.gold, sx, 14); tube(lb, onAxis(0.26), FA, 0.027, M.lower, sx, 14);
+    lb.add(new THREE.CylinderGeometry(0.03, 0.03, 0.03, 12), M.lower, new THREE.Matrix4().compose(onAxis(0.26).add(V(sx,0,0)), new THREE.Quaternion().setFromUnitVectors(UP, AX), V(1,1,1))); }
+  lb.add(new THREE.TorusGeometry(0.085, 0.014, 6, 16, Math.PI), M.lower, new THREE.Matrix4().compose(onAxis(0.3), new THREE.Quaternion().setFromUnitVectors(V(0,1,0), AX).multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI/2, 0, 0))), V(1,1,1)));
   tube(sb, CROWN, STEM, 0.017, M.black);
   const BARC = STEM.clone().add(V(0, 0.03, -0.05)); sb.add(new THREE.BoxGeometry(0.045, 0.04, 0.07), M.black, at(0, STEM.y + 0.015, STEM.z - 0.03));
   const barPts = [V(-0.39, 0.03, 0.03), V(-0.22, 0.03, 0.01), V(-0.08, 0, 0), V(0.08, 0, 0), V(0.22, 0.03, 0.01), V(0.39, 0.03, 0.03)].map(p => p.add(BARC));
@@ -90,7 +93,7 @@ export function buildBikeRider(frameMat){
   const GRIP = [V(-0.34, 0, 0).add(barPts[0]).sub(V(-0.34,0,0)), barPts[5].clone()].map(p => p.clone().add(V(p.x < 0 ? 0.04 : -0.04, 0, 0)));
   for (const g of GRIP){ sb.add(new THREE.CylinderGeometry(0.017, 0.017, 0.13, 10), M.rubber, at(g.x, g.y, g.z, 0, 0, Math.PI/2));
     sb.add(new THREE.BoxGeometry(0.11, 0.012, 0.025), M.alu, at(g.x*0.78, g.y + 0.005, g.z - 0.06, 0, Math.sign(g.x)*0.35, 0)); }
-  sb.add(new THREE.BoxGeometry(0.03, 0.06, 0.08), M.black, at(-0.1, FA.y + 0.09, FA.z + 0.07));
+  lb.add(new THREE.BoxGeometry(0.03, 0.06, 0.08), M.black, at(-0.1, FA.y + 0.09, FA.z + 0.07));
   // wheels: knobby tyre, rim, 28 spokes, hub, 203/180 mm rotors
   const wheels = [];
   const makeWheel = (center, parent, rear) => { const w = new THREE.Group(); w.position.copy(center); parent.add(w); const wb = new Bucket();
@@ -105,12 +108,12 @@ export function buildBikeRider(frameMat){
     const rr = rear ? 0.09 : 0.1; wb.add(new THREE.CylinderGeometry(rr, rr, 0.003, 32), M.steel, at(-0.072, 0, 0, 0, 0, Math.PI/2)); wb.add(new THREE.CylinderGeometry(0.045, 0.045, 0.005, 6), M.black, at(-0.072, 0, 0, 0, 0, Math.PI/2));
     if (rear) for (let k = 0; k < 9; k++) wb.add(new THREE.CylinderGeometry(0.02 + k*0.0048, 0.02 + k*0.0048, 0.003, 20), M.steel, at(0.04 + k*0.004, 0, 0, 0, 0, Math.PI/2));
     wb.build(w); wheels.push(w); };
-  makeWheel(FA, steerG, false); makeWheel(RA, frameG, true);
+  makeWheel(FA, forkLow, false); makeWheel(RA, swingIn, true);
   // crankset: arms + flat pedals with pins (rotating group on the frame)
   const crank = new THREE.Group(); crank.position.copy(BB); frameG.add(crank); const pedals = [];
   { const cb = new Bucket(); for (const s of [1, -1]) cb.add(new THREE.BoxGeometry(0.018, 0.17, 0.03), M.black, at(s*0.1, -s*0.085, 0)); cb.add(new THREE.CylinderGeometry(0.012, 0.012, 0.22, 8), M.steel, at(0,0,0,0,0,Math.PI/2)); cb.build(crank);
     for (const s of [-1, 1]){ const p = new THREE.Group(); p.position.set(s*0.165, -s*0.17, 0); crank.add(p); const pb = new Bucket(); pb.add(new THREE.BoxGeometry(0.1, 0.018, 0.1), M.black); for (let k = 0; k < 8; k++) pb.add(new THREE.CylinderGeometry(0.003, 0.003, 0.03, 4), M.steel, at(-0.04 + (k%4)*0.027, 0, k < 4 ? -0.045 : 0.045)); pb.build(p); pedals.push(p); } }
-  fb.build(frameG); sb.build(steerG);
+  fb.build(frameG); sb.build(steerG); lb.build(forkLow); swb.build(swingIn);
 
   // ---- rider: ~1.78 m adult. tapered lathe limbs placed from solved joint positions ----
   // segment lengths (Winter's anthropometrics x 1.78 m): thigh 0.245H, shank+ankle 0.285H, upper arm 0.186H, forearm 0.146H
@@ -264,5 +267,8 @@ export function buildBikeRider(frameMat){
     root.rotation.x = tilt;   // tuck no-hander: bike pulled up into the lap
   }
   for (const k of ['frame','jersey','helmet']) patternize(M[k]);
-  return { root, wheels, update, POSES, TRICK_OF, M, bean, crank: () => crankA };
+  const armLen = RA.clone().sub(BB).length();
+  // f, r = travel used (0..1). Returns how far each axle moved up in bike space so the caller can keep the tyres on the ground
+  const setSusp = (f, r) => { forkLow.position.copy(AX).multiplyScalar(f*0.16); swing.rotation.x = -Math.asin(Math.min(0.9, r*0.15/armLen)); return [f*0.16*AX.y, r*0.15]; };
+  return { root, wheels, update, setSusp, head, POSES, TRICK_OF, M, bean, crank: () => crankA };
 }
