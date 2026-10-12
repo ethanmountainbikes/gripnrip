@@ -48,6 +48,10 @@ const TRAIL_DEFS = [
   {name:'Freeride Ridge',     color:'#111111', start:[240,-520],  goal:[760,-560], grade:0.32, kind:'freeride'},
   {name:'North Face',         color:'#7a2cff', start:[165,-525],  goal:[60,-1060], grade:0.34, startYaw:0, kind:'freeride'},
   {name:'Forest Singletrack', color:'#2fae4a', start:[-700,200],  goal:[-560,900], grade:0.11, kind:'flow'},
+  {name:'Rock Garden',        color:'#8a8a8a', start:[900,-750],  goal:[1000,-380], grade:0.18, kind:'tech'},
+  {name:'Drop Zone',          color:'#c0392b', start:[-450,-800], goal:[-850,-560], grade:0.16, kind:'drops'},
+  {name:'Meadow Flow',        color:'#1abc9c', start:[-560,250],  goal:[-330,120],  grade:0.10, kind:'flow'},
+  {name:'Pump Line',          color:'#f1c40f', start:[750,450],   goal:[1000,720],  grade:0.08, kind:'jumps'},
   {name:'Hilltop Jumps',      color:'#ff9a1a', start:[680,380],   goal:[620,840],  grade:0.09, kind:'jumps'},
 ];
 function walk(def){
@@ -107,7 +111,7 @@ function addFeature(kind, x, z, yaw, hw, prof, trail){
 // trail features: only on straight-ish downhill sections
 for (const tr of trails){
   const n = tr.pts.length;
-  const spacing = tr.kind==='dh' ? 70 : tr.kind==='freeride' ? 60 : tr.kind==='jumps' ? 32 : 80;   // run-out after each feature
+  const spacing = tr.kind==='tech' ? 40 : tr.kind==='drops' ? 60 : tr.kind==='dh' ? 70 : tr.kind==='freeride' ? 60 : tr.kind==='jumps' ? 32 : 80;   // run-out after each feature
   let i = 40, k = 0;
   while (i < n-30){
     const turn = Math.abs(Math.atan2(Math.sin(tr.yaw[i+12]-tr.yaw[i]), Math.cos(tr.yaw[i+12]-tr.yaw[i])));
@@ -115,7 +119,9 @@ for (const tr of trails){
     if (turn < 0.18 && sl > 0.04){
       const [x,z] = tr.pts[i], yaw = tr.yaw[i+2];
       let f;
-      if (tr.kind==='jumps') f = addFeature('table', x, z, yaw, 2.4, PROF.table(1.3+0.3*(k%3), 4.5, 3+(k%2)*1.5, 4.5), tr.id);
+      if (tr.kind==='tech') f = k%2 ? addFeature('drop', x, z, yaw, 1.4, PROF.drop(0.8, 3, 2), tr.id) : addFeature('table', x, z, yaw, 2.2, PROF.table(0.7, 3, 2, 3), tr.id);
+      else if (tr.kind==='drops') f = addFeature('drop', x, z, yaw, 1.8, PROF.drop(1.6+0.3*(k%3), 6, 3), tr.id);
+      else if (tr.kind==='jumps') f = addFeature('table', x, z, yaw, 2.4, PROF.table(1.3+0.3*(k%3), 4.5, 3+(k%2)*1.5, 4.5), tr.id);
       else if (tr.kind==='freeride') f = k%3===2 ? addFeature('drop', x, z, yaw, 1.6, PROF.drop(1.6+0.2*(k%2), 6, 3), tr.id)
                                               : addFeature('kicker', x, z, yaw, KW, PROF.kicker(KH+0.4*(k%2), KL+0.8), tr.id);
       else f = addFeature('kicker', x, z, yaw, KW, PROF.kicker(KH, KL), tr.id);
@@ -218,12 +224,7 @@ export function nearTrees(x, z){
 const tStart = (tr, s=12) => { const i = Math.round(s/2); return {x:tr.pts[i][0], z:tr.pts[i][1], yaw:tr.yaw[i]}; };
 const parkYaw = Math.atan2(-PARK.dir[0], -PARK.dir[1]);
 export const spots = [
-  {name:'Summit · Summit DH', ...tStart(trails[0])},
-  {name:'Flow Line', ...tStart(trails[1])},
-  {name:'Freeride Ridge', ...tStart(trails[2])},
-  {name:'North Face (freeride)', ...tStart(trails[3])},
-  {name:'Forest Singletrack', ...tStart(trails[4])},
-  {name:'Hilltop Jumps', ...tStart(trails[5])},
+  ...trails.map(tr => ({name: tr.id===0 ? 'Summit · Summit DH' : tr.name, trail:tr.id, ...tStart(tr)})),
   {name:'Dirt Jump Park', x:PARK.x - PARK.dir[0]*74, z:PARK.z - PARK.dir[1]*74 - 10*PARK.dir[0], yaw:parkYaw},
   {name:'Valley Meadow (free roam)', x:-60, z:300, yaw:Math.PI},
 ];

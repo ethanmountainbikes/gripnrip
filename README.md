@@ -22,7 +22,7 @@ A low-poly open-world mountain-bike game in the browser, inspired by Descenders 
 | Reset camera | X | Square | X |
 | Pause | Menu | Options | P / Esc |
 | Help panel | View | Share | H |
-| Teleport to previous / next spot | D-pad ← / → | D-pad ← / → | [ / ] (or , / .), 1–8 jumps straight to a spot |
+| Teleport to previous / next spot | D-pad ← / → | D-pad ← / → | [ / ] (or , / .), 1–9 and 0 jump straight to spots 1–10 |
 | Start / restart (menus) | A | Cross | Enter / Space |
 
 This follows Descenders' published default controller bindings. The camera actions are simplified (there are 3 chase distances), and Descenders' song, UI and freeride respawn-marker combos aren't included.
@@ -39,9 +39,10 @@ Controller support has been checked against an Xbox One pad's layout in Chrome, 
 ## Open world
 - A 2.4 km × 2.4 km map (about 5.8 km²) with a 340 m mountain, rolling hills and a valley. Detailed terrain streams in around you in 100 m chunks, and a low-detail version covers the rest of the map out to the horizon.
 - You can ride anywhere. Grass and hillsides are slower than dirt, and the trees are solid.
-- **Trails** (colour-coded marker poles and a START/FINISH arch on each): Summit DH (red), Flow Line (blue), Freeride Ridge (black, big kickers and drops), North Face (purple, freeride), Forest Singletrack (green) and Hilltop Jumps (orange, dirt tables).
+- **Trails** (colour-coded marker poles and a START/FINISH arch on each): Summit DH (red), Flow Line (blue), Freeride Ridge (black, big kickers and drops), North Face (purple, freeride), Forest Singletrack (green), Rock Garden (grey, tech: small drops and rollers), Drop Zone (dark red, wooden drops), Meadow Flow (teal, flow), Pump Line (yellow, dirt tables) and Hilltop Jumps (orange, dirt tables). No trails cross.
 - **Dirt Jump Park** in the valley, with four lines: Mellow Tables, Pro Tables, Doubles and Big Kickers.
-- **Teleport spots:** 1 Summit, 2 Flow Line, 3 Freeride Ridge, 4 North Face, 5 Forest Singletrack, 6 Hilltop Jumps, 7 Dirt Jump Park, 8 Valley Meadow. Use the D-pad ← → or [ ] to cycle, or press 1–8. On the title screen the D-pad picks where you drop in.
+- **Health and unlocks:** your 3 hearts only count during a trail run (START arch to FINISH arch) and refill when a run starts. Losing them all ends that run and puts you back at the trail's start. In free roam a crash just respawns you. Trail teleport spots unlock after you finish that trail once (saved in the browser). Flow Line (where you spawn), the Dirt Jump Park and Valley Meadow are always unlocked.
+- **Teleport spots:** one at the top of each trail (1–10), then 11 Dirt Jump Park and 12 Valley Meadow. The minimap always shows every trail and spot; locked ones are dimmed/dashed with a lock. Use the D-pad ← → or [ ] to cycle (locked spots are skipped), or press 1–9 / 0. On the title screen the D-pad picks where you drop in.
 - Riding through a trail's START arch starts its clock and the progress bar. Reaching its FINISH arch gives you rep and records your best time. The minimap (top right) shows the trails, the numbered spots and you.
 - Respawn (B / R) puts you back where you were riding safely about 1.5 s earlier.
 

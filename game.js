@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL } from './world.js';
 
 const G = 9.81;
+const G_AIR = 9.81*1.35;   // heavier feel in the air: realistic MTB airtime (~0.6-1.0 s off a kicker at 30 km/h)
 let seed = 7; const rnd = () => (seed = (seed*16807) % 2147483647) / 2147483647;
 
 // ---------- Renderer / scene ----------
@@ -21,7 +22,7 @@ scene.add(new THREE.HemisphereLight(0xdff0ff, 0x4a6030, 1.1));
 const sun = new THREE.DirectionalLight(0xfff1d6, 2.0);
 sun.castShadow = true; sun.shadow.mapSize.set(1024,1024);
 Object.assign(sun.shadow.camera, {left:-35,right:35,top:35,bottom:-35,near:1,far:150});
-sun.shadow.bias = -0.0008;
+sun.shadow.bias = -0.0005; sun.shadow.normalBias = 0.06;   // no shadow acne / striping on the dirt
 scene.add(sun, sun.target);
 
 // sky gradient dome
@@ -137,7 +138,12 @@ const farU = { value: new THREE.Vector3(0,0,0) };
     x.fillStyle='#b98450'; x.fillRect(0,0,64,64); x.fillStyle='#7a5230'; for(let i=0;i<64;i+=8) x.fillRect(0,i,64,1.5);
     const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; return t; })();
   const woodMat = new THREE.MeshStandardMaterial({map:plankTex, roughness:0.9, flatShading:true, side:THREE.DoubleSide});
-  const dirtMat = new THREE.MeshLambertMaterial({vertexColors:true});
+  const dirtMat = new THREE.MeshLambertMaterial({vertexColors:true, polygonOffset:true, polygonOffsetFactor:-1, polygonOffsetUnits:-2});
+  // height of the rendered terrain mesh itself (same 2 m grid and triangle split as the chunks), so jumps sit exactly on it with no z-fighting
+  const meshH = (x, z) => { const k = Math.floor(x/RES), r = Math.floor(z/RES), fx = x/RES-k, fz = z/RES-r;
+    const ha = terrainH(k*RES, r*RES), hb = terrainH((k+1)*RES, r*RES), he = terrainH(k*RES, (r+1)*RES);
+    if (fx + fz <= 1) return ha + (hb-ha)*fx + (he-ha)*fz;
+    const hf = terrainH((k+1)*RES, (r+1)*RES); return hf + (he-hf)*(1-fx) + (hb-hf)*(1-fz); };
   const wv=[], wuv=[], wi=[], dv=[], dc=[], di=[]; const c = new THREE.Color();
   for (const f of features){
     const at = (t,u) => [f.x + f.dx*t + f.dz*u, f.z + f.dz*t - f.dx*u];
@@ -150,9 +156,12 @@ const farU = { value: new THREE.Vector3(0,0,0) };
     } else {
       const NT = Math.ceil(f.L/0.4), UW = f.hw+1.3, NU = Math.ceil(2*UW/0.4), b0 = dv.length/3;
       for (let i=0;i<=NT;i++) for (let k=0;k<=NU;k++){ const t = i/NT*f.L, u = -UW + k/NU*2*UW, [x,z] = at(t,u), fh = featH(x,z);
-        dv.push(x, terrainH(x,z) + fh + (fh > 0.01 ? 0.03 : -0.05), z);
+        const edge = k === 0 || k === NU || i === 0 || i === NT;      // outer rim tucks just under the ground
+        dv.push(x, meshH(x,z) + fh + (edge ? -0.04 : 0.02), z);
         c.copy(C_DIRT).lerp(C_DIRT2, 0.3 + 0.4*Math.sin(t*1.7+u)*Math.sin(u*2.1)); if (fh < 0.05) c.lerp(C_GRASS, 0.0); dc.push(c.r,c.g,c.b); }
-      for (let i=0;i<NT;i++) for (let k=0;k<NU;k++){ const a = b0+i*(NU+1)+k, b = a+1, e = a+NU+1, g = e+1; di.push(a,b,e, b,g,e); }
+      // wind triangles so faces point up (correct normals -> no black sides)
+      const up = (() => { const [x0,z0] = at(0,-UW), [x1,z1] = at(0,UW), [x2,z2] = at(1,-UW); return ((x1-x0)*(z2-z0) - (z1-z0)*(x2-x0)) < 0; })();
+      for (let i=0;i<NT;i++) for (let k=0;k<NU;k++){ const a = b0+i*(NU+1)+k, b = a+1, e = a+NU+1, g = e+1; if (up) di.push(a,b,e, b,g,e); else di.push(a,e,b, b,e,g); }
     }
   }
   const wg = new THREE.BufferGeometry(); wg.setAttribute('position', new THREE.Float32BufferAttribute(wv,3)); wg.setAttribute('uv', new THREE.Float32BufferAttribute(wuv,2)); wg.setIndex(wi); wg.computeVertexNormals();
@@ -329,9 +338,12 @@ function resetGame(){
 }
 function crash(reason){ S.lastCrash = reason;
   if (S.crashT>0) return;
-  S.lives--; S.crashT = 2.0; S.air = false; flash(S.lives>0 ? 'BAIL!' : 'GAME OVER', 2);
-  trickEl.textContent = reason;
-  if (S.lives <= 0){ S.state='over'; setTimeout(()=>{ showOverlay('GAME OVER', `Rep: ${S.score}<br>Press <b>A</b> / <b>Enter</b> to try again`); }, 1600); }
+  S.crashT = 2.0; S.air = false; trickEl.textContent = reason;
+  // health only counts during a trail run; in free roam a crash just respawns you
+  if (S.run){ S.lives--;
+    if (S.lives <= 0){ const tr = trails[S.run.t]; S.failedRun = S.run.t; S.run = null; flash('RUN OVER', 2); toast(`💀 Out of health — ${tr.name} run ended. Back to the start.`); }
+    else flash('BAIL!', 2); }
+  else flash('BAIL!', 1.5);
 }
 function showOverlay(title,msg){ $('overlay').classList.remove('hidden'); $('overlayBox').querySelector('h1').textContent=title; $('overlayMsg').innerHTML=msg; }
 function togglePause(){ if (S.state!=='riding') return; S.paused=!S.paused; if (S.paused) showOverlay('PAUSED','Press <b>Menu</b> / <b>P</b> to resume'); else $('overlay').classList.add('hidden'); }
@@ -345,23 +357,34 @@ function onPress(code){
   if ((code==='KeyR'||code==='B') && S.state==='riding' && !S.paused) { respawnSafe(); flash('RESPAWN',0.8); }
   // teleport between spots: D-pad ← → on the controller, [ ] / , . or 1-8 on the keyboard
   if (S.state==='riding' && !S.paused){
-    if (code==='DL'||code==='BracketLeft'||code==='Comma') teleport(spotI-1);
-    if (code==='DR'||code==='BracketRight'||code==='Period') teleport(spotI+1);
-    const m = /^Digit([1-9])$/.exec(code); if (m && +m[1] <= spots.length) teleport(+m[1]-1);
+    if (code==='DL'||code==='BracketLeft'||code==='Comma') teleport(nextOpen(spotI,-1));
+    if (code==='DR'||code==='BracketRight'||code==='Period') teleport(nextOpen(spotI,1));
+    const m = /^Digit([0-9])$/.exec(code); if (m && (+m[1]||10) <= spots.length){ const j = (+m[1]||10)-1; if (isOpen(j)) teleport(j); else toast(`🔒 ${spots[j].name} is locked — finish ${spotTrail(j).name} once to unlock it`); }
   } else if (S.state==='menu' && (code==='DL'||code==='DR'||code==='BracketLeft'||code==='BracketRight')){
-    spotI = (spotI + (code==='DL'||code==='BracketLeft' ? -1 : 1) + spots.length) % spots.length; $('overlayMsg').innerHTML = menuMsg(); }
+    spotI = nextOpen(spotI, code==='DL'||code==='BracketLeft' ? -1 : 1); $('overlayMsg').innerHTML = menuMsg(); }
 }
 let camMode = 0;
 // ---------- open world: spots, safe respawn, trail runs ----------
-let spotI = 0;
+// teleport unlocks: a trail's spot unlocks after you finish that trail once. Flow Line, the park and the meadow are always open.
+const UKEY = 'trailDescent.unlocked';
+const unlocked = new Set((() => { try { return JSON.parse(localStorage.getItem(UKEY) || '[]'); } catch(e){ return []; } })());
+function saveUnlocks(){ try { localStorage.setItem(UKEY, JSON.stringify([...unlocked])); } catch(e){} }
+const spotTrail = i => i < trails.length ? trails[i] : null;
+const ALWAYS = new Set(['Flow Line']);
+const isOpen = i => { const tr = spotTrail(i); return !tr || ALWAYS.has(tr.name) || unlocked.has(tr.name); };
+const nextOpen = (from, dir) => { for (let k=1;k<=spots.length;k++){ const j = ((from + dir*k) % spots.length + spots.length) % spots.length; if (isOpen(j)) return j; } return from; };
+let spotI = 1;   // spawn at Flow Line
 const menuMsg = () => `Press <b>A</b> / <b>Enter</b> to drop in at <b>${spots[spotI].name}</b><br><small>D-pad ← → / [ ] to pick a spot</small>`;
 function teleport(i, quiet){
   spotI = (i + spots.length) % spots.length; const s = spots[spotI];
   updateChunks(s.x, s.z, 1e9, 160);      // build the ground around the spot right away
   placeAt(s.x, s.z, s.yaw); S.crumbs = []; S.crumbT = 0; S.run = null; camInit = false;
-  if (!quiet){ flash(s.name, 1.6); } toast(`📍 ${spotI+1}/${spots.length} ${s.name}  ·  D-pad ← → to teleport`);
+  if (!quiet){ flash(s.name, 1.6); } toast(`📍 ${spotI+1}/${spots.length} ${s.name}  ·  ${spots.filter((_,j)=>isOpen(j)).length} spots unlocked  ·  D-pad ← → to teleport`);
 }
-function respawnSafe(){ // back to where you were riding safely ~1.5 s ago (Mavrix-style), facing the way you were going
+function respawnSafe(){
+  if (S.failedRun !== undefined && S.failedRun !== null){ const tr = trails[S.failedRun]; S.failedRun = null;   // failed run: back to just above that trail's START arch
+    placeAt(tr.pts[0][0], tr.pts[0][1], tr.yaw[0]); S.crumbs = []; S.crumbT = 0; camInit = false; return; }
+  // back to where you were riding safely ~1.5 s ago (Mavrix-style), facing the way you were going
   const c = (S.crumbs||[]).find(c => S.time - c.t >= 1.5) || (S.crumbs||[])[0];
   if (c) placeAt(c.x, c.z, c.yaw); else placeAt(S.x, S.z, S.travel ?? S.yaw);
   S.crumbs = []; S.crumbT = 0;
@@ -375,11 +398,12 @@ function trackWorld(dt){
   for (const n of near) if (n.d <= W+1.5 && (!cur || n.d < cur.d)) cur = n;
   S.onTrailName = cur ? trails[cur.t].name : inPark(S.x,S.z) ? 'Dirt Jump Park' : '';
   if (cur){ const tr = trails[cur.t];
-    if (cur.s < 18 && (!S.run || S.run.t !== cur.t)) { S.run = {t:cur.t, start:S.time, s:cur.s}; trickEl.textContent = `⏱ ${tr.name} — run started`; S.trickMsgT = 2; }
+    if (cur.s < 18 && (!S.run || S.run.t !== cur.t)) { S.run = {t:cur.t, start:S.time, s:cur.s}; S.lives = 3; trickEl.textContent = `⏱ ${tr.name} — run started`; S.trickMsgT = 2; }
     if (S.run && S.run.t === cur.t){ S.run.s = Math.max(S.run.s, cur.s);
       if (cur.s > tr.len - 8){ const time = S.time - S.run.start, bonus = 1000 + Math.round(tr.len/2);
         S.finishes++; S.score += bonus; flash('FINISH!', 2.5); trickEl.textContent = `${tr.name} in ${fmtTime(time)}  +${bonus}`; S.trickMsgT = 3.5;
         S.best ||= {}; if (!S.best[tr.name] || time < S.best[tr.name]){ S.best[tr.name] = time; toast(`🏁 New best on ${tr.name}: ${fmtTime(time)}`); }
+        if (!unlocked.has(tr.name)){ unlocked.add(tr.name); saveUnlocks(); setTimeout(()=>toast(`🔓 Unlocked: ${tr.name} — teleport there any time`), 1200); }
         S.run = null; } } }
   // keep inside the map
   const lim = HALF - 40; if (Math.abs(S.x) > lim || Math.abs(S.z) > lim){ S.x = Math.max(-lim, Math.min(lim, S.x)); S.z = Math.max(-lim, Math.min(lim, S.z)); S.speed *= 0.5; if (!S.air) S.y = groundH(S.x,S.z); }
@@ -413,7 +437,7 @@ function step(dt, inp){
     if (inp.pumpHold) { S.preload = Math.min(1, S.preload + dt*2.2); S.hopWin = 0.35; }
     let pop = 0;
     if (!inp.pumpHold){ S.hopWin = (S.hopWin||0) - dt;
-      if (inp.pop && S.preload > 0.05 && S.hopWin > 0){ pop = 2.5 + S.preload*4.5; S.preload = 0; }
+      if (inp.pop && S.preload > 0.05 && S.hopWin > 0){ pop = 1.2 + S.preload*2.0; /* bunny hop ~0.3-0.5 m */ S.preload = 0; }
       else S.preload = Math.max(0, S.preload - dt*3); }
     const cr = (S.preload - prevPre)/dt;           // >0 compressing, <0 extending
     const pumpA = cr > 0 ? cr*(Math.max(0,-slope)*9 - Math.max(0,slope)*4) : -cr*(Math.max(0,slope)*3.5 - Math.max(0,-slope)*1.5);
@@ -440,7 +464,7 @@ function step(dt, inp){
     const crestG = inp.counter ? G*2.2 : G*1.15;   // counter-pump (RS up) keeps you glued over rollers
     let crest = S.gf > 3 && S.landCool <= 0 && (S.lastVyG - vyG)/dt > crestG && S.speed > 6;
     if (crest){ // only leave the ground if the ballistic path really clears the terrain (no micro-hops)
-      let clear = 0; for (let t=0.03; t<=0.18; t+=0.03){ const bx=S.x+S.vx*t, bz=S.z+S.vz*t, by=S.y+S.lastVyG*t-0.5*G*t*t; clear=Math.max(clear, by-groundH(bx,bz)); }
+      let clear = 0; for (let t=0.03; t<=0.18; t+=0.03){ const bx=S.x+S.vx*t, bz=S.z+S.vz*t, by=S.y+S.lastVyG*t-0.5*G_AIR*t*t; clear=Math.max(clear, by-groundH(bx,bz)); }
       if (clear < 0.4) crest = false; }
     if (pop > 0 || crest){
       S.air = true; S.airT = 0; S.vy = S.lastVyG + pop; S.takeoffPitch = S.pitch; S.spin = 0; S.popped = pop > 0;
@@ -456,7 +480,7 @@ function step(dt, inp){
     S.dust = (S.sliding ? 1 : 0) + (inp.brake > 0.5 && S.speed > 6 ? 0.5 : 0) + (!onTrail && S.speed > 4 ? 0.6 : 0);
     if (S.speed > 4) for (const t of nearTrees(S.x, S.z)) if ((t.x-S.x)**2 + (t.z-S.z)**2 < 0.55) { crash('Hit a tree!'); return; }
   } else {
-    S.airT += dt; S.vy -= G*dt;
+    S.airT += dt; S.vy -= G_AIR*dt;
     S.x += S.vx*dt; S.z += S.vz*dt; S.y += S.vy*dt;
     // left stick: analog spin / flip with rotational inertia
     const spinIn = inp.steer, ty = inp.lean;
@@ -580,6 +604,7 @@ function frame(){
   $('airVal').textContent = (S.air && S.airT > 0.1 ? S.airT : 0).toFixed(1)+'s';
   $('airBest').textContent = `best ${S.bestAir.toFixed(1)}s`;
   $('scoreVal').textContent = S.score.toLocaleString();
+  $('lives').style.display = S.run ? '' : 'none';
   $('livesVal').textContent = S.lives>0 ? '♥ '.repeat(S.lives).trim() : '—';
   const run = S.run && trails[S.run.t];
   $('progressBar').style.width = run ? Math.min(100, S.run.s/run.len*100) + '%' : '0%';
@@ -601,17 +626,25 @@ const mm = $('minimap'), mmx = mm.getContext('2d'), MMS = mm.width, mmBg = docum
     img.data[k] = v*0.75+band; img.data[k+1] = v*0.95+band; img.data[k+2] = v*0.7; img.data[k+3] = 255; }
   x.putImageData(img, 0, 0);
   const P = (wx,wz) => [(wx+HALF)/sc, (wz+HALF)/sc];
-  for (const tr of trails){ x.strokeStyle = tr.color; x.lineWidth = 2.2; x.beginPath(); tr.pts.forEach((p,i)=>{ const [a,b] = P(p[0],p[1]); i ? x.lineTo(a,b) : x.moveTo(a,b); }); x.stroke(); }
+  for (const tr of trails){ const pa = new Path2D(); tr.pts.forEach((p,i)=>{ if (i%3 && i < tr.pts.length-1) return; const [a,b] = P(p[0],p[1]); i ? pa.lineTo(a,b) : pa.moveTo(a,b); }); tr.mmPath = pa; }
   x.fillStyle = 'rgba(160,110,60,.9)'; { const [a,b] = P(PARK.x,PARK.z); x.beginPath(); x.arc(a,b,PARK.r/sc,0,7); x.fill(); }
-  x.fillStyle = '#fff'; x.font = 'bold 9px Arial'; spots.forEach((s,i)=>{ const [a,b] = P(s.x,s.z); x.fillText(String(i+1), a-2.5, b+3); }); }
+}
 function drawMinimap(){
   mmx.drawImage(mmBg, 0, 0); const sc = 2*HALF/MMS, a = (S.x+HALF)/sc, b = (S.z+HALF)/sc, yw = S.yaw + (S.spin||0);
+  for (const [i,tr] of trails.entries()){ const open = isOpen(i);   // every trail is always shown; locked ones dashed and dimmed
+    mmx.globalAlpha = open ? 1 : 0.55; mmx.setLineDash(open ? [] : [4,3]); mmx.strokeStyle = tr.color; mmx.lineWidth = open ? 2.4 : 1.8; mmx.stroke(tr.mmPath); }
+  mmx.globalAlpha = 1; mmx.setLineDash([]);
+  mmx.font = 'bold 10px Arial'; mmx.textAlign = 'center';
+  spots.forEach((s,i)=>{ const px = (s.x+HALF)/sc, pz = (s.z+HALF)/sc, open = isOpen(i);      // unlocked spots: white numbered dot; locked: grey with a lock
+    mmx.fillStyle = open ? '#fff' : 'rgba(60,60,60,.85)'; mmx.beginPath(); mmx.arc(px, pz, 6, 0, 7); mmx.fill();
+    mmx.fillStyle = open ? '#000' : '#bbb'; mmx.fillText(open ? String(i+1) : '🔒', px, pz+3.5); });
+  mmx.textAlign = 'start';
   mmx.save(); mmx.translate(a,b); mmx.rotate(-yw); mmx.fillStyle = '#ffd84d'; mmx.strokeStyle = '#000'; mmx.lineWidth = 1;
   mmx.beginPath(); mmx.moveTo(0,-7); mmx.lineTo(4.5,5); mmx.lineTo(-4.5,5); mmx.closePath(); mmx.fill(); mmx.stroke(); mmx.restore();
 }
 showOverlay('TRAIL DESCENT', menuMsg());
-teleport(0, true);
+teleport(spotI, true);
 window.__game = S; window.__readInput = readInput; window.__groundH = groundH; window.__world = { trails, features, spots, PARK, terrainH, featH, isDirt, nearTrails, base, inPark };
-window.__teleport = i => teleport(i); window.__chunks = () => chunks.size; window.__renderer = renderer;
+window.__teleport = i => teleport(i); window.__unlocked = unlocked; window.__isOpen = isOpen; window.__chunks = () => chunks.size; window.__renderer = renderer;
 window.__sim = (secs, inp) => { const h=1/120; const base={steer:0,pedal:0,brake:0,jump:false,tx:0,ty:0}; for(let t=0;t<secs;t+=h){ step(h, Object.assign({}, base, typeof inp==='function'?inp(t):inp)); trackWorld(h); } return {x:S.x, z:S.z, kmh:S.speed*3.6, air:S.air, lives:S.lives, clean:S.clean, score:S.score}; };
 frame();
