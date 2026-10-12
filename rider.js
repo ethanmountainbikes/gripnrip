@@ -46,8 +46,8 @@ export function buildBikeRider(frameMat){
   const M = { rubber: std(0x151515, 0.95), black: std(0x1c1c1e, 0.55, 0.3), alu: std(0xb8bcc2, 0.3, 0.9), steel: std(0x8a8f96, 0.35, 0.9),
     gold: std(0xc9a24a, 0.25, 0.9), lower: std(0x111111, 0.4, 0.4), spring: std(0xff6a00, 0.4, 0.3), saddle: std(0x202020, 0.8),
     jersey: std(0xff7a12, 0.85), jersey2: std(0xf2f2f2, 0.85), pants: std(0x23283a, 0.9), shoe: std(0x2a2a2a, 0.8), sole: std(0x111111, 0.9),
-    glove: std(0x1d1d1d, 0.85), helmet: std(0xf5f5f5, 0.35, 0.1), helmet2: std(0xff7a12, 0.4), visor: std(0x222222, 0.5),
-    lens: new THREE.MeshStandardMaterial({color:0x3a6ea8, roughness:0.05, metalness:0.9}), skin: std(0xd9a27a, 0.7), pad: std(0x333333, 0.8), frame: frameMat };
+    glove: std(0x1d1d1d, 0.85), helmet: std(0x141416, 0.75, 0.05), helmet2: std(0x3a3b40, 0.6), visor: std(0x222222, 0.5),
+    lens: new THREE.MeshStandardMaterial({color:0x3a6ea8, roughness:0.05, metalness:0.9}), skin: std(0xd9a27a, 0.7), pad: std(0x333333, 0.8), strap: std(0x111111, 0.8), cape: new THREE.MeshStandardMaterial({color:0x1f5fbf, roughness:0.7, side:THREE.DoubleSide}), frame: frameMat };
   const root = new THREE.Group();
   // ---- bike geometry (side view anchors) ----
   const R = 0.37, FA = V(0, R, -0.66), RA = V(0, R, 0.59), BB = V(0, 0.33, 0.04);
@@ -138,16 +138,48 @@ export function buildBikeRider(frameMat){
     const shorts = new THREE.Mesh(new THREE.LatheGeometry([[0,-0.07],[0.155,-0.05],[0.182,0.03],[0.168,0.12],[0,0.12]].map(([x,y]) => new THREE.Vector2(x, y)), 20).scale(1, 1, 0.66), M.pants); shorts.castShadow = true; torso.add(shorts);
     for (const s of [-1, 1]){ const d = new THREE.Mesh(new THREE.SphereGeometry(0.06, 12, 10), M.jersey); d.position.set(s*0.2, 0.45, 0); torso.add(d); }   // deltoids
     const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.048, 0.055, 0.1, 10), M.skin); neck.position.y = 0.55; torso.add(neck); }
+  // Buckle Bean extras (shown by the shop skins): cape flap on the back, belt + gold buckle, smiley face decal on the helmet
+  const bean = {};
+  { const cg = new THREE.PlaneGeometry(0.34, 0.5, 1, 4); const p = cg.attributes.position; for (let k = 0; k < p.count; k++){ const y = p.getY(k), x = p.getX(k); p.setX(k, x*(1 + (0.25 - y)*0.6)); p.setZ(k, 0.12 + (0.25 - y)*0.12); } cg.computeVertexNormals();
+    bean.cape = new THREE.Mesh(cg, M.cape); bean.cape.position.y = 0.22; bean.cape.visible = false; torso.add(bean.cape);
+    bean.belt = new THREE.Group(); bean.belt.visible = false; torso.add(bean.belt);
+    const belt = new THREE.Mesh(new THREE.LatheGeometry([[0.178,0.07],[0.18,0.11]].map(([x,y]) => new THREE.Vector2(x, y)), 20).scale(1.02, 1, 0.68), std(0x1a120c, 0.7)); bean.belt.add(belt);
+    const buckle = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.06, 0.015), std(0xf2b705, 0.25, 0.9)); buckle.position.set(0, 0.09, -0.125); bean.belt.add(buckle); }
   const head = new THREE.Group(); root.add(head);
-  { // full-face MTB helmet sized for a ~0.24 m head (1/7.5 of 1.78 m): shell + chin bar + visor peak + goggles
-    const shell = new THREE.Mesh(new THREE.SphereGeometry(0.135, 22, 16).scale(0.95, 1.0, 1.12), M.helmet); shell.castShadow = true; head.add(shell);
-    const stripe = new THREE.Mesh(new THREE.SphereGeometry(0.137, 22, 16, 0, Math.PI*2, 0, 0.55).scale(0.33, 1.0, 1.13), M.helmet2); head.add(stripe);
-    const chin = new THREE.Mesh(new THREE.TorusGeometry(0.1, 0.03, 10, 20, Math.PI).scale(1, 1.15, 1), M.helmet); chin.rotation.set(Math.PI/2 + 0.45, 0, Math.PI); chin.position.set(0, -0.085, -0.045); head.add(chin);
-    const vent = new THREE.Mesh(new THREE.CapsuleGeometry(0.012, 0.05, 3, 8), M.visor); vent.rotation.z = Math.PI/2; vent.position.set(0, -0.11, -0.15); head.add(vent);
-    const peak = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.01, 0.11), M.helmet2); peak.position.set(0, 0.095, -0.17); peak.rotation.x = 0.28; head.add(peak);
-    const band = new THREE.Mesh(new THREE.TorusGeometry(0.136, 0.012, 6, 28).scale(0.96, 1.13, 1), M.black); band.rotation.x = Math.PI/2; band.position.y = 0.015; head.add(band);
-    const lens = new THREE.Mesh(new THREE.CapsuleGeometry(0.024, 0.11, 4, 10), M.lens); lens.rotation.z = Math.PI/2; lens.position.set(0, 0.015, -0.152); head.add(lens);
-    const frame = new THREE.Mesh(new THREE.CapsuleGeometry(0.032, 0.12, 4, 10).scale(1, 1, 0.5), M.black); frame.rotation.z = Math.PI/2; frame.position.set(0, 0.015, -0.142); head.add(frame); }
+  { // black enduro/DH full-face (Leatt-style shape, generic 'SR' branding): faceted crown with vents, big flat peak, angular chin bar with vented mouthpiece, padded eye port
+    const H = (geo, mat, x, y, z, rx = 0, ry = 0, rz = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.set(rx, ry, rz); m.castShadow = true; head.add(m); return m; };
+    const shellG = new THREE.IcosahedronGeometry(0.14, 2).scale(0.96, 0.98, 1.14); shellG.computeVertexNormals();
+    const shell = H(shellG, M.helmet, 0, 0.005, 0.005); shell.material = M.helmet;
+    // faceted crown ridges (angular raised panels)
+    for (const s of [-1, 1]){ H(new THREE.BoxGeometry(0.06, 0.03, 0.2), M.helmet, s*0.055, 0.125, 0.01, 0.12, 0, s*0.28); H(new THREE.BoxGeometry(0.03, 0.05, 0.13), M.helmet, s*0.115, 0.07, -0.03, 0.2, 0, s*0.55); }
+    H(new THREE.BoxGeometry(0.05, 0.028, 0.22), M.helmet, 0, 0.14, 0.0, 0.1);
+    // vent cutouts on the crown and brow
+    for (const [x, z] of [[-0.03, -0.06], [0.03, -0.06], [-0.08, 0.02], [0.08, 0.02], [0, 0.07]]) H(new THREE.BoxGeometry(0.03, 0.012, 0.045), M.visor, x, 0.135 - Math.abs(x)*0.25, z, 0.15);
+    for (const s of [-1, 1]) H(new THREE.BoxGeometry(0.035, 0.022, 0.012), M.visor, s*0.07, 0.07, -0.152, 0, s*0.4);
+    // big flat peak
+    H(new THREE.BoxGeometry(0.25, 0.01, 0.14).translate(0, 0, -0.07), M.helmet, 0, 0.105, -0.11, 0.2);
+    H(new THREE.BoxGeometry(0.03, 0.012, 0.05), M.helmet2, 0.06, 0.112, -0.17, 0.2);   // small coloured accent on the peak
+    // eye port: dark padding visible inside the opening
+    H(new THREE.BoxGeometry(0.19, 0.11, 0.03), M.pad, 0, -0.005, -0.135);
+    // angular chin bar: two cheek wings + a forward-swept nose block with a vented mouthpiece
+    for (const s of [-1, 1]) H(new THREE.BoxGeometry(0.035, 0.085, 0.17), M.helmet, s*0.105, -0.095, -0.1, -0.15, s*0.32);
+    H(new THREE.BoxGeometry(0.14, 0.075, 0.05), M.helmet, 0, -0.118, -0.19, -0.25);
+    H(new THREE.BoxGeometry(0.1, 0.05, 0.04).translate(0, 0, -0.02), M.helmet, 0, -0.08, -0.2, 0.35);
+    for (let k = -1; k <= 1; k++) H(new THREE.BoxGeometry(0.018, 0.04, 0.01), M.visor, k*0.03, -0.115, -0.218, -0.25);
+    H(new THREE.BoxGeometry(0.2, 0.012, 0.13), M.helmet2, 0, -0.158, -0.1);   // lower rim
+    // white side decals: generic triangle logo + 'SR'
+    { const cv = document.createElement('canvas'); cv.width = 256; cv.height = 128; const c = cv.getContext('2d');
+      c.strokeStyle = '#fff'; c.lineWidth = 12; c.beginPath(); c.moveTo(30, 100); c.lineTo(70, 22); c.lineTo(110, 100); c.closePath(); c.stroke();
+      c.fillStyle = '#fff'; c.font = 'italic bold 72px Arial'; c.fillText('SR', 130, 96);
+      const tx = new THREE.CanvasTexture(cv); tx.colorSpace = THREE.SRGBColorSpace; const dm = new THREE.MeshBasicMaterial({map: tx, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2});
+      for (const s of [-1, 1]){ const d = new THREE.Mesh(new THREE.PlaneGeometry(0.12, 0.06), dm); d.position.set(s*0.138, -0.03, 0.02); d.rotation.y = s*Math.PI/2; if (s < 0) d.scale.x = 1; head.add(d); } }
+    const lens = H(new THREE.CapsuleGeometry(0.024, 0.11, 4, 10), M.lens, 0, 0.015, -0.155, 0, 0, Math.PI/2);
+    H(new THREE.CapsuleGeometry(0.032, 0.12, 4, 10).scale(1, 1, 0.5), M.black, 0, 0.015, -0.145, 0, 0, Math.PI/2);
+    H(new THREE.TorusGeometry(0.137, 0.008, 6, 28).scale(0.96, 1.14, 1), M.strap, 0, 0.015, 0.0, Math.PI/2); }   // goggle strap
+  { const cv = document.createElement('canvas'); cv.width = cv.height = 128; const c = cv.getContext('2d'); c.fillStyle = '#1a120c'; c.beginPath(); c.arc(40, 50, 10, 0, 7); c.arc(88, 50, 10, 0, 7); c.fill(); c.lineWidth = 9; c.strokeStyle = '#1a120c'; c.beginPath(); c.arc(64, 64, 34, 0.2*Math.PI, 0.8*Math.PI); c.stroke();
+    const tx = new THREE.CanvasTexture(cv); tx.colorSpace = THREE.SRGBColorSpace; bean.face = new THREE.Group(); bean.face.visible = false; head.add(bean.face);
+    for (const s of [-1, 1]){ const f = new THREE.Mesh(new THREE.PlaneGeometry(0.1, 0.1), new THREE.MeshBasicMaterial({map: tx, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3})); f.position.set(s*0.139, 0.03, -0.01); f.rotation.y = s*Math.PI/2; bean.face.add(f); }
+    const bk = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.04, 0.01), std(0xf2b705, 0.25, 0.9)); bk.position.set(0, 0.03, 0.158); bean.face.add(bk); }
   const hand = [0, 1].map(() => { const g = new THREE.Group(); root.add(g); const p = new THREE.Mesh(new THREE.SphereGeometry(0.042, 12, 10).scale(0.85, 0.6, 1.15), M.glove); p.castShadow = true; g.add(p);
     const f = new THREE.Mesh(new THREE.CapsuleGeometry(0.022, 0.04, 4, 8).scale(1.6, 1, 1), M.glove); f.rotation.x = Math.PI/2; f.position.set(0, -0.012, -0.055); g.add(f);
     const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.034, 0.036, 0.04, 10), M.black); cuff.rotation.x = Math.PI/2; cuff.position.z = 0.045; g.add(cuff); return g; });
@@ -232,5 +264,5 @@ export function buildBikeRider(frameMat){
     root.rotation.x = tilt;   // tuck no-hander: bike pulled up into the lap
   }
   for (const k of ['frame','jersey','helmet']) patternize(M[k]);
-  return { root, wheels, update, POSES, TRICK_OF, M, crank: () => crankA };
+  return { root, wheels, update, POSES, TRICK_OF, M, bean, crank: () => crankA };
 }

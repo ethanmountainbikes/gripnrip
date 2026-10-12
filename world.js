@@ -440,6 +440,10 @@ const CONN_DEFS = RAMP ? [
   [T_(3), tBeg('Boreal Enduro')], [T_(3), tBeg('Drop Zone')], [tEnd('Boreal Enduro'), L_(3)], [tEnd('Drop Zone'), L_(3)],
   [T_(4), [815, -1110], tBeg('Ridgeback Flow')], [T_(4), tBeg('Rock Garden')], [tEnd('Ridgeback Flow'), tBeg('Eastern Traverse')], [tEnd('Rock Garden'), L_(4)], [tEnd('Eastern Traverse'), L_(4)],
 ];
+// paths arrive at a trail start from straight behind the gate (along the trail direction), never from the side
+for (const wp of CONN_DEFS){ const last = wp[wp.length-1], t = trails.find(t => t.pts[0] === last); if (!t) continue;
+  const p0 = t.pts[0], p1 = t.pts[Math.min(4, t.pts.length-1)], dl = Math.hypot(p1[0]-p0[0], p1[1]-p0[1]) || 1, ux = (p1[0]-p0[0])/dl, uz = (p1[1]-p0[1])/dl;
+  wp.splice(wp.length-1, 0, [p0[0] - ux*22, p0[1] - uz*22], [p0[0] - ux*10, p0[1] - uz*10]); }
 export const connectors = CONN_DEFS.map(wp => { const pts = [];
   for (let k = 0; k < wp.length-1; k++){ const [ax,az] = wp[k], [bx,bz] = wp[k+1], n = Math.max(1, Math.ceil(Math.hypot(bx-ax, bz-az)/2));
     for (let i = (k ? 1 : 0); i <= n; i++){ const u = i/n; pts.push([ax + (bx-ax)*u, az + (bz-az)*u]); } }

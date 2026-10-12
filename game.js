@@ -19,6 +19,7 @@ const BIKES = [
   {id:'dj',       name:'Dirt Jumper',      price:1500, color:0x22c55e, scale:[0.92,0.9,0.9],drag:1.05, grip:1.00, pop:1.22, stab:1.08, desc:'Small and poppy. Big bunny hops, slower top speed.'},
   {id:'enduro',   name:'Enduro Bike',      price:2500, color:0xff7a12, scale:[1,1.03,1.08], drag:0.88, grip:1.12, pop:1.05, stab:1.12, desc:'Fast and planted on rough descents.'},
   {id:'dh',       name:'DH Bike',          price:4000, color:0x222222, scale:[1.05,1.06,1.14],drag:0.80, grip:1.18, pop:0.95, stab:1.20, desc:'Fastest downhill, most stable landings, least pop.'},
+  {id:'bean',     name:'Buckle Bean',      price:5000, color:0x9a5a2e, scale:[1,1.02,1.06], drag:0.86, grip:1.15, pop:1.12, stab:1.15, desc:'The legendary bean bike. Brown frame, blue cape accents, gold buckle hardware.'},
 ];
 const LS = { get:(k,d)=>{ try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch(e){ return d; } }, set:(k,v)=>{ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} } };
 const owned = new Set(LS.get('trailDescent.owned', ['hardtail'])); owned.add('hardtail');
@@ -313,26 +314,32 @@ if (RAMP){ const C0 = RAMPAGE.corral, wood = new THREE.MeshStandardMaterial({col
     const deck = new THREE.Mesh(new THREE.BoxGeometry(6, 0.3, 6.4), wood); deck.position.set(bx, hb + 0.02, bz); deck.rotation.y = yaw; deck.receiveShadow = true; scene.add(deck);
     const skirt = new THREE.Mesh(new THREE.BoxGeometry(6, 2, 6.4), wood); skirt.position.set(bx, hb - 1.05, bz); skirt.rotation.y = yaw; scene.add(skirt); } }
 // ---------- trail markers, start/finish banners ----------
+window.__gates = []; let lastBanner = null;
+const tanYaw = (tr, i) => { const n = tr.pts.length, a = tr.pts[Math.max(0, i-2)], b = tr.pts[Math.min(n-1, i+2)]; return Math.atan2(-(b[0]-a[0]), -(b[1]-a[1])); };   // travel heading: forward = (-sin, -cos)
 { const poleG = new THREE.CylinderGeometry(0.06,0.06,1.3,6); poleG.translate(0,0.65,0);
   let total = 0; for (const tr of trails) total += 2*Math.ceil(tr.pts.length/8);
   const poles = new THREE.InstancedMesh(poleG, new THREE.MeshLambertMaterial({color:0xffffff}), total), M = new THREE.Matrix4(), c = new THREE.Color(); let n = 0;
   for (const tr of trails){ c.set(tr.color); if (RAMP) continue;   // Rampage: no marker poles
-    for (let i=4;i<tr.pts.length;i+=8) for (const side of [-1,1]){ const yw = tr.yaw[i], x = tr.pts[i][0] + Math.cos(yw)*side*(W+0.9), z = tr.pts[i][1] - Math.sin(yw)*side*(W+0.9);
+    for (let i=4;i<tr.pts.length;i+=8) for (const side of [-1,1]){ const yw = tanYaw(tr, i), x = tr.pts[i][0] + Math.cos(yw)*side*(W+0.9), z = tr.pts[i][1] - Math.sin(yw)*side*(W+0.9);
       M.makeTranslation(x, terrainH(x,z), z); poles.setMatrixAt(n, M); poles.setColorAt(n++, c); } }
   poles.count = n; poles.computeBoundingSphere(); scene.add(poles);
   const banner = (x, z, yaw, color, label, half = W+1, sub = null) => { const grp = new THREE.Group(), pm = new THREE.MeshLambertMaterial({color:0x333333});
-    for (const s of [-1,1]){ const p = new THREE.Mesh(new THREE.BoxGeometry(0.25,4.5,0.25),pm); p.position.set(s*half,2.25,0); grp.add(p); }
+    // vertical posts, each sunk at its own ground height; level banner at one common height across both
+    const c_ = Math.cos(yaw), s_ = Math.sin(yaw), hp = [-1, 1].map(s => terrainH(x + c_*s*half, z - s_*s*half)), h0 = terrainH(x, z), top = Math.max(...hp, h0) + 4.6;
+    [-1, 1].forEach((s, k) => { const bot = hp[k] - 0.6, L = top - bot; const p = new THREE.Mesh(new THREE.BoxGeometry(0.25, L, 0.25), pm); p.position.set(s*half, (bot + top)/2 - h0, 0); grp.add(p); });
     const cv = document.createElement('canvas'); cv.width=512; cv.height=96; const cx2 = cv.getContext('2d'); cx2.fillStyle=color; cx2.fillRect(0,0,512,96);
     cx2.fillStyle='#fff'; cx2.textAlign='center';
     if (sub){ cx2.font='bold 40px Arial'; cx2.fillText(label,256,42,490); cx2.font='bold 28px Arial'; cx2.fillText(sub,256,84,490); }
     else { cx2.font='bold 52px Arial'; cx2.fillText(label,256,68,490); }
     const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace;
-    for (const r of [0, Math.PI]){ const b = new THREE.Mesh(new THREE.PlaneGeometry(2*half,1.2), new THREE.MeshBasicMaterial({map:t})); b.position.set(0, 4, r ? -0.01 : 0.01); b.rotation.y = r; grp.add(b); }   // two single-sided faces back to back so the text reads correctly from both sides
-    grp.position.set(x, terrainH(x,z), z); grp.rotation.y = yaw; scene.add(grp); };
-  for (const tr of trails){ const i0 = 1, i1 = tr.pts.length-3;
-    banner(tr.pts[i0][0], tr.pts[i0][1], tr.yaw[i0], tr.color === '#111111' ? '#333' : tr.color, 'START · ' + tr.name.toUpperCase(), W+1, `${DIFF[tr.diff].icon} ${DIFF[tr.diff].label.toUpperCase()} · ${tr.type.toUpperCase()}`);
-    banner(tr.pts[i1][0], tr.pts[i1][1], tr.yaw[i1], '#1c9c3a', 'FINISH · ' + tr.name.toUpperCase()); }
-  for (const tr of trails) tr.cps.forEach((cp, k) => banner(cp.x, cp.z, cp.yaw, '#f2b800', `CHECKPOINT ${k+1}/${tr.cps.length}`, W+1, tr.name.toUpperCase()));
+    for (const r of [0, Math.PI]){ const b = new THREE.Mesh(new THREE.PlaneGeometry(2*half,1.2), new THREE.MeshBasicMaterial({map:t})); b.position.set(0, top - h0 - 0.6, r ? -0.01 : 0.01); b.rotation.y = r; grp.add(b); }   // two single-sided faces back to back so the text reads correctly from both sides
+    grp.position.set(x, terrainH(x,z), z); grp.rotation.y = yaw; scene.add(grp); lastBanner = {half, posts: [-1, 1].map((s, k) => ({x: x + c_*s*half, z: z - s_*s*half, bot: hp[k] - 0.6, top, ground: hp[k]})), bannerY: top - 0.6, grp}; };
+  // gates sit ON the trail centreline and face along the local tangent measured from the points themselves
+  const gate = (tr, i, color, label, sub, kind) => { const yaw = tanYaw(tr, i), [x, z] = tr.pts[i]; banner(x, z, yaw, color, label, W+1, sub); window.__gates.push({trail: tr.name, kind, i, x, z, yaw, ...lastBanner}); };
+  for (const tr of trails){ const i0 = Math.min(3, tr.pts.length-1), i1 = tr.pts.length-3;
+    gate(tr, i0, tr.color === '#111111' ? '#333' : tr.color, 'START · ' + tr.name.toUpperCase(), `${DIFF[tr.diff].icon} ${DIFF[tr.diff].label.toUpperCase()} · ${tr.type.toUpperCase()}`, 'start');
+    gate(tr, i1, '#1c9c3a', 'FINISH · ' + tr.name.toUpperCase(), null, 'finish'); }
+  for (const tr of trails) tr.cps.forEach((cp, k) => { const i = Math.max(2, Math.min(tr.pts.length-3, Math.round(cp.s/2))); cp.yaw = tanYaw(tr, i); gate(tr, i, '#f2b800', `CHECKPOINT ${k+1}/${tr.cps.length}`, tr.name.toUpperCase(), 'cp'); });
   const pyaw = Math.atan2(-PARK.dir[0], -PARK.dir[1]);
   banner(PARK.x - PARK.dir[0]*(PARK.r-12), PARK.z - PARK.dir[1]*(PARK.r-12), pyaw, '#ff7a00', 'DIRT JUMP PARK', 42, `${DIFF.pro.icon} PRO LINE · DIRT JUMP`); }
 // ---------- Bike + rider ----------
@@ -1069,20 +1076,32 @@ const SKINS = {
     {id:'camo', name:'Woodland Camo', price:650, mode:3, a:0x4b5a32, b:0x2b2a1f, c:0x8a7a52, r:0.8, m:0.05, desc:'Three-colour woodland camo.'},
     {id:'decal', name:'Factory Race Decals', price:800, mode:5, a:0xf2f2f2, b:0xd9772b, c:0x1f3d27, r:0.35, m:0.2, desc:'White with orange and green race stripes.'},
     {id:'carbon', name:'Raw Carbon', price:900, mode:4, a:0x0c0c0e, b:0x3a3b40, r:0.25, m:0.4, desc:'Exposed carbon weave, clear coat.'},
+    {id:'bean', name:'Buckle Bean', price:2000, mode:5, a:0x9a5a2e, b:0x1f5fbf, c:0xf2b705, r:0.35, m:0.3, desc:'Bean brown with royal-blue cape stripes and gold buckle bands.'},
     {id:'chrome', name:'Mirror Chrome', price:1500, mode:0, a:0xe8ecf2, r:0.06, m:1.0, env:true, desc:'Polished chrome. Very loud.'} ],
   jersey: [ {id:'stock', name:'Stock Orange', price:0, mode:0, a:0xff7a12},
     {id:'forest', name:'Forest Stripes', price:200, mode:5, a:0x2f5d3a, b:0xe8dcc0, c:0xd9772b},
     {id:'hoops', name:'Retro Hoops', price:250, mode:6, a:0x1e4fd8, b:0xf5f5f5},
     {id:'chev', name:'Chevron Pro', price:350, mode:7, a:0x111111, b:0xffd400},
     {id:'camo', name:'Camo Jersey', price:400, mode:3, a:0x4b5a32, b:0x2b2a1f, c:0x8a7a52},
-    {id:'pink', name:'Hot Pink', price:150, mode:0, a:0xff2fa8} ],
-  pants: [ {id:'stock', name:'Navy', price:0, a:0x23283a}, {id:'black', name:'Black', price:100, a:0x111214}, {id:'tan', name:'Desert Tan', price:150, a:0xb59a6a}, {id:'red', name:'Red', price:200, a:0xa8161c}, {id:'olive', name:'Olive', price:150, a:0x4f5631} ],
-  helmet: [ {id:'stock', name:'Stock White', price:0, mode:0, a:0xf5f5f5},
+    {id:'pink', name:'Hot Pink', price:150, mode:0, a:0xff2fa8},
+    {id:'bean', name:'Buckle Bean', price:600, mode:5, a:0x9a5a2e, b:0x1f5fbf, c:0xf2b705, desc:'Bean brown with a blue cape on your back and a gold buckle belt stripe.'} ],
+  pants: [ {id:'stock', name:'Navy', price:0, a:0x23283a}, {id:'black', name:'Black', price:100, a:0x111214}, {id:'tan', name:'Desert Tan', price:150, a:0xb59a6a}, {id:'red', name:'Red', price:200, a:0xa8161c}, {id:'olive', name:'Olive', price:150, a:0x4f5631}, {id:'bean', name:'Buckle Bean', price:300, a:0x7a4524, desc:'Bean brown with a black belt and gold buckle.'} ],
+  helmet: [ {id:'stock', name:'Matte Black', price:0, mode:0, a:0x141416, r:0.75, m:0.05, desc:'Stealthy matte black full-face.'},
+    {id:'white', name:'Gloss White', price:150, mode:0, a:0xf2f2f2, r:0.3, m:0.1},
+    {id:'red', name:'Race Red', price:200, mode:0, a:0xc81e1e, r:0.35, m:0.1},
+    {id:'blue', name:'Cobalt Blue', price:200, mode:0, a:0x1e4fd8, r:0.35, m:0.1},
+    {id:'orange', name:'Factory Orange', price:200, mode:0, a:0xff7a12, r:0.35, m:0.1},
+    {id:'camoh', name:'Desert Camo', price:400, mode:3, a:0x8a7a52, b:0x4b4030, c:0xc8b48a, r:0.8, m:0.0},
+    {id:'flag', name:'Flag Stripes', price:500, mode:5, a:0xf2f2f2, b:0xc81e1e, c:0x1e4fd8, r:0.4, m:0.1},
+    {id:'neon', name:'Neon Fade', price:700, mode:2, a:0x39ff14, b:0xff2fa8, r:0.3, m:0.2},
+    {id:'gcarbon', name:'Gloss Carbon', price:900, mode:4, a:0x0c0c0e, b:0x45464c, r:0.12, m:0.4},
+    {id:'gold', name:'Gold Premium', price:1500, mode:0, a:0xd4a52a, r:0.2, m:1.0},
+    {id:'bean', name:'Buckle Bean', price:2000, mode:5, a:0x9a5a2e, b:0x1f5fbf, c:0xf2b705, r:0.45, m:0.1, desc:'Bean brown shell, smiley face, blue cape stripe, gold buckle.'},
     {id:'stripe', name:'Race Stripe', price:250, mode:5, a:0xf5f5f5, b:0xd9772b, c:0x1f3d27},
     {id:'check', name:'Checkerboard', price:400, mode:8, a:0xf5f5f5, b:0x111111},
     {id:'carbon', name:'Carbon Shell', price:600, mode:4, a:0x0c0c0e, b:0x3a3b40},
     {id:'flames', name:'Flames', price:700, mode:9, a:0xffe14d, b:0x151515, c:0xff4b12} ],
-  goggles: [ {id:'stock', name:'Blue Mirror', price:0, a:0x3a6ea8}, {id:'clear', name:'Clear', price:100, a:0xcfd8dc, m:0.2}, {id:'gold', name:'Gold Mirror', price:150, a:0xd4a017}, {id:'red', name:'Fire Red', price:200, a:0xd62a1e}, {id:'smoke', name:'Smoke', price:120, a:0x222428} ] };
+  goggles: [ {id:'stock', name:'Blue Mirror', price:0, a:0x3a6ea8}, {id:'clear', name:'Clear', price:100, a:0xcfd8dc, m:0.2}, {id:'gold', name:'Gold Mirror', price:150, a:0xd4a017}, {id:'red', name:'Fire Red', price:200, a:0xd62a1e}, {id:'smoke', name:'Smoke', price:120, a:0x222428}, {id:'bean', name:'Buckle Bean', price:300, a:0xf2b705, m:0.95, desc:'Gold buckle lenses with a royal-blue strap.'} ] };
 const SKIN_CATS = ['paint','jersey','pants','helmet','goggles'], SHOP_TABS = ['bikes', ...SKIN_CATS];
 const TAB_LABEL = {bikes:'Bikes', paint:'Paint', jersey:'Jersey', pants:'Pants', helmet:'Helmet', goggles:'Goggles'};
 const ownedSkins = new Set(LS.get('trailDescent.cosmetics', []));
@@ -1097,8 +1116,9 @@ function applySkins(over){ const M = BR.M, g = k => (over && over[0] === k) ? ov
   const p = g('paint'); setSkin(M.frame, p, BIKE.color); M.frame.roughness = p.r ?? 0.4; M.frame.metalness = p.m ?? 0.3;
   if (p.env && !chromeEnv){ const pm = new THREE.PMREMGenerator(renderer); chromeEnv = pm.fromScene(new RoomEnvironment(), 0.04).texture; }
   M.frame.envMap = p.env ? chromeEnv : null; M.frame.needsUpdate = true;
-  setSkin(M.jersey, g('jersey')); setSkin(M.helmet, g('helmet')); M.pants.color.set(g('pants').a);
-  const gg = g('goggles'); M.lens.color.set(gg.a); M.lens.metalness = gg.m ?? 0.9; }
+  setSkin(M.jersey, g('jersey')); { const h = g('helmet'); setSkin(M.helmet, h); M.helmet.roughness = h.r ?? 0.6; M.helmet.metalness = h.m ?? 0.1; } M.pants.color.set(g('pants').a);
+  const gg = g('goggles'); M.lens.color.set(gg.a); M.lens.metalness = gg.m ?? 0.9;
+  const jr = g('jersey'), pa = g('pants'), hm = g('helmet'); BR.bean.cape.visible = jr.id === 'bean'; BR.bean.belt.visible = pa.id === 'bean'; BR.bean.face.visible = hm.id === 'bean'; M.strap.color.set(gg.id === 'bean' ? 0x1f5fbf : 0x111111); }
 let shopOpen = false, shopSel = 0, shopWasPaused = false, shopTab = 0, shopT = 0;
 function applyBike(){ leanG.scale.set(...BIKE.scale); applySkins(); }
 function shopItems(){ const t = SHOP_TABS[shopTab]; return t === 'bikes' ? BIKES : SKINS[t]; }
