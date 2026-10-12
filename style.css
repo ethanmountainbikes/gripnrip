@@ -86,3 +86,8 @@ html,body{font-family:"Barlow Condensed","Arial Narrow",Arial,sans-serif;color:v
 .credits{font-size:18px;line-height:1.35;max-height:56vh;overflow:auto}.credits small{color:#a99f86}
 #menuHint{margin-top:12px;font:600 16px "Barlow Condensed";letter-spacing:1px;color:#d8ccb0;text-shadow:0 1px 2px #000}
 body.inmenu #hud,body.inmenu #help,body.inmenu #wpMarkers{display:none}
+body.inshop #hud,body.inshop #help{display:none}
+body.inshop #shop{left:auto;right:3vw;transform:translateY(-50%);width:min(500px,52vw);max-height:90vh;display:flex;flex-direction:column}body.inshop #shopList{overflow:auto;max-height:60vh}
+#shopTabs{display:flex;gap:4px;margin:0 0 10px}#shopTabs .tab{flex:1;text-align:center;padding:5px 0;font:400 20px "Bebas Neue",sans-serif;letter-spacing:1px;background:rgba(255,255,255,.06);color:var(--cream);border-bottom:3px solid transparent}
+#shopTabs .tab.on{background:rgba(217,119,43,.25);border-bottom-color:var(--dirt);color:#fff}
+.skinNote{font-size:13px;opacity:.75;margin:0 0 6px}

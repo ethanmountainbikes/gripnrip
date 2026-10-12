@@ -6,6 +6,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featAxis, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL, LIFTS, connectors, CW, SHOP } from './world.js';
 
 const G = 9.81;
@@ -314,7 +315,7 @@ bike.traverse(o=>{ if(o.isMesh) o.castShadow=true; });
 
 // ---------- Input ----------
 const keys = {};
-addEventListener('keydown', e => { keys[e.code]=true; if(['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault(); onPress(e.code); });
+addEventListener('keydown', e => { keys[e.code]=true; if(['Space','Tab','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault(); onPress(e.code); });
 addEventListener('keyup', e => { keys[e.code]=false; });
 const toastEl = document.getElementById('toast'); let toastT;
 function toast(msg){ toastEl.textContent = msg; toastEl.style.opacity = 1; clearTimeout(toastT); toastT = setTimeout(()=>toastEl.style.opacity=0, 2500); }
@@ -347,15 +348,15 @@ function padMap(gp){
   const ax = i => gp.axes[i] || 0;
   if (gp.mapping === 'standard'){
     return { lx:ax(0), rx:ax(2), ry:ax(3), lt:bv(6), rt:bv(7),
-      ly:ax(1), btn:{A:bv(0)>0.5, B:bv(1)>0.5, X:bv(2)>0.5, Y:bv(3)>0.5, LB:bv(4)>0.5, RS:bv(11)>0.5, Back:bv(8)>0.5, Start:bv(9)>0.5, DL:bv(14)>0.5, DR:bv(15)>0.5, DU:bv(12)>0.5, DD:bv(13)>0.5} };
+      ly:ax(1), btn:{A:bv(0)>0.5, B:bv(1)>0.5, X:bv(2)>0.5, Y:bv(3)>0.5, LB:bv(4)>0.5, RB:bv(5)>0.5, RS:bv(11)>0.5, Back:bv(8)>0.5, Start:bv(9)>0.5, DL:bv(14)>0.5, DR:bv(15)>0.5, DU:bv(12)>0.5, DD:bv(13)>0.5} };
   }
   if (gp.axes.length >= 6){   // Firefox XInput-style: triggers on axes 2 & 5
     return { lx:ax(0), rx:ax(3), ry:ax(4), lt:trigAxis(gp,2), rt:trigAxis(gp,5),
-      ly:ax(1), btn:{A:bv(0)>0.5, B:bv(1)>0.5, X:bv(2)>0.5, Y:bv(3)>0.5, LB:bv(4)>0.5, RS:bv(9)>0.5, Back:bv(6)>0.5, Start:bv(7)>0.5, ...dpadNS(gp, bv, 13, 14)} };
+      ly:ax(1), btn:{A:bv(0)>0.5, B:bv(1)>0.5, X:bv(2)>0.5, Y:bv(3)>0.5, LB:bv(4)>0.5, RB:bv(5)>0.5, RS:bv(9)>0.5, Back:bv(6)>0.5, Start:bv(7)>0.5, ...dpadNS(gp, bv, 13, 14)} };
   }
   // other non-standard layouts: right stick on 2,3, triggers as buttons 6,7
   return { lx:ax(0), rx:ax(2), ry:ax(3), lt:Math.max(bv(6), 0), rt:Math.max(bv(7), 0),
-    ly:ax(1), btn:{A:bv(0)>0.5, B:bv(1)>0.5, X:bv(2)>0.5, Y:bv(3)>0.5, LB:bv(4)>0.5, RS:bv(11)>0.5, Back:bv(8)>0.5, Start:bv(9)>0.5, ...dpadNS(gp, bv, 14, 15)} };
+    ly:ax(1), btn:{A:bv(0)>0.5, B:bv(1)>0.5, X:bv(2)>0.5, Y:bv(3)>0.5, LB:bv(4)>0.5, RB:bv(5)>0.5, RS:bv(11)>0.5, Back:bv(8)>0.5, Start:bv(9)>0.5, ...dpadNS(gp, bv, 14, 15)} };
 }
 
 // Descenders default Xbox layout:
@@ -376,7 +377,7 @@ function readInput(){
       else if (mag > 0.35){ const sec = Math.round(Math.atan2(ry, rx)/(Math.PI/4)); inp.trick = {0:'right', 1:'dr', 2:'down', 3:'dl', 4:'left', '-4':'left', '-3':'ul', '-2':'up', '-1':'ur'}[sec]; inp.trickAmt = Math.min(1, (mag-0.35)/0.6); } }
     else { if (ry > 0.5) inp.pumpHold = true; if (ry < -0.5){ inp.pop = true; inp.counter = true; } inp.tweak = rx; inp.rsy = ry; }
     inp.dpx = (m.btn.DR?1:0) - (m.btn.DL?1:0); inp.dpy = (m.btn.DD?1:0) - (m.btn.DU?1:0); inp.lsx = dz(m.lx); inp.lsy = dz(m.ly);
-    for (const name of ['A','B','X','Y','Start','Back','DL','DR','DU','DD']){ const now=!!m.btn[name], key=gp.index+'_'+name; if(now && !prevBtn[key]) inp.pressed[name]=true; prevBtn[key]=now; }
+    for (const name of ['A','B','X','Y','Start','Back','DL','DR','DU','DD','LB','RB']){ const now=!!m.btn[name], key=gp.index+'_'+name; if(now && !prevBtn[key]) inp.pressed[name]=true; prevBtn[key]=now; }
     break; }
   if (keys.KeyA||keys.ArrowLeft) inp.steer -= 1; if (keys.KeyD||keys.ArrowRight) inp.steer += 1;
   if (keys.KeyW||keys.ArrowUp) inp.pedal = 1; if (keys.KeyS||keys.ArrowDown) inp.brake = 1;
@@ -737,7 +738,8 @@ function frame(){
   camRoll = THREE.MathUtils.lerp(camRoll, -S.lean*0.18 + (S.sliding ? S.slip*0.1 : 0), Math.min(1, dt*4));
   camera.up.set(Math.sin(camRoll)*Math.cos(ch), Math.cos(camRoll), -Math.sin(camRoll)*Math.sin(ch)); camera.lookAt(camLook);
   if (window.__camSide){ const o = window.__camSide, c = Math.cos(S.yaw), s_ = Math.sin(S.yaw); camera.position.set(S.x + c*o.d + Math.sin(S.yaw)*(o.b||0), S.y + (o.h||1.2), S.z - s_*o.d + Math.cos(S.yaw)*(o.b||0)); camera.up.set(0,1,0); camera.lookAt(S.x, S.y + 0.9, S.z); }   // test hook: side camera for pose screenshots
-  if (flyF) flyover(0);   // main menu: flyover camera replaces the chase cam
+  if (flyF) flyover(0);
+  else if (shopOpen) shopCam(dt);   // main menu: flyover camera replaces the chase cam
   mountains.position.set(camera.position.x, 0, camera.position.z);
   skyDome.position.copy(camera.position);
   if (!flyF){ sun.position.set(S.x+30, S.y+60, S.z+20); sun.target.position.set(S.x, S.y, S.z-10); }
@@ -980,28 +982,94 @@ function flyover(dt){ menu.fly += dt*0.035; const a = menu.fly, cx = 120, cz = -
   const x = cx + Math.cos(a)*r, z = cz + Math.sin(a)*r, y = Math.max(terrainH(x, z), terrainH(cx + Math.cos(a+0.05)*r, cz + Math.sin(a+0.05)*r)) + 110;
   camera.position.set(x, y, z); camera.up.set(0,1,0); camera.lookAt(cx + Math.cos(a+0.9)*260, 170, cz + Math.sin(a+0.9)*260);
   sun.position.set(x+30, y+60, z+20); sun.target.position.set(x - Math.cos(a)*60, y - 60, z - Math.sin(a)*60); return [x, z]; }
-// ---------- bike shop ----------
-let shopOpen = false, shopSel = 0, shopWasPaused = false;
-function applyBike(){ frameMat.color.set(BIKE.color); leanG.scale.set(...BIKE.scale); }
-function openShop(){ shopOpen = true; shopWasPaused = S.paused; if (S.state==='riding') S.paused = true; shopSel = BIKES.indexOf(BIKE); renderShop(); $('shop').classList.remove('hidden'); }
-function closeShop(){ shopOpen = false; $('shop').classList.add('hidden'); if (S.state==='riding'){ S.paused = shopWasPaused; if (!S.paused) $('overlay').classList.add('hidden'); } S.shopCool = 3; }
+// ---------- bike shop: bikes + cosmetic skins (paint and rider gear; visual only) ----------
+const C = x => new THREE.Color(x);
+const SKINS = {
+  paint: [ {id:'stock', name:'Factory Stock', price:0, desc:'The colour it came in.'},
+    {id:'black', name:'Matte Stealth', price:100, mode:0, a:0x15161a, r:0.85, m:0.1, desc:'Solid matte black.'},
+    {id:'red', name:'Race Red', price:150, mode:0, a:0xd21f26, r:0.3, m:0.4, desc:'Solid gloss red.'},
+    {id:'lime', name:'Acid Lime', price:150, mode:0, a:0x9be22d, r:0.35, m:0.3, desc:'Solid gloss lime.'},
+    {id:'two', name:'Forest Two-Tone', price:300, mode:1, a:0x2f5d3a, b:0xe8dcc0, r:0.4, m:0.3, desc:'Green lower half, cream top tube.'},
+    {id:'fade', name:'Sunset Fade', price:500, mode:2, a:0xff6a00, b:0x7b2cbf, r:0.3, m:0.5, desc:'Orange to purple fade.'},
+    {id:'camo', name:'Woodland Camo', price:650, mode:3, a:0x4b5a32, b:0x2b2a1f, c:0x8a7a52, r:0.8, m:0.05, desc:'Three-colour woodland camo.'},
+    {id:'decal', name:'Factory Race Decals', price:800, mode:5, a:0xf2f2f2, b:0xd9772b, c:0x1f3d27, r:0.35, m:0.2, desc:'White with orange and green race stripes.'},
+    {id:'carbon', name:'Raw Carbon', price:900, mode:4, a:0x0c0c0e, b:0x3a3b40, r:0.25, m:0.4, desc:'Exposed carbon weave, clear coat.'},
+    {id:'chrome', name:'Mirror Chrome', price:1500, mode:0, a:0xe8ecf2, r:0.06, m:1.0, env:true, desc:'Polished chrome. Very loud.'} ],
+  jersey: [ {id:'stock', name:'Stock Orange', price:0, mode:0, a:0xff7a12},
+    {id:'forest', name:'Forest Stripes', price:200, mode:5, a:0x2f5d3a, b:0xe8dcc0, c:0xd9772b},
+    {id:'hoops', name:'Retro Hoops', price:250, mode:6, a:0x1e4fd8, b:0xf5f5f5},
+    {id:'chev', name:'Chevron Pro', price:350, mode:7, a:0x111111, b:0xffd400},
+    {id:'camo', name:'Camo Jersey', price:400, mode:3, a:0x4b5a32, b:0x2b2a1f, c:0x8a7a52},
+    {id:'pink', name:'Hot Pink', price:150, mode:0, a:0xff2fa8} ],
+  pants: [ {id:'stock', name:'Navy', price:0, a:0x23283a}, {id:'black', name:'Black', price:100, a:0x111214}, {id:'tan', name:'Desert Tan', price:150, a:0xb59a6a}, {id:'red', name:'Red', price:200, a:0xa8161c}, {id:'olive', name:'Olive', price:150, a:0x4f5631} ],
+  helmet: [ {id:'stock', name:'Stock White', price:0, mode:0, a:0xf5f5f5},
+    {id:'stripe', name:'Race Stripe', price:250, mode:5, a:0xf5f5f5, b:0xd9772b, c:0x1f3d27},
+    {id:'check', name:'Checkerboard', price:400, mode:8, a:0xf5f5f5, b:0x111111},
+    {id:'carbon', name:'Carbon Shell', price:600, mode:4, a:0x0c0c0e, b:0x3a3b40},
+    {id:'flames', name:'Flames', price:700, mode:9, a:0xffe14d, b:0x151515, c:0xff4b12} ],
+  goggles: [ {id:'stock', name:'Blue Mirror', price:0, a:0x3a6ea8}, {id:'clear', name:'Clear', price:100, a:0xcfd8dc, m:0.2}, {id:'gold', name:'Gold Mirror', price:150, a:0xd4a017}, {id:'red', name:'Fire Red', price:200, a:0xd62a1e}, {id:'smoke', name:'Smoke', price:120, a:0x222428} ] };
+const SKIN_CATS = ['paint','jersey','pants','helmet','goggles'], SHOP_TABS = ['bikes', ...SKIN_CATS];
+const TAB_LABEL = {bikes:'Bikes', paint:'Paint', jersey:'Jersey', pants:'Pants', helmet:'Helmet', goggles:'Goggles'};
+const ownedSkins = new Set(LS.get('trailDescent.cosmetics', []));
+const skinOf = LS.get('trailDescent.skins', {});   // { bikeId: {paint, jersey, pants, helmet, goggles} }
+const isOwned = (cat, it) => it.price === 0 || ownedSkins.has(cat + ':' + it.id);
+const equippedSkin = (bike, cat) => SKINS[cat].find(i => i.id === (skinOf[bike.id] || {})[cat]) || SKINS[cat][0];
+let chromeEnv = null;
+function setSkin(mat, it, fallback){ const u = mat.userData.skin;
+  if (u){ u.uMode.value = it.mode || 0; u.uA.value.set(it.a ?? fallback); if (it.b !== undefined) u.uB.value.set(it.b); if (it.c !== undefined) u.uC.value.set(it.c); }
+  mat.color.set(it.a ?? fallback); }
+function applySkins(over){ const M = BR.M, g = k => (over && over[0] === k) ? over[1] : equippedSkin(BIKE, k);
+  const p = g('paint'); setSkin(M.frame, p, BIKE.color); M.frame.roughness = p.r ?? 0.4; M.frame.metalness = p.m ?? 0.3;
+  if (p.env && !chromeEnv){ const pm = new THREE.PMREMGenerator(renderer); chromeEnv = pm.fromScene(new RoomEnvironment(), 0.04).texture; }
+  M.frame.envMap = p.env ? chromeEnv : null; M.frame.needsUpdate = true;
+  setSkin(M.jersey, g('jersey')); setSkin(M.helmet, g('helmet')); M.pants.color.set(g('pants').a);
+  const gg = g('goggles'); M.lens.color.set(gg.a); M.lens.metalness = gg.m ?? 0.9; }
+let shopOpen = false, shopSel = 0, shopWasPaused = false, shopTab = 0, shopT = 0;
+function applyBike(){ leanG.scale.set(...BIKE.scale); applySkins(); }
+function shopItems(){ const t = SHOP_TABS[shopTab]; return t === 'bikes' ? BIKES : SKINS[t]; }
+function openShop(){ shopOpen = true; shopWasPaused = S.paused; if (S.state==='riding') S.paused = true; shopTab = 0; shopSel = BIKES.indexOf(BIKE); shopT = 0; renderShop(); $('shop').classList.remove('hidden'); document.body.classList.add('inshop'); }
+function closeShop(){ shopOpen = false; applySkins(); $('shop').classList.add('hidden'); document.body.classList.remove('inshop'); if (S.state==='riding'){ S.paused = shopWasPaused; if (!S.paused) $('overlay').classList.add('hidden'); } S.shopCool = 3; }
 function bar(v){ const p = Math.round(50 + (v-1)*250); return `<span class="sbar"><i style="width:${Math.max(8,Math.min(100,p))}%"></i></span>`; }
+const hex = c => '#' + C(c).getHexString();
+function swatch(it, cat){ if (cat === 'paint' && it.id === 'stock') return hex(BIKE.color);
+  if (it.mode === 2) return `linear-gradient(90deg,${hex(it.a)},${hex(it.b)})`; if (it.b !== undefined) return `linear-gradient(135deg,${hex(it.a)} 50%,${hex(it.b)} 50%)`; return hex(it.a); }
 function renderShop(){
   $('shopBal').textContent = '$' + S.score.toLocaleString() + ' DOLLAHS';
-  $('shopList').innerHTML = BIKES.map((b,i) => { const own = owned.has(b.id), eq = BIKE === b;
+  const t = SHOP_TABS[shopTab];
+  $('shopTabs').innerHTML = SHOP_TABS.map((k,i) => `<span class="tab${i===shopTab?' on':''}">${TAB_LABEL[k]}</span>`).join('');
+  if (t === 'bikes'){ applySkins();
+    $('shopList').innerHTML = BIKES.map((b,i) => { const own = owned.has(b.id), eq = BIKE === b;
     return `<div class="bike${i===shopSel?' sel':''}"><div class="sw" style="background:#${b.color.toString(16).padStart(6,'0')}"></div><div class="bn"><b>${b.name}</b><small>${b.desc}</small></div>
       <div class="st">Speed ${bar(2-b.drag)} Grip ${bar(b.grip)}<br>Pop ${bar(b.pop)} Stability ${bar(b.stab)}</div>
-      <div class="pr">${eq ? 'EQUIPPED' : own ? 'OWNED · equip' : b.price ? '$'+b.price.toLocaleString() : 'FREE'}</div></div>`; }).join('');
+      <div class="pr">${eq ? 'EQUIPPED' : own ? 'OWNED · equip' : b.price ? '$'+b.price.toLocaleString() : 'FREE'}</div></div>`; }).join(''); }
+  else { const items = SKINS[t], cur = equippedSkin(BIKE, t); applySkins([t, items[shopSel]]);   // live 3D preview of the highlighted item
+    $('shopList').innerHTML = `<div class="skinNote">Cosmetic only · equipped on your <b>${BIKE.name}</b></div>` + items.map((it,i) => { const own = isOwned(t, it), eq = cur === it;
+      return `<div class="bike skin${i===shopSel?' sel':''}"><div class="sw" style="background:${swatch(it,t)}"></div><div class="bn"><b>${it.name}</b>${it.desc?`<small>${it.desc}</small>`:''}</div>
+      <div class="pr">${eq ? 'EQUIPPED' : own ? 'OWNED · equip' : '$'+it.price.toLocaleString()}</div></div>`; }).join(''); }
+  $('shopList').querySelector('.sel')?.scrollIntoView({block:'nearest'});
 }
 function shopKey(code){
-  if (['DL','ArrowUp','ArrowLeft','KeyW','KeyA','BracketLeft'].includes(code)) shopSel = (shopSel+BIKES.length-1)%BIKES.length;
-  else if (['DR','ArrowDown','ArrowRight','KeyS','KeyD','BracketRight'].includes(code)) shopSel = (shopSel+1)%BIKES.length;
-  else if (code==='A'||code==='Enter'||code==='Space'){ const b = BIKES[shopSel];
-    if (!owned.has(b.id)){ if (S.score >= b.price){ S.score -= b.price; owned.add(b.id); LS.set('trailDescent.owned', [...owned]); toast(`🛒 Bought the ${b.name}!`); } else { toast(`Not enough DOLLAHS: need $${(b.price-S.score).toLocaleString()} more`); renderShop(); return; } }
-    BIKE = b; LS.set('trailDescent.bike', b.id); applyBike(); toast(`🚲 Riding the ${b.name}`); }
+  const n = shopItems().length;
+  if (['LB','KeyQ','Tab_prev'].includes(code)){ shopTab = (shopTab+SHOP_TABS.length-1)%SHOP_TABS.length; shopSel = 0; }
+  else if (['RB','KeyE','Tab'].includes(code)){ shopTab = (shopTab+1)%SHOP_TABS.length; shopSel = 0; }
+  else if (['DU','DL','ArrowUp','KeyW','BracketLeft'].includes(code)) shopSel = (shopSel+n-1)%n;
+  else if (['DD','DR','ArrowDown','KeyS','BracketRight'].includes(code)) shopSel = (shopSel+1)%n;
+  else if (code==='ArrowLeft'||code==='KeyA'){ shopTab = (shopTab+SHOP_TABS.length-1)%SHOP_TABS.length; shopSel = 0; }
+  else if (code==='ArrowRight'||code==='KeyD'){ shopTab = (shopTab+1)%SHOP_TABS.length; shopSel = 0; }
+  else if (code==='A'||code==='Enter'||code==='Space'){ const t = SHOP_TABS[shopTab];
+    if (t === 'bikes'){ const b = BIKES[shopSel];
+      if (!owned.has(b.id)){ if (S.score >= b.price){ S.score -= b.price; owned.add(b.id); LS.set('trailDescent.owned', [...owned]); toast(`🛒 Bought the ${b.name}!`); } else { toast(`Not enough DOLLAHS: need $${(b.price-S.score).toLocaleString()} more`); renderShop(); return; } }
+      BIKE = b; LS.set('trailDescent.bike', b.id); applyBike(); toast(`🚲 Riding the ${b.name}`); }
+    else { const it = SKINS[t][shopSel];
+      if (!isOwned(t, it)){ if (S.score >= it.price){ S.score -= it.price; ownedSkins.add(t+':'+it.id); LS.set('trailDescent.cosmetics', [...ownedSkins]); toast(`🛒 Bought ${it.name}!`); } else { toast(`Not enough DOLLAHS: need $${(it.price-S.score).toLocaleString()} more`); renderShop(); return; } }
+      (skinOf[BIKE.id] ||= {})[t] = it.id; LS.set('trailDescent.skins', skinOf); applySkins(); toast(`🎨 ${it.name} equipped on the ${BIKE.name}`); } }
   else if (code==='B'||code==='Escape'||code==='KeyO'||code==='X'||code==='Start'||code==='KeyP') { closeShop(); return; }
   renderShop();
 }
+// 3D preview: slow orbit camera around the rider while the shop is open
+function shopCam(dt){ shopT += dt; const a = S.yaw + 1.9 + Math.sin(shopT*0.35)*0.9, r = 3.3;
+  const cx = S.x + Math.sin(a)*r, cz = S.z + Math.cos(a)*r, rx = Math.cos(a), rz = -Math.sin(a);   // camera-right: aim past the rider so it sits left of the shop panel
+  camera.position.set(cx, S.y + 1.3, cz); camera.lookAt(S.x + rx*1.15, S.y + 0.7, S.z + rz*1.15); }
 // shop building in the valley: ride up to the door to open the shop
 const SHOP_POS = {x:SHOP.x, z:SHOP.z, yaw:SHOP.yaw};   // placed in world.js >= 10 m clear of every path, trail and lift; a spur path runs to the porch
 // detailed cabin: every part is baked into one merged geometry per material (≈8 draw calls for the whole yard)
@@ -1136,4 +1204,4 @@ teleport(spotI, true);
 window.__game = S; window.__readInput = readInput; window.__groundH = groundH; window.__lift = i => startLift(i); window.__world = { LIFTS, connectors, trails, features, spots, PARK, SHOP, terrainH, featH, isDirt, nearTrails, base, inPark };
 window.__BR = BR; window.__teleport = i => teleport(i); window.__unlocked = unlocked; window.__isOpen = isOpen; window.__chunks = () => chunks.size; window.__renderer = renderer;
 window.__sim = (secs, inp) => { const h=1/120; const base={steer:0,pedal:0,brake:0,jump:false,tx:0,ty:0}; for(let t=0;t<secs;t+=h){ step(h, Object.assign({}, base, typeof inp==='function'?inp(t):inp)); trackWorld(h); } return {x:S.x, z:S.z, kmh:S.speed*3.6, air:S.air, lives:S.lives, clean:S.clean, score:S.score}; };
-frame();
+frame();window.__shop = { open: openShop, key: shopKey, close: closeShop };

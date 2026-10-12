@@ -15,6 +15,32 @@ const _m = new THREE.Matrix4(), _q = new THREE.Quaternion();
 const between = (a, b) => { const d = b.clone().sub(a), L = d.length(); _q.setFromUnitVectors(UP, d.normalize()); return new THREE.Matrix4().compose(a.clone().add(b).multiplyScalar(0.5), _q.clone(), V(1, 1, 1)); };
 const at = (x, y, z, rx=0, ry=0, rz=0, s=[1,1,1]) => new THREE.Matrix4().compose(V(x,y,z), new THREE.Quaternion().setFromEuler(new THREE.Euler(rx,ry,rz)), V(...s));
 
+
+// cosmetic skins: procedural patterns in bike space (the merged bike has no UVs), applied to a MeshStandardMaterial
+export function patternize(mat){
+  const u = mat.userData.skin = { uMode:{value:0}, uA:{value:new THREE.Color(1,1,1)}, uB:{value:new THREE.Color(0,0,0)}, uC:{value:new THREE.Color(0.5,0.5,0.5)}, uScale:{value:1} };
+  mat.onBeforeCompile = sh => { Object.assign(sh.uniforms, u);
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vSkinP;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvSkinP = position;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+varying vec3 vSkinP; uniform int uMode; uniform vec3 uA, uB, uC; uniform float uScale;
+float sh1(vec3 p){ return fract(sin(dot(p, vec3(12.9898,78.233,45.164)))*43758.5453); }
+float sn(vec3 p){ vec3 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
+  return mix(mix(mix(sh1(i),sh1(i+vec3(1,0,0)),f.x),mix(sh1(i+vec3(0,1,0)),sh1(i+vec3(1,1,0)),f.x),f.y),mix(mix(sh1(i+vec3(0,0,1)),sh1(i+vec3(1,0,1)),f.x),mix(sh1(i+vec3(0,1,1)),sh1(i+vec3(1,1,1)),f.x),f.y),f.z); }
+vec3 skinCol(vec3 p){ p *= uScale;
+  if (uMode==1) return p.y > 0.62 ? uB : uA;                                   // two-tone: top vs bottom
+  if (uMode==2) return mix(uA, uB, smoothstep(-0.6, 0.6, p.z + p.y*0.4));       // fade front to back
+  if (uMode==3){ float n = sn(p*9.0) + 0.5*sn(p*21.0); return n < 0.62 ? uA : n < 0.92 ? uB : uC; }   // camo
+  if (uMode==4){ vec3 q = p*90.0; float w = mod(floor(q.x+q.y)+floor(q.z+q.y), 2.0); float sh = 0.5+0.5*sin((q.x+q.z)*3.14159); return mix(uA, uB, w*0.55 + sh*0.25); }   // carbon weave
+  if (uMode==5){ float b = fract(p.y*14.0 + p.z*4.0); return b < 0.18 ? uB : b < 0.26 ? uC : uA; }   // stripes / racing decals
+  if (uMode==6){ float h = fract(p.y*9.0); return h < 0.5 ? uA : uB; }          // hoops
+  if (uMode==7){ float c = fract(p.y*8.0 + abs(p.x)*10.0); return c < 0.35 ? uB : uA; }   // chevrons
+  if (uMode==8){ vec3 q = floor(p*16.0); return mod(q.x+q.y+q.z, 2.0) < 1.0 ? uA : uB; }   // checker
+  if (uMode==9){ float f = sn(vec3(p.x*16.0, p.y*9.0 - p.z*20.0, 0.0))*0.8 + p.z*3.5 + 0.55; return f > 0.95 ? uA : f > 0.75 ? uC : uB; }   // flames (to the back)
+  return uA; }`).replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb = skinCol(vSkinP);');
+  };
+  mat.customProgramCacheKey = () => 'skin'; return u;
+}
+
 export function buildBikeRider(frameMat){
   const std = (c, r=0.6, m=0) => new THREE.MeshStandardMaterial({color:c, roughness:r, metalness:m});
   const M = { rubber: std(0x151515, 0.95), black: std(0x1c1c1e, 0.55, 0.3), alu: std(0xb8bcc2, 0.3, 0.9), steel: std(0x8a8f96, 0.35, 0.9),
@@ -184,5 +210,6 @@ export function buildBikeRider(frameMat){
       foot[i].position.copy(end).add(V(0, -0.06, 0)); foot[i].rotation.set(fw > 0.3 ? -0.6*Math.min(1, fw) : 0, 0, 0); }
     root.rotation.x = tilt;   // tuck no-hander: bike pulled up into the lap
   }
-  return { root, wheels, update, POSES, TRICK_OF };
+  for (const k of ['frame','jersey','helmet']) patternize(M[k]);
+  return { root, wheels, update, POSES, TRICK_OF, M };
 }

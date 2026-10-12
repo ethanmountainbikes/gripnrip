@@ -136,3 +136,9 @@ NCS was considered, but its FAQ says: *"Q. Can I use NCS music in my game? … P
 - "Fast Song": annandistance (CC0)
 
 Tracks play shuffled once you first press a key or button. Settings has music on/off and volume, and Skip Song is in the pause menu.
+
+## Cosmetic skins (Bike Shop)
+The shop has tabs: Bikes, Paint, Jersey, Pants, Helmet and Goggles. Switch tabs with LB/RB, ←/→ or Q/E. The highlighted item shows live on a slowly orbiting 3D view of your rider.
+- Paints ($100–$1,500): solid colours, two-tone, fade, woodland camo, race decals, raw carbon, mirror chrome.
+- Gear: jersey patterns (stripes, hoops, chevrons, camo), pants colours, helmet designs (race stripe, checker, carbon, flames), goggle lenses.
+- Skins are cosmetic only and are equipped per bike. Saved in `trailDescent.cosmetics` (owned) and `trailDescent.skins` (equipped per bike). Patterns are procedural shaders, so there are no image assets.
