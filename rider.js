@@ -109,7 +109,7 @@ export function buildBikeRider(frameMat){
   // crankset: arms + flat pedals with pins (rotating group on the frame)
   const crank = new THREE.Group(); crank.position.copy(BB); frameG.add(crank); const pedals = [];
   { const cb = new Bucket(); for (const s of [1, -1]) cb.add(new THREE.BoxGeometry(0.018, 0.17, 0.03), M.black, at(s*0.085, -s*0.085, 0)); cb.add(new THREE.CylinderGeometry(0.012, 0.012, 0.19, 8), M.steel, at(0,0,0,0,0,Math.PI/2)); cb.build(crank);
-    for (const s of [1, -1]){ const p = new THREE.Group(); p.position.set(s*0.135, -s*0.17, 0); crank.add(p); const pb = new Bucket(); pb.add(new THREE.BoxGeometry(0.1, 0.018, 0.1), M.black); for (let k = 0; k < 8; k++) pb.add(new THREE.CylinderGeometry(0.003, 0.003, 0.03, 4), M.steel, at(-0.04 + (k%4)*0.027, 0, k < 4 ? -0.045 : 0.045)); pb.build(p); pedals.push(p); } }
+    for (const s of [-1, 1]){ const p = new THREE.Group(); p.position.set(s*0.135, -s*0.17, 0); crank.add(p); const pb = new Bucket(); pb.add(new THREE.BoxGeometry(0.1, 0.018, 0.1), M.black); for (let k = 0; k < 8; k++) pb.add(new THREE.CylinderGeometry(0.003, 0.003, 0.03, 4), M.steel, at(-0.04 + (k%4)*0.027, 0, k < 4 ? -0.045 : 0.045)); pb.build(p); pedals.push(p); } }
   fb.build(frameG); sb.build(steerG);
 
   // ---- rider: capsule limbs placed from solved joint positions ----

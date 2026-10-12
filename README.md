@@ -131,7 +131,6 @@ Run it locally with `python3 -m http.server`, then open http://localhost:8000.
 ## Music
 NCS was considered, but its FAQ says: *"Q. Can I use NCS music in my game? … Please get in touch via our commercial licensing form"*, so CC0 tracks from OpenGameArt are used instead:
 - "Action Track" and "Simple Action Beat": LushoGames (CC0)
-- "Heat Battle (BPM180)" and "8bit Action Title (BPM150)": MintoDog (CC0)
 - "Rock Theme 3": Umplix (CC0)
 - "Fast Song": annandistance (CC0)
 

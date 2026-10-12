@@ -948,8 +948,6 @@ syncBeacons();
 const TRACKS = [
   {file:'music/actiontrack.mp3', title:'Action Track', artist:'LushoGames', src:'opengameart.org/content/action-track'},
   {file:'music/simplebeat.mp3', title:'Simple Action Beat', artist:'LushoGames', src:'opengameart.org/content/simple-action-beat'},
-  {file:'music/heat-battle-bpm180.mp3', title:'Heat Battle', artist:'MintoDog', src:'opengameart.org/content/heat-battle'},
-  {file:'music/8bit-action-title-bpm150.mp3', title:'8bit Action Title', artist:'MintoDog', src:'opengameart.org/content/8bit-action-title'},
   {file:'music/rock-theme-3.mp3', title:'Rock Theme 3', artist:'Umplix', src:'opengameart.org/content/rock-theme-3'},
   {file:'music/fastsong.mp3', title:'Fast Cheerful Punk Rock Lo-fi', artist:'annandistance', src:'opengameart.org/content/fast-cheerful-punk-rock-lo-fi'},
 ];
