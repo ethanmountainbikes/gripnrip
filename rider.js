@@ -193,7 +193,10 @@ export function buildBikeRider(frameMat){
     const steerVis = (S.air ? 0 : -(inp?.steer || 0)*0.25*Math.max(0.2, 1 - S.speed/14)) + W.xup*POSES.xup.steer + W.nacnac*POSES.nacnac.steer;
     frameG.matrix.copy(axisRot(-tailA)); steerG.matrix.copy(axisRot(barA + steerVis)); frameG.matrixWorldNeedsUpdate = steerG.matrixWorldNeedsUpdate = true;
     // crank turns while pedalling on the ground; pedals stay level
-    if (!S.air && (inp?.pedal || 0) > 0.05) crankA -= S.speed*dt/0.36/2.6 + dt*2*(inp.pedal);
+    // crank driven by drivetrain cadence (rpm); freewheel: cranks stop and settle to level pedals (attack stance)
+    const cad = inp?.cadence || 0;
+    if (cad > 0) crankA -= cad/60*Math.PI*2*dt;
+    else { const lvl = Math.round((crankA - Math.PI/2)/Math.PI)*Math.PI + Math.PI/2; crankA += (lvl - crankA)*Math.min(1, dt*2.5); }
     crank.rotation.x = crankA; for (const p of pedals) p.rotation.x = -crankA;
     flipW = easeTo(flipW, air ? Math.min(1, Math.abs(S.wPitch || 0)/4) : 0, k); spinW = easeTo(spinW, air ? THREE.MathUtils.clamp((S.wYaw || 0)/5, -1, 1) : 0, k);
     // targets on the bike
@@ -204,6 +207,7 @@ export function buildBikeRider(frameMat){
     hip.y += -flipW*0.08 - (S.susp || 0)*0.25; hip.z -= flipW*0.1; lean += flipW*0.2;
     for (const key in W){ const w = W[key]; if (w < 1e-3) continue; const P = POSES[key]; hip.lerp(P.hip, w); lean += (P.lean - base.lean)*w; twist += (P.twist || 0)*w; tilt += (P.tilt || 0)*w; }
     hip.x += (S.tweak || 0)*0.08;
+    { const st = inp?.standing || 0, ph = -crankA; hip.y += st*0.1 + st*0.025*Math.abs(Math.cos(ph)); hip.z -= st*0.1; lean += st*0.12; hip.x += st*0.035*Math.sin(ph); twist += st*0.06*Math.sin(ph); }   // out of the saddle: bob + sway with the pedal stroke
     const up = V(0, Math.cos(lean), -Math.sin(lean)), side = V(Math.cos(twist), 0, Math.sin(twist)), back = side.clone().cross(up).normalize(); side.copy(up.clone().cross(back)).normalize();
     torso.position.copy(hip); torso.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(side, up, back));
     const neck = hip.clone().addScaledVector(up, L.spine);

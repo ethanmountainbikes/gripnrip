@@ -368,12 +368,12 @@ function trigAxis(gp, i){ const v = gp.axes[i]; if (v === undefined) return 0; c
 // D-pad on non-standard layouts: a hat on axes 6/7 (Firefox on Linux/macOS), a single POV-hat axis (axis 9, DirectInput),
 // or plain buttons (the given left/right indices) when the pad has that many buttons.
 function dpadNS(gp, bv, li, ri){
-  let l = false, r = false;
-  if (gp.axes.length >= 8){ const h = gp.axes[6] || 0; if (h < -0.5) l = true; if (h > 0.5) r = true; }
+  let l = false, r = false, u = false, d = false;
+  if (gp.axes.length >= 8){ const h = gp.axes[6] || 0, v = gp.axes[7] || 0; if (h < -0.5) l = true; if (h > 0.5) r = true; if (v < -0.5) u = true; if (v > 0.5) d = true; }
   if (gp.axes.length >= 10){ const p = gp.axes[9]; if (p !== undefined && p >= -1.05 && p <= 1.05 && Math.abs(p) > 0.05){ const dir = Math.round((p+1)/(2/7));   // 0 up .. 7 up-left
-      if (dir >= 1 && dir <= 3) r = true; if (dir >= 5 && dir <= 7) l = true; } }
-  if (gp.buttons.length > ri){ if (bv(li) > 0.5) l = true; if (bv(ri) > 0.5) r = true; }
-  return {DL:l, DR:r};
+      if (dir >= 1 && dir <= 3) r = true; if (dir >= 5 && dir <= 7) l = true; if (dir === 0 || dir === 1 || dir === 7) u = true; if (dir >= 3 && dir <= 5) d = true; } }
+  if (gp.buttons.length > ri){ if (bv(li) > 0.5) l = true; if (bv(ri) > 0.5) r = true; if (bv(li-2) > 0.5) u = true; if (bv(li-1) > 0.5) d = true; }
+  return {DL:l, DR:r, DU:u, DD:d};
 }
 function padMap(gp){
   const bv = i => { const b = gp.buttons[i]; if (!b) return 0; if (typeof b !== 'object') return b; return (b.pressed && !b.value) ? 1 : b.value; };
@@ -396,6 +396,25 @@ function padMap(gp){
 // RS up = counter-pump · RS left/right in air = tweak · LB + RS direction = trick · B respawn · Y switch camera
 // X reset camera · Menu pause. (View toggles the help panel; A starts/restarts from menus.)
 let kbSpacePrev = false;
+// ---------- drivetrain: 1x12 (32T ring, 10-51T cassette), 29er wheel (2.3 m roll-out). Visual only: physics speed is untouched ----------
+const DRV = (() => { const COGS = [51,45,39,33,28,24,21,18,16,14,12,10], RING = 32, CIRC = 2.3, SHIFT_T = 0.28;   // gear 1 = 51T (easiest) .. 12 = 10T
+  const D = { gear: 4, cadence: 0, standing: 0, pending: 0, shiftT: 0, manualT: 0, crankRpm: 0, COGS, RING, CIRC };
+  D.rpmAt = (speed, g) => speed/CIRC*60 * COGS[g-1]/RING;          // crank rpm = wheel rpm x cog / ring
+  D.manual = dir => { D.pending = Math.max(1, Math.min(12, (D.pending || D.gear) + dir)); D.shiftT = SHIFT_T; D.manualT = 4; };
+  D.update = (S, inp, dt) => { const sp = S.speed || 0, pedal = !S.air && S.crashT <= 0 && !S.lift && (inp.pedal || 0) > 0.05, up = Math.max(0, S.slope || 0);
+    D.manualT = Math.max(0, D.manualT - dt);
+    if (!D.pending && D.manualT <= 0){   // auto-shift one cog at a time toward ~80 rpm (85-90 when climbing); only while pedalling or rolling
+      const tgt = up > 0.06 ? 88 : 78; let best = D.gear, bd = 1e9; for (let g = 1; g <= 12; g++){ const dd = Math.abs(D.rpmAt(Math.max(sp, 1.2), g) - tgt); if (dd < bd){ bd = dd; best = g; } }
+      if (up > 0.12) best = Math.min(best, 6);                   // steep climbs: stay in the big cogs
+      const cad = D.rpmAt(sp, D.gear); if (best !== D.gear && (cad < 68 || cad > 92 || Math.abs(best - D.gear) > 1)){ D.pending = D.gear + Math.sign(best - D.gear); D.shiftT = SHIFT_T; } }
+    if (D.pending){ D.shiftT -= dt * (pedal ? 1 : 0.6); if (D.shiftT <= 0){ D.gear = D.pending; D.pending = 0; } }
+    D.crankRpm = D.rpmAt(sp, D.gear);
+    // spun out (>125 rpm in top gear) -> stop pedalling and coast; from a standstill the crank turns at least ~40 rpm while pushing off
+    D.cadence = pedal ? (D.crankRpm > 125 ? 0 : Math.max(D.crankRpm, 40*(inp.pedal || 0))) : 0;
+    D.standing += ((pedal && up > 0.14 && (inp.pedal || 0) > 0.6 ? 1 : 0) - D.standing) * Math.min(1, dt*3);
+    const el = document.getElementById('gearVal'); if (el){ const t = `${D.gear}/12`; if (el.textContent !== t) el.textContent = t; el.classList.toggle('shifting', !!D.pending); } };
+  return D; })();
+window.__drv = DRV;
 function readInput(){
   const inp = {rsy:0, counter:false, steer:0, lean:0, pedal:0, brake:0, pumpHold:false, pop:false, tweak:0, trick:null, kbFlip:0, pressed:{}};
   const pads = navigator.getGamepads ? navigator.getGamepads() : [];
@@ -471,6 +490,8 @@ function onPress(code){
   if (code==='KeyH') $('help').classList.toggle('hidden');
   if ((code==='KeyR'||code==='B') && S.state==='riding' && !S.paused) { respawnSafe(); flash('RESPAWN',0.8); }
   // teleport between spots: D-pad ← → on the controller, [ ] / , . or 1-8 on the keyboard
+  if (S.state==='riding' && !S.paused && (code==='DU'||code==='KeyG')) DRV.manual(+1);
+  if (S.state==='riding' && !S.paused && (code==='DD'||code==='KeyF')) DRV.manual(-1);
   if (S.state==='riding' && !S.paused){
     if (code==='DL'||code==='BracketLeft'||code==='Comma') teleport(nextOpen(spotI,-1));
     if (code==='DR'||code==='BracketRight'||code==='Period') teleport(nextOpen(spotI,1));
@@ -567,7 +588,7 @@ function step(dt, inp){
   if (!S.air){
     const tx_ = -Math.sin(S.travel), tz_ = -Math.cos(S.travel);
     const h0 = groundH(S.x,S.z), h1 = groundH(S.x+tx_*0.5, S.z+tz_*0.5);
-    const slope = (h1-h0)/0.5;
+    const slope = (h1-h0)/0.5; S.slope = slope;
     let a = -G*slope/Math.sqrt(1+slope*slope);
     // pedalling: ~2.5 m/s² from a standstill, fading to zero at 55 km/h (65 uphill); above that speed only comes from gravity and pumping
     { const up = Math.max(0, slope), cap = 15.28 + 2.78*Math.min(1, up/0.05);   // 55 km/h on the flat, 65 km/h uphill
@@ -771,6 +792,7 @@ function frame(){
   if (S.air) S.landBlend = 0.15; else if (S.landBlend > 0) S.landBlend -= dt;
   if (!S.air && S.landBlend > 0) bike.quaternion.slerp(_qT, 1 - Math.exp(-dt/0.04)); else bike.quaternion.copy(_qT);
   pitchG.rotation.set(0,0,0); leanG.rotation.set(0,0,0);   // whip/scrub: stick right = bike whips right
+  DRV.update(S, inp, dt); inp.cadence = DRV.cadence; inp.standing = DRV.standing;
   BR.update(S, inp, dt);                                       // rider pose: IK on grips/pedals, blended trick keyframes, barspin/tailwhip bike parts
   rig.position.z = (S.weight||0)*0.12;                         // visible fore/aft weight transfer
   rig.position.y = -(S.susp||0)*0.8; rig.scale.y = 1 - (S.susp||0)*0.5;
