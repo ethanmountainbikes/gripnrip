@@ -142,3 +142,9 @@ The shop has tabs: Bikes, Paint, Jersey, Pants, Helmet and Goggles. Switch tabs 
 - Paints ($100–$1,500): solid colours, two-tone, fade, woodland camo, race decals, raw carbon, mirror chrome.
 - Gear: jersey patterns (stripes, hoops, chevrons, camo), pants colours, helmet designs (race stripe, checker, carbon, flames), goggle lenses.
 - Skins are cosmetic only and are equipped per bike. Saved in `trailDescent.cosmetics` (owned) and `trailDescent.skins` (equipped per bike). Patterns are procedural shaders, so there are no image assets.
+
+## Real 3D rock gardens
+The rock gardens on Rock Garden, Forest Singletrack and the DH/enduro trails are now 3D boulders (17 gardens: 149 small rocks, 51 big ones). The shape you see is exactly the collision shape: each mesh is a lathe of the rock's height profile.
+- Small rocks (0.12–0.45 m) are rideable. The wheels climb each rock's real shape, which gives a jolt and costs some speed. They never launch you.
+- Big rocks (0.65–1.05 m) are solid. Hitting one head-on is a crash, a glancing hit deflects you with some speed lost, and a high enough hop clears it.
+- Every garden keeps a clear lane at least 2 m wide down the middle.

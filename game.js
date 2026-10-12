@@ -7,7 +7,7 @@ import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featAxis, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL, LIFTS, connectors, CW, SHOP } from './world.js';
+import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featBase, featAxis, BOULDERS, boulderH, bigBouldersNear, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL, LIFTS, connectors, CW, SHOP } from './world.js';
 
 const G = 9.81;
 // ---------- bikes (shop) ----------
@@ -266,10 +266,10 @@ const farU = { value: new THREE.Vector3(0,0,0) };
       wi.push(tl[N],tr[N],bl[N], tr[N],br[N],bl[N]);
     } else {
       const NT = Math.ceil(f.L/0.4), UW = f.hw+1.3, NU = Math.ceil(2*UW/0.4), b0 = dv.length/3;
-      for (let i=0;i<=NT;i++) for (let k=0;k<=NU;k++){ const t = i/NT*f.L, u = -UW + k/NU*2*UW, [x,z] = at(t,u), fh = featH(x,z);
+      for (let i=0;i<=NT;i++) for (let k=0;k<=NU;k++){ const t = i/NT*f.L, u = -UW + k/NU*2*UW, [x,z] = at(t,u), fh = featBase(x,z);
         const edge = k === 0 || k === NU || i === 0 || i === NT;      // outer rim tucks just under the ground
         dv.push(x, meshH(x,z) + fh + (edge ? -0.04 : 0.02), z);
-        c.copy(C_DIRT).lerp(C_DIRT2, 0.3 + 0.4*Math.sin(t*1.7+u)*Math.sin(u*2.1)); if (f.rock && fh > 0.06) c.copy(C_ROCK).lerp(C_DIRT2, 0.2+0.3*Math.sin(t*3.1+u*2.7)); if (f.road && fh < 0.05 && Math.abs(u) < f.hw+0.6) c.setRGB(0.16,0.16,0.17); /* road in the gap */ if (fh < 0.05) c.lerp(C_GRASS, 0.0); dc.push(c.r,c.g,c.b); }
+        c.copy(C_DIRT).lerp(C_DIRT2, 0.3 + 0.4*Math.sin(t*1.7+u)*Math.sin(u*2.1)); if (f.rock && !f.boulders && fh > 0.06) c.copy(C_ROCK).lerp(C_DIRT2, 0.2+0.3*Math.sin(t*3.1+u*2.7)); if (f.road && fh < 0.05 && Math.abs(u) < f.hw+0.6) c.setRGB(0.16,0.16,0.17); /* road in the gap */ if (fh < 0.05) c.lerp(C_GRASS, 0.0); dc.push(c.r,c.g,c.b); }
       // wind triangles so faces point up (correct normals -> no black sides)
       const up = (() => { const [x0,z0] = at(0,-UW), [x1,z1] = at(0,UW), [x2,z2] = at(1,-UW); return ((x1-x0)*(z2-z0) - (z1-z0)*(x2-x0)) < 0; })();
       for (let i=0;i<NT;i++) for (let k=0;k<NU;k++){ const a = b0+i*(NU+1)+k, b = a+1, e = a+NU+1, g = e+1; if (up) di.push(a,b,e, b,g,e); else di.push(a,e,b, b,e,g); }
@@ -280,6 +280,17 @@ const farU = { value: new THREE.Vector3(0,0,0) };
   const dg = new THREE.BufferGeometry(); dg.setAttribute('position', new THREE.Float32BufferAttribute(dv,3)); dg.setAttribute('color', new THREE.Float32BufferAttribute(dc,3)); dg.setIndex(di); dg.computeVertexNormals();
   const dm = new THREE.Mesh(dg, dirtMat); dm.castShadow = dm.receiveShadow = true; scene.add(dm); }
 
+// ---------- 3D boulders (rock gardens): each mesh is the exact collider shape (lathe of its height profile) + small surface detail
+{ const mk = big => { const pts = []; const b = {h:1, r:1, big}; for (let i = 0; i <= 10; i++){ const d = 1 - i/10; pts.push(new THREE.Vector2(d, boulderH(b, Math.min(d, 0.999)))); }
+    pts[0].y = 0; const g = new THREE.LatheGeometry(pts, 11); g.translate(0, -0.02, 0); const p = g.attributes.position;
+    for (let i = 0; i < p.count; i++){ const x = p.getX(i), z = p.getZ(i), y = p.getY(i), n = 1 + 0.06*Math.sin(x*7.1 + z*3.3) + 0.05*Math.sin(z*9.7 - x*4.1 + y*5);
+      p.setXYZ(i, x*n, y > 0.05 ? y*(1 + 0.04*Math.sin(x*11 + z*6)) : y, z*n); }
+    g.computeVertexNormals(); return g; };
+  const bmat = triplanar(new THREE.MeshStandardMaterial({color:0xa9a39a, roughness:0.85, flatShading:true}), TEX.rock, 0.6, 1.0);
+  for (const big of [false, true]){ const list = BOULDERS.filter(b => b.big === big); if (!list.length) continue;
+    const im = new THREE.InstancedMesh(mk(big), bmat, list.length), M = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+    list.forEach((b, i) => { M.compose(new THREE.Vector3(b.x, terrainH(b.x, b.z) + 0.015, b.z), q.setFromEuler(e.set(0, b.rot, 0)), new THREE.Vector3(b.r, b.h, b.r)); im.setMatrixAt(i, M); });
+    im.castShadow = im.receiveShadow = true; im.computeBoundingSphere(); scene.add(im); } }
 // ---------- trail markers, start/finish banners ----------
 { const poleG = new THREE.CylinderGeometry(0.06,0.06,1.3,6); poleG.translate(0,0.65,0);
   let total = 0; for (const tr of trails) total += 2*Math.ceil(tr.pts.length/8);
@@ -508,6 +519,18 @@ function trackWorld(dt){
 const wrapA = a => Math.atan2(Math.sin(a), Math.cos(a));
 
 const INP0 = {steer:0, lean:0, pedal:0, brake:0, pumpHold:false, pop:false, counter:false, tweak:0, rsy:0, trick:null};
+// big boulders are solid: head-on = crash, glancing = deflect off with a speed loss; hop high enough and you clear them
+function hitBoulders(){ for (const b of bigBouldersNear(S.x, S.z)){
+    const dx = S.x - b.x, dz = S.z - b.z, d = Math.hypot(dx, dz), R = b.r*0.95 + 0.12;
+    if (d >= R) continue; const top = terrainH(b.x, b.z) + boulderH(b, Math.min(d, b.r*0.999));
+    if (S.y > top - 0.05) continue;                                             // above the rock (hopped / rolled onto it from the air)
+    const nxv = dx/(d||1), nzv = dz/(d||1), vx = -Math.sin(S.travel), vz = -Math.cos(S.travel), into = -(vx*nxv + vz*nzv);   // 1 = straight at it
+    if (into > 0.75 && S.speed > 3){ S.x = b.x + nxv*R; S.z = b.z + nzv*R; S.y = groundH(S.x, S.z); S.air = false; crash('Hit a boulder!'); return true; }
+    // glance: slide round the rock, lose some speed
+    const tx = -nzv, tz = nxv, s = Math.sign(vx*tx + vz*tz) || 1; S.travel = Math.atan2(-tx*s, -tz*s); S.yaw = S.travel + wrapA(S.yaw - S.travel)*0.3;
+    S.speed *= into > 0 ? 0.75 - 0.3*into : 0.95; S.x = b.x + nxv*R; S.z = b.z + nzv*R; if (!S.air) S.y = groundH(S.x, S.z);
+    S.vx = -Math.sin(S.travel)*S.speed; S.vz = -Math.cos(S.travel)*S.speed; S.boulderHits = (S.boulderHits||0) + 1; return false; }
+  return false; }
 function step(dt, inp){
   inp = Object.assign({}, INP0, inp);
   if (S.crashT > 0){ S.crashT -= dt;
@@ -584,9 +607,14 @@ function step(dt, inp){
     S.landCool = Math.max(0, (S.landCool||0) - dt);
     S.gf = (S.gf||0) + 1;
     const crestG = inp.counter ? G*2.2 : G*1.15;   // counter-pump (RS up) keeps you glued over rollers
-    let crest = S.gf > 3 && S.landCool <= 0 && (S.lastVyG - vyG)/dt > crestG && S.speed > 4;
+    // small boulders: wheels follow the real rock shape; each climb costs speed and jolts the bike, never launches
+    const rockH = featH(nx, nz) - featBase(nx, nz), onRock = rockH > 0.005 || (featH(S.x, S.z) - featBase(S.x, S.z)) > 0.005;
+    if (onRock){ const climb = Math.max(0, ng - S.y); S.speed = Math.max(0, S.speed - climb*(2.2 + S.speed*0.25)); S.suspV = (S.suspV||0) + climb*25; S.jolt = Math.min(1, (S.jolt||0) + climb*4);
+      vyG = THREE.MathUtils.clamp(vyG, -2, 2); S.rockT = 0.25; }
+    S.rockT = Math.max(0, (S.rockT||0) - dt);
+    let crest = S.gf > 3 && S.landCool <= 0 && (S.lastVyG - vyG)/dt > crestG && S.speed > 4 && S.rockT <= 0;
     const edge = (ng - S.y) < -0.12 && (S.lastVyG - vyG)/dt > G_AIR*3 && S.speed > 1.5;   // rolling off a ledge/lip: the ground drops away faster than you can fall
-    if (edge && !crest) crest = true;
+    if (edge && !crest && S.rockT <= 0) crest = true;
     if (crest){ // only leave the ground if the ballistic path really clears the terrain (no micro-hops)
       let clear = 0; for (let t=0.03; t<=0.18; t+=0.03){ const bx=S.x+S.vx*t, bz=S.z+S.vz*t, by=S.y+S.lastVyG*t-0.5*G_AIR*t*t; clear=Math.max(clear, by-groundH(bx,bz)); }
       if (clear < 0.4) crest = false; }
@@ -605,10 +633,12 @@ function step(dt, inp){
     if (S.stuckT > 1.2 && S.crashT <= 0){ S.stuckT = 0; crash('Cased it!'); }
     S.spin *= Math.exp(-dt*12); S.tweak = (S.tweak||0)*Math.exp(-dt*10); S.nose = (S.nose||0)*Math.exp(-dt*10);
     S.dust = (S.sliding ? 1 : 0) + (inp.brake > 0.5 && S.speed > 6 ? 0.5 : 0) + (!onTrail && S.speed > 4 ? 0.6 : 0);
+    if (hitBoulders()) return;
     if (S.speed > 4) for (const t of nearTrees(S.x, S.z)) if ((t.x-S.x)**2 + (t.z-S.z)**2 < 0.55) { crash('Hit a tree!'); return; }
   } else {
     S.airT += dt; S.vy -= G_AIR*dt;
     S.x += S.vx*dt; S.z += S.vz*dt; S.y += S.vy*dt;
+    if (hitBoulders()) return;
     // left stick: analog spin / flip with rotational inertia
     const spinIn = inp.steer, ty = inp.lean;
     S.wYaw = (S.wYaw||0) + (spinIn*6.0 - (S.wYaw||0)) * Math.min(1, dt*7);

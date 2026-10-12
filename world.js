@@ -194,6 +194,26 @@ for (const tr of trails){ if (!['flow','flowg','dh','enduro','jumps','pump','xc'
   for (const ln of lines){ for (let k=0, t=-60; t < 55; k++){ const p = ln.make(k);
       addFeature(ln.name==='Big Kickers' ? 'kicker' : ln.name==='Doubles' ? 'double' : ln.name==='Gaps & Steps' ? 'gap' : 'table', PARK.x + d[0]*t + sx*ln.off, PARK.z + d[1]*t + sz*ln.off, yaw, 2.4, p, -1);
       t += p.L + 13; } } }
+// real 3D boulders replace the old sine-bump rock gardens. Small rocks (<= 0.45 m) are part of the ground: wheels roll
+// over their real dome shape (a jolt and some speed loss, never a launch). Big rocks (>= 0.6 m) are solid obstacles beside
+// the line: ride round them or hop them. A >= 2 m clear lane is always left down the middle of every garden.
+export const BOULDERS = [];
+const smallDome = (b, d) => d >= b.r ? 0 : b.h*0.5*(1 + Math.cos(Math.PI*d/b.r));
+const bigDome = (b, d) => d >= b.r ? 0 : b.h*Math.sqrt(1 - (d/b.r)**4);
+export const boulderH = (b, d) => b.big ? bigDome(b, d) : smallDome(b, d);
+for (const f of features){ if (!f.rock || f.kind !== 'rocks') continue;
+  const rnd = mulberry(Math.round(f.x*31 + f.z*17) + 7); f.p = () => 0; f.boulders = [];
+  const at = (t, us) => [f.x + f.dx*t + f.dz*us, f.z + f.dz*t - f.dx*us];
+  const nS = Math.round(f.L*1.4);
+  for (let i = 0; i < nS*3 && f.boulders.length < nS; i++){
+    const h = 0.12 + rnd()*0.33, r = h*2.4 + 0.25, t = 0.6 + rnd()*(f.L-1.2), us = (rnd()*2-1)*(f.hw-0.2);
+    if (f.boulders.some(b => Math.hypot(b.t-t, b.us-us) < (b.r + r)*0.75)) continue;
+    const [x, z] = at(t, us); const b = {x, z, t, us, h, r, big:false, rot:rnd()*6.28, f}; f.boulders.push(b); }
+  for (let k = 0, side = rnd() < 0.5 ? -1 : 1; k < 3; k++, side = -side){
+    const h = 0.65 + rnd()*0.4, r = 0.55 + rnd()*0.35, t = (k+0.5)/3*f.L + (rnd()-0.5)*1.5, us = side*(1.0 + r + rnd()*0.6);
+    const [x, z] = at(t, us); f.boulders = f.boulders.filter(b => Math.hypot(b.t-t, b.us-us) > r + b.r*0.6);
+    f.boulders.push({x, z, t, us, h, r, big:true, rot:rnd()*6.28, f}); }
+  f.hw += 1.0; BOULDERS.push(...f.boulders); }
 features.forEach(f => { if (f.wood === undefined) f.wood = false; });
 export const DIFF = {green:{icon:'●', label:'Green', color:'#2fae4a'}, blue:{icon:'■', label:'Blue', color:'#2f6fff'}, black:{icon:'◆', label:'Black', color:'#111'}, dblack:{icon:'◆◆', label:'Double black', color:'#111'}, pro:{icon:'PRO', label:'Pro line', color:'#ff7a00'}};
 PARK.type = 'Dirt jump'; PARK.diff = 'pro';
@@ -239,21 +259,26 @@ export function terrainH(x, z){
   if (rough > 0) h += rough*(0.22*Math.sin(x*0.13)*Math.sin(z*0.11) + 0.06*Math.sin(x*0.37+z*0.29));
   return h;
 }
-export function featH(x, z){
+function featHq(x, z, withRocks){
   const fs = featGrid.get(key(Math.floor(x/CELL), Math.floor(z/CELL))); if (!fs) return 0; let h = 0;
   for (const f of fs){ if (x<f.minx||x>f.maxx||z<f.minz||z>f.maxz) continue;
     const rx = x-f.x, rz = z-f.z, t = rx*f.dx + rz*f.dz, us = rx*f.dz - rz*f.dx, u = Math.abs(us);
     if (t < 0 || t > f.L || u > f.hw + (f.wood ? 0 : 1.2)) continue;
+    if (f.boulders){ if (!withRocks) continue; for (const b of f.boulders){ if (b.big) continue; const d = Math.hypot(x-b.x, z-b.z); if (d < b.r){ const v = smallDome(b, d); if (v > h) h = v; } } continue; }
     let v = f.p(t, us); if (!f.wood && u > f.hw) v *= 0.5*(1+Math.cos(Math.PI*(u-f.hw)/1.2));   // dirt jumps have rounded sides
     if (v > h) h = v; }
   return h;
 }
+export const featH = (x, z) => featHq(x, z, true), featBase = (x, z) => featHq(x, z, false);
+// big boulder near (x,z) within reach, for collisions
+export function bigBouldersNear(x, z){ const fs = featGrid.get(key(Math.floor(x/CELL), Math.floor(z/CELL))); const out = []; if (!fs) return out;
+  for (const f of fs){ if (!f.boulders || x<f.minx||x>f.maxx||z<f.minz||z>f.maxz) continue; for (const b of f.boulders) if (b.big && (x-b.x)**2 + (z-b.z)**2 < (b.r+1.5)**2) out.push(b); } return out; }
 // forward axis of the feature that dominates the surface at (x,z), or null (used so only ramp faces launch)
 export function featAxis(x, z){
   const fs = featGrid.get(key(Math.floor(x/CELL), Math.floor(z/CELL))); if (!fs) return null; let h = 0, best = null;
   for (const f of fs){ if (x<f.minx||x>f.maxx||z<f.minz||z>f.maxz) continue;
     const rx = x-f.x, rz = z-f.z, t = rx*f.dx + rz*f.dz, us = rx*f.dz - rz*f.dx, u = Math.abs(us);
-    if (t < 0 || t > f.L || u > f.hw + (f.wood ? 0 : 1.2)) continue;
+    if (t < 0 || t > f.L || u > f.hw + (f.wood ? 0 : 1.2) || f.boulders) continue;
     let v = f.p(t, us); if (!f.wood && u > f.hw) v *= 0.5*(1+Math.cos(Math.PI*(u-f.hw)/1.2));
     if (v > h){ h = v; best = f; } }
   return best;
