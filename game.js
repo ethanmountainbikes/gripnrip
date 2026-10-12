@@ -245,35 +245,46 @@ function padMap(gp){
   const ax = i => gp.axes[i] || 0;
   if (gp.mapping === 'standard'){
     return { lx:ax(0), rx:ax(2), ry:ax(3), lt:bv(6), rt:bv(7),
-      btn:{A:bv(0)>0.5, Y:bv(3)>0.5, Back:bv(8)>0.5, Start:bv(9)>0.5} };
+      ly:ax(1), btn:{A:bv(0)>0.5, B:bv(1)>0.5, X:bv(2)>0.5, Y:bv(3)>0.5, LB:bv(4)>0.5, Back:bv(8)>0.5, Start:bv(9)>0.5} };
   }
   if (gp.axes.length >= 6){   // Firefox XInput-style: triggers on axes 2 & 5
     return { lx:ax(0), rx:ax(3), ry:ax(4), lt:trigAxis(gp,2), rt:trigAxis(gp,5),
-      btn:{A:bv(0)>0.5, Y:bv(3)>0.5, Back:bv(6)>0.5, Start:bv(7)>0.5} };
+      ly:ax(1), btn:{A:bv(0)>0.5, B:bv(1)>0.5, X:bv(2)>0.5, Y:bv(3)>0.5, LB:bv(4)>0.5, Back:bv(6)>0.5, Start:bv(7)>0.5} };
   }
   // other non-standard layouts: right stick on 2,3, triggers as buttons 6,7
   return { lx:ax(0), rx:ax(2), ry:ax(3), lt:Math.max(bv(6), 0), rt:Math.max(bv(7), 0),
-    btn:{A:bv(0)>0.5, Y:bv(3)>0.5, Back:bv(8)>0.5, Start:bv(9)>0.5} };
+    ly:ax(1), btn:{A:bv(0)>0.5, B:bv(1)>0.5, X:bv(2)>0.5, Y:bv(3)>0.5, LB:bv(4)>0.5, Back:bv(8)>0.5, Start:bv(9)>0.5} };
 }
 
+// Descenders default Xbox layout:
+// LS steer (x) / lean fwd-back (y) · RT pedal · LT brake · RS down = pump/preload, RS down->up = bunny hop,
+// RS up = counter-pump · RS left/right in air = tweak · LB + RS direction = trick · B respawn · Y switch camera
+// X reset camera · Menu pause. (View toggles the help panel; A starts/restarts from menus.)
+let kbSpacePrev = false;
 function readInput(){
-  const inp = {steer:0, pedal:0, brake:0, jump:false, tx:0, ty:0, pressed:{}};
+  const inp = {rsy:0, counter:false, steer:0, lean:0, pedal:0, brake:0, pumpHold:false, pop:false, tweak:0, trick:null, kbFlip:0, pressed:{}};
   const pads = navigator.getGamepads ? navigator.getGamepads() : [];
   for (const gp of pads){ if (!gp || !gp.connected) continue;
     if (!knownPads[gp.index]){ knownPads[gp.index]=true; toast('🎮 Controller connected: ' + gp.id.slice(0,40)); }
-    const m = padMap(gp);
-    inp.steer += dz(m.lx); inp.tx += dz(m.rx); inp.ty += dz(m.ry);
+    const m = padMap(gp), rx = dz(m.rx), ry = dz(m.ry);
+    inp.steer += dz(m.lx); inp.lean += dz(m.ly);
     inp.pedal = Math.max(inp.pedal, m.rt); inp.brake = Math.max(inp.brake, m.lt);
-    if (m.btn.A) inp.jump = true;
-    for (const name of ['A','Y','Start','Back']){ const now=!!m.btn[name], key=gp.index+'_'+name; if(now && !prevBtn[key]) inp.pressed[name]=true; prevBtn[key]=now; }
+    if (m.btn.LB){ if (Math.hypot(rx,ry) > 0.35) inp.trick = Math.abs(rx) > Math.abs(ry) ? (rx>0?'right':'left') : (ry>0?'down':'up'); }
+    else { if (ry > 0.5) inp.pumpHold = true; if (ry < -0.5){ inp.pop = true; inp.counter = true; } inp.tweak = rx; inp.rsy = ry; }
+    for (const name of ['A','B','X','Y','Start','Back']){ const now=!!m.btn[name], key=gp.index+'_'+name; if(now && !prevBtn[key]) inp.pressed[name]=true; prevBtn[key]=now; }
     break; }
   if (keys.KeyA||keys.ArrowLeft) inp.steer -= 1; if (keys.KeyD||keys.ArrowRight) inp.steer += 1;
-  const up = keys.KeyW||keys.ArrowUp, down = keys.KeyS||keys.ArrowDown;
-  if (up) inp.pedal = 1; if (down) inp.brake = 1;
-  if (keys.Space) inp.jump = true;
-  if (keys.KeyJ) inp.tx -= 1; if (keys.KeyL) inp.tx += 1; if (keys.KeyI) inp.ty -= 1; if (keys.KeyK) inp.ty += 1;
-  inp.kbUp = up; inp.kbDown = down;
-  inp.steer = THREE.MathUtils.clamp(inp.steer,-1,1);
+  if (keys.KeyW||keys.ArrowUp) inp.pedal = 1; if (keys.KeyS||keys.ArrowDown) inp.brake = 1;
+  if (keys.KeyI) inp.kbFlip -= 1; if (keys.KeyK) inp.kbFlip += 1;
+  if (keys.KeyJ) inp.steer -= 1; if (keys.KeyL) inp.steer += 1;
+  if (keys.ShiftLeft||keys.ShiftRight) inp.counter = true;
+  if (keys.KeyQ) inp.tweak -= 1; if (keys.KeyE) inp.tweak += 1;
+  if (keys.KeyC){ inp.trick = keys.KeyI||keys.ArrowUp ? 'up' : keys.KeyK||keys.ArrowDown ? 'down' : keys.KeyJ||keys.ArrowLeft ? 'left' : keys.KeyL||keys.ArrowRight ? 'right' : inp.trick; }
+  if (keys.Space) inp.pumpHold = true;
+  if (!keys.Space && kbSpacePrev) inp.pop = true;
+  kbSpacePrev = !!keys.Space;
+  inp.steer = THREE.MathUtils.clamp(inp.steer,-1,1); inp.lean = THREE.MathUtils.clamp(inp.lean + inp.kbFlip,-1,1);
+  inp.tweak = THREE.MathUtils.clamp(inp.tweak,-1,1);
   return inp;
 }
 
@@ -295,80 +306,123 @@ const trickEl = $('trick'), centerEl = $('center');
 function flash(msg, t=1.2){ centerEl.textContent = msg; S.flashT = t; }
 function placeOnTrail(d){
   S.x = cx(d); S.z = -d; S.y = groundH(S.x,S.z); S.yaw = Math.atan2(-cxd(d),1);
-  S.speed = 0; S.vy = 0; S.air = false; S.pitch = 0; S.spin = 0; S.lean = 0; S.preload = 0; S.crashT = 0;
+  S.speed = 0; S.vy = 0; S.air = false; S.travel = S.yaw; S.wYaw = S.wPitch = 0; S.nose = 0; S.susp = S.suspV = 0; S.pitch = 0; S.spin = 0; S.lean = 0; S.preload = 0; S.crashT = 0; S.tweak = 0; S.trick = null; S.landCool = 0.3;
 }
 function resetGame(){
   Object.assign(S,{lives:3,score:0,bestAir:0,totalAir:0,time:0,maxKmh:0,clean:0,spins:0,flips:0,state:'riding',paused:false});
-  objI = 0; placeOnTrail(8); $('overlay').classList.add('hidden');
+  objI = 0; placeOnTrail(8); $('overlay').classList.add('hidden'); setTimeout(()=>$('help').classList.add('hidden'), 12000);
 }
-function crash(reason){
+function crash(reason){ S.lastCrash = reason;
   if (S.crashT>0) return;
   S.lives--; S.crashT = 2.0; S.air = false; flash(S.lives>0 ? 'BAIL!' : 'GAME OVER', 2);
   trickEl.textContent = reason;
   if (S.lives <= 0){ S.state='over'; setTimeout(()=>{ showOverlay('GAME OVER', `Rep: ${S.score}<br>Press <b>A</b> / <b>Enter</b> to try again`); }, 1600); }
 }
 function showOverlay(title,msg){ $('overlay').classList.remove('hidden'); $('overlayBox').querySelector('h1').textContent=title; $('overlayMsg').innerHTML=msg; }
-function togglePause(){ if (S.state!=='riding') return; S.paused=!S.paused; if (S.paused) showOverlay('PAUSED','Press <b>Start</b> / <b>P</b> to resume'); else $('overlay').classList.add('hidden'); }
+function togglePause(){ if (S.state!=='riding') return; S.paused=!S.paused; if (S.paused) showOverlay('PAUSED','Press <b>Menu</b> / <b>P</b> to resume'); else $('overlay').classList.add('hidden'); }
 function onPress(code){
   if (code==='Enter' || code==='A'){ if (S.state==='menu'||S.state==='over'||S.state==='finished'){ resetGame(); return; } }
   if (code==='Space' && (S.state==='menu'||S.state==='over'||S.state==='finished')) { resetGame(); return; }
   if (code==='KeyP'||code==='Escape'||code==='Start') togglePause();
+  if (code==='KeyV'||code==='Y'){ camMode = (camMode+1)%3; toast(['Camera: chase','Camera: far','Camera: close'][camMode]); }
+  if (code==='KeyX'||code==='X') camInit = false;
   if (code==='KeyH'||code==='Back') $('help').classList.toggle('hidden');
-  if ((code==='KeyR'||code==='Y') && S.state==='riding' && !S.paused) { placeOnTrail(Math.max(8,-S.z-3)); flash('RESPAWN',0.8); }
+  if ((code==='KeyR'||code==='B') && S.state==='riding' && !S.paused) { placeOnTrail(Math.max(8,-S.z-3)); flash('RESPAWN',0.8); }
 }
+let camMode = 0;
 const wrapA = a => Math.atan2(Math.sin(a), Math.cos(a));
 
+const INP0 = {steer:0, lean:0, pedal:0, brake:0, pumpHold:false, pop:false, counter:false, tweak:0, rsy:0, trick:null};
 function step(dt, inp){
+  inp = Object.assign({}, INP0, inp);
   if (S.crashT > 0){ S.crashT -= dt;
     S.speed *= Math.pow(0.2,dt); S.x += -Math.sin(S.yaw)*S.speed*dt; S.z += -Math.cos(S.yaw)*S.speed*dt; S.y = groundH(S.x,S.z);
     S.lean = THREE.MathUtils.lerp(S.lean, 1.4, dt*4);
     if (S.crashT <= 0 && S.state==='riding') placeOnTrail(Math.max(8,-S.z-5));
     return; }
-  const fx = -Math.sin(S.yaw), fz = -Math.cos(S.yaw);
   const d = -S.z, u = S.x - cx(d), onTrail = Math.abs(u) <= W+0.3;
+  if (S.travel === undefined) S.travel = S.yaw;
+  // suspension: visual spring-damper, never pushes the body back up (no rebound)
+  const sTarget = S.preload*0.16 + Math.max(0, S.weightLoad||0);
+  S.suspV = (S.suspV||0) + (-320*((S.susp||0)-sTarget) - 32*(S.suspV||0))*dt; S.susp = THREE.MathUtils.clamp((S.susp||0) + S.suspV*dt, -0.05, 0.3);
   if (!S.air){
-    // slope along heading
-    const h0 = groundH(S.x,S.z), h1 = groundH(S.x+fx*0.5, S.z+fz*0.5);
+    const tx_ = -Math.sin(S.travel), tz_ = -Math.cos(S.travel);
+    const h0 = groundH(S.x,S.z), h1 = groundH(S.x+tx_*0.5, S.z+tz_*0.5);
     const slope = (h1-h0)/0.5;
     let a = -G*slope/Math.sqrt(1+slope*slope);
     a += inp.pedal * (S.speed < 12 ? 6 : 6*12/S.speed);
-    a -= inp.brake * 11 * Math.min(1,S.speed);
+    a -= inp.brake * 9 * Math.min(1,S.speed);
     a -= 0.0045*S.speed*S.speed + 0.25;
     if (!onTrail) a -= 0.35*S.speed + 1.5;
-    S.speed = Math.max(0, S.speed + a*dt);
-    const turn = 1.9 * Math.min(1, 0.25 + S.speed/8) / (1 + S.speed*0.03);
+    // pumping: compress into backsides (downslope) and extend over faces (upslope) to gain speed; wrong timing costs speed
+    const prevPre = S.preload;
+    if (inp.pumpHold) { S.preload = Math.min(1, S.preload + dt*2.2); S.hopWin = 0.35; }
+    let pop = 0;
+    if (!inp.pumpHold){ S.hopWin = (S.hopWin||0) - dt;
+      if (inp.pop && S.preload > 0.05 && S.hopWin > 0){ pop = 2.5 + S.preload*4.5; S.preload = 0; }
+      else S.preload = Math.max(0, S.preload - dt*3); }
+    const cr = (S.preload - prevPre)/dt;           // >0 compressing, <0 extending
+    const pumpA = cr > 0 ? cr*(Math.max(0,-slope)*9 - Math.max(0,slope)*4) : -cr*(Math.max(0,slope)*3.5 - Math.max(0,-slope)*1.5);
+    a += THREE.MathUtils.clamp(pumpA, -4, 6); S.pumpGain = pumpA;
+    // slides: steering + braking breaks rear traction; the travel direction lags the bike heading
+    const sliding = inp.brake > 0.3 && Math.abs(inp.steer) > 0.35 && S.speed > 5;
+    const grip = sliding ? 1.4 + Math.abs(S.slip||0)*3 : onTrail ? 11 : 5;
+    const turn = 1.9 * Math.min(1, 0.25 + S.speed/8) / (1 + S.speed*0.03) * (sliding ? 1.7 : 1) * (1 + 0.15*Math.max(0,-inp.lean));
     S.yaw -= inp.steer * turn * dt;
-    S.lean = THREE.MathUtils.lerp(S.lean, inp.steer*Math.min(0.55, S.speed*0.04), Math.min(1,dt*6));
-    S.vx = -Math.sin(S.yaw)*S.speed; S.vz = -Math.cos(S.yaw)*S.speed;
-    // preload / pop
-    if (inp.jump) S.preload = Math.min(1, S.preload + dt*1.8);
+    const slipPrev = S.travel; S.travel += wrapA(S.yaw - S.travel) * Math.min(1, grip*dt);
+    const slip = wrapA(S.yaw - S.travel);
+    a -= Math.abs(Math.sin(slip)) * S.speed * 2.2;
+    S.slip = slip; S.sliding = Math.abs(slip) > 0.12;
+    S.speed = Math.max(0, S.speed + a*dt);
+    // carve lean from actual cornering (v * yaw-rate / g)
+    const yawRate = wrapA(S.travel - slipPrev)/dt;
+    S.lean = THREE.MathUtils.lerp(S.lean, THREE.MathUtils.clamp(Math.atan(-yawRate*S.speed/G), -0.85, 0.85), Math.min(1,dt*8));
+    S.weight = THREE.MathUtils.lerp(S.weight||0, THREE.MathUtils.clamp(inp.lean + inp.brake*0.5 - inp.pedal*0.2, -1, 1), Math.min(1, dt*6));
+    S.vx = -Math.sin(S.travel)*S.speed; S.vz = -Math.cos(S.travel)*S.speed;
     const nx = S.x + S.vx*dt, nz = S.z + S.vz*dt, ng = groundH(nx,nz);
     const vyG = (ng - S.y)/dt;
-    let pop = 0;
-    if (!inp.jump && S.preload > 0.05){ pop = 2.5 + S.preload*4.5; S.preload = 0; }
-    else if (!inp.jump) S.preload = 0;
+    S.landCool = Math.max(0, (S.landCool||0) - dt);
     S.gf = (S.gf||0) + 1;
-    const crest = S.gf > 3 && (S.lastVyG - vyG)/dt > G*1.15 && S.speed > 6;
+    const crestG = inp.counter ? G*2.2 : G*1.15;   // counter-pump (RS up) keeps you glued over rollers
+    let crest = S.gf > 3 && S.landCool <= 0 && (S.lastVyG - vyG)/dt > crestG && S.speed > 6;
+    if (crest){ // only leave the ground if the ballistic path really clears the terrain (no micro-hops)
+      let clear = 0; for (let t=0.03; t<=0.18; t+=0.03){ const bx=S.x+S.vx*t, bz=S.z+S.vz*t, by=S.y+S.lastVyG*t-0.5*G*t*t; clear=Math.max(clear, by-groundH(bx,bz)); }
+      if (clear < 0.4) crest = false; }
     if (pop > 0 || crest){
-      S.air = true; S.airT = 0; if(window.__dbg) console.log('takeoff', (-S.z).toFixed(1), (S.x-cx(-S.z)).toFixed(2), pop>0?'pop':'crest', S.lastVyG.toFixed(2), vyG.toFixed(2)); S.vy = S.lastVyG + pop; S.takeoffPitch = S.pitch; S.spin = 0;
+      S.air = true; S.airT = 0; S.vy = S.lastVyG + pop; S.takeoffPitch = S.pitch; S.spin = 0; S.popped = pop > 0;
+      S.tweakT = 0; S.tricksDone = new Set(); S.wYaw = 0; S.wPitch = 0; S.yaw = S.travel + slip*0.5; S.travel = S.yaw; S.nose = 0;
+      // scrub: laying the bike over (right stick sideways) at takeoff keeps you low and fast
+      const lay = Math.abs(inp.tweak);
+      S.scrub = S.vy > 2 ? lay : 0;
+      if (S.scrub > 0.2){ S.vy *= 1 - 0.45*S.scrub; S.tweak = inp.tweak; S.speed *= 1.02; S.vx = -Math.sin(S.travel)*S.speed; S.vz = -Math.cos(S.travel)*S.speed; }
       S.x = nx; S.z = nz; S.y += S.vy*dt;
     } else { S.x = nx; S.z = nz; S.y = ng; S.vy = vyG; S.lastVyG = vyG;
       S.pitch = THREE.MathUtils.lerp(S.pitch, Math.atan(slope), Math.min(1,dt*12)); }
-    // trees
+    S.spin *= Math.exp(-dt*12); S.tweak = (S.tweak||0)*Math.exp(-dt*10); S.nose = (S.nose||0)*Math.exp(-dt*10);
+    S.dust = (S.sliding ? 1 : 0) + (inp.brake > 0.5 && S.speed > 6 ? 0.5 : 0) + (!onTrail && S.speed > 4 ? 0.6 : 0);
     if (S.speed > 4) for (const t of nearTrees(d)) if ((t.x-S.x)**2 + (t.z-S.z)**2 < 0.55) { crash('Hit a tree!'); return; }
   } else {
     S.airT += dt; S.vy -= G*dt;
     S.x += S.vx*dt; S.z += S.vz*dt; S.y += S.vy*dt;
-    let tx = inp.tx, ty = inp.ty;
-    const spinIn = tx || inp.steer*0.4;
-    S.spin += spinIn * 6.5 * dt;
-    S.pitch += ty * 5.5 * dt;
-    S.lean = THREE.MathUtils.lerp(S.lean, 0, dt*3);
+    // left stick: analog spin / flip with rotational inertia
+    const spinIn = inp.steer, ty = inp.lean;
+    S.wYaw = (S.wYaw||0) + (spinIn*6.0 - (S.wYaw||0)) * Math.min(1, dt*7);
+    S.wPitch = (S.wPitch||0) + (ty*5.5 - (S.wPitch||0)) * Math.min(1, dt*7);
+    S.spin += S.wYaw*dt; S.pitch += S.wPitch*dt;
+    // right stick: proportional whip/tweak (x) and nose angle (y), sprung so it follows the stick
+    S.tweak = THREE.MathUtils.lerp(S.tweak||0, inp.tweak, Math.min(1, dt*9));
+    S.nose = THREE.MathUtils.lerp(S.nose||0, -inp.rsy*0.6, Math.min(1, dt*8));
+    if (Math.abs(S.tweak) > 0.6) S.tweakT = (S.tweakT||0) + dt;
+    if (inp.trick){ S.trick = inp.trick; S.trickT = (S.trickT||0) + dt; if (S.trickT > 0.3) S.tricksDone.add(inp.trick); } else { S.trick = null; S.trickT = 0; }
+    S.lean = THREE.MathUtils.lerp(S.lean, 0, dt*3); S.weight = THREE.MathUtils.lerp(S.weight||0, ty, dt*5);
     const gh = groundH(S.x,S.z), gs = (groundH(S.x+S.vx*0.05, S.z+S.vz*0.05)-gh)/(Math.hypot(S.vx,S.vz)*0.05+1e-3);
     const gp = Math.atan(gs);
-    if (Math.abs(ty) < 0.2){ const e = wrapA(S.pitch-gp); if (Math.abs(e) < 1.3) S.pitch -= e*Math.min(1,dt*2.5); }
-    if (Math.abs(spinIn) < 0.45){ const e = wrapA(S.spin); if (Math.abs(e) < 1.0) S.spin -= e*Math.min(1,dt*4); }
-    if (S.y <= gh){ land(gh, gp); }
+    if (Math.abs(ty) < 0.2){ const e = wrapA(S.pitch-gp); if (Math.abs(e) < 1.3){ S.pitch -= e*Math.min(1,dt*2.5); } }
+    if (Math.abs(spinIn) < 0.3){ const e = wrapA(S.spin); if (Math.abs(e) < 1.0) S.spin -= e*Math.min(1,dt*4); }
+    S.dust = 0;
+    const gvy = (groundH(S.x+S.vx*dt, S.z+S.vz*dt) - gh)/dt;
+    if (S.y <= gh) land(gh, gp);
+    else if (!S.popped && S.airT < 0.25 && S.y - gh < 0.3 && S.vy - gvy < 1.5){ S.y = gh; S.air = false; S.lastVyG = gvy; S.gf = 0; S.spin = 0; S.pitch = gp; S.tweak = 0; S.nose = 0; S.trick = null; S.wYaw = S.wPitch = 0; }
   }
   S.time += dt;
   if (-S.z >= LENGTH && S.state==='riding'){ S.state='finished'; flash('FINISH!',3);
@@ -376,18 +430,32 @@ function step(dt, inp){
 }
 function land(gh, gp){
   S.y = gh; S.air = false;
-  const pe = wrapA(S.pitch - gp), se = wrapA(S.spin);
+  S.air = false; const pe = wrapA(S.pitch + (S.nose||0)*0.5 - gp), se = wrapA(S.spin);
+  S.wYaw = 0; S.wPitch = 0; S.travel = Math.atan2(-S.vx, -S.vz);
   const flips = Math.round((S.pitch - S.takeoffPitch)/(Math.PI*2)), spins = Math.round(S.spin/(Math.PI*2));
-  // keep horizontal momentum, lose some on impact
-  const hs = Math.hypot(S.vx,S.vz); S.speed = hs*0.95;
-  S.lastVyG = 0; S.gf = 0;
+  // project velocity onto the terrain tangent plane using the real terrain normal (works on and off trail)
+  const e = 0.25, nx = -(groundH(S.x+e,S.z)-groundH(S.x-e,S.z))/(2*e), nz = -(groundH(S.x,S.z+e)-groundH(S.x,S.z-e))/(2*e);
+  const nl = Math.hypot(nx,1,nz), n = [nx/nl, 1/nl, nz/nl];
+  const vn = S.vx*n[0] + S.vy*n[1] + S.vz*n[2];
+  const tvx = S.vx - vn*n[0], tvy = S.vy - vn*n[1], tvz = S.vz - vn*n[2];
+  const fwd = Math.hypot(tvx, tvz) * Math.max(0, Math.cos(wrapA(S.yaw - S.travel)));   // keep the along-heading part
+  S.speed = Math.max(0, fwd)*0.96;
+  { const gr = (groundH(S.x - Math.sin(S.yaw)*S.speed/120, S.z - Math.cos(S.yaw)*S.speed/120) - gh)*120; S.vy = Math.min(tvy, gr); S.lastVyG = S.vy; } S.gf = 0; S.landCool = 0.3;
+  const impact = -vn; S.suspV = (S.suspV||0) + Math.min(impact,15)*0.12; S.dustBurst = Math.min(1, impact/8);
   if (Math.abs(pe) > 0.75 || Math.abs(se) > 0.85){ crash(Math.abs(se)>0.85 ? 'Landed sideways!' : 'Over the bars!'); return; }
-  if (S.vy < -24){ crash('Too hard a landing!'); return; }
-  S.pitch = gp; S.spin = 0;
+  if (impact > 20){ crash('Too hard a landing!'); return; }
+  if (S.trick){ crash('Still mid-trick!'); return; }
+  if (Math.abs(S.tweak||0) > 0.6){ crash('Didn\'t straighten the tweak!'); return; }
+  // within tolerance: keep current orientation and let the ground solver damp it smoothly to the surface
+  S.spin = se; S.trick = null;
   if (S.airT > 0.35){
     const parts = []; let pts = Math.round(S.airT*120);
     if (flips){ parts.push((Math.abs(flips)>1? `${Math.abs(flips)}x `:'') + (flips<0?'Frontflip':'Backflip')); pts += 600*Math.abs(flips); S.flips += Math.abs(flips); }
     if (spins){ parts.push(`${Math.abs(spins)*360}`); pts += 350*Math.abs(spins); S.spins += Math.abs(spins); }
+    const TN = {up:'No Hander', down:'No Footer', left:'Superman', right:'Can-Can'};
+    for (const t of (S.tricksDone||[])){ parts.push(TN[t]); pts += 400; }
+    if ((S.scrub||0) > 0.5){ parts.push('Scrub'); pts += 250; }
+    if ((S.tweakT||0) > 0.15){ parts.push('Tweak'); pts += Math.round(150 + S.tweakT*300); }
     parts.push(`${S.airT.toFixed(1)}s air`);
     if (Math.abs(pe) < 0.2 && Math.abs(se) < 0.2){ parts.push('Perfect!'); pts = Math.round(pts*1.25); }
     S.score += pts; S.clean++; S.totalAir += S.airT; S.bestAir = Math.max(S.bestAir, S.airT);
@@ -405,7 +473,23 @@ placeOnTrail(8);
 const camPos = new THREE.Vector3(), camLook = new THREE.Vector3(); let camInit = false;
 const clock = new THREE.Clock(); let acc = 0;
 const arc = $('speedArc'), arcLen = arc.getTotalLength();
-let fpsT=0, fpsN=0;
+let fpsT=0, fpsN=0, camRoll = 0;
+// dust particles (slides, hard braking, off-trail, landings)
+const DN = 400, dustPos = new Float32Array(DN*3), dustVel = new Float32Array(DN*3), dustLife = new Float32Array(DN); let dustI = 0;
+const dustGeo = new THREE.BufferGeometry(); dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos,3));
+const dustPts = new THREE.Points(dustGeo, new THREE.PointsMaterial({color:0xb89a72, size:0.22, transparent:true, opacity:0.45, depthWrite:false, map:(()=>{ const c=document.createElement('canvas'); c.width=c.height=32; const x=c.getContext('2d'); const g=x.createRadialGradient(16,16,0,16,16,16); g.addColorStop(0,'rgba(255,255,255,1)'); g.addColorStop(1,'rgba(255,255,255,0)'); x.fillStyle=g; x.fillRect(0,0,32,32); return new THREE.CanvasTexture(c); })()}));
+dustPts.frustumCulled = false; scene.add(dustPts);
+function spawnDust(dt){
+  let n = Math.floor((S.dust||0)*S.speed*dt*6 + Math.random()); if (!S.dust) n = 0;
+  if (S.dustBurst){ n += Math.floor(S.dustBurst*40); S.dustBurst = 0; }
+  const rx = S.x + Math.sin(S.yaw)*0.55, rz = S.z + Math.cos(S.yaw)*0.55;
+  for (let i=0;i<n;i++){ const j = dustI = (dustI+1)%DN;
+    dustPos[j*3]=rx+(Math.random()-.5)*0.4; dustPos[j*3+1]=S.y+0.1; dustPos[j*3+2]=rz+(Math.random()-.5)*0.4;
+    dustVel[j*3]=(Math.random()-.5)*2 + S.vx*0.3; dustVel[j*3+1]=Math.random()*1.5+0.3; dustVel[j*3+2]=(Math.random()-.5)*2 + S.vz*0.3; dustLife[j]=0.6+Math.random()*0.6; }
+  for (let j=0;j<DN;j++){ if (dustLife[j] <= 0){ dustPos[j*3+1] = -1e4; continue; } dustLife[j] -= dt;
+    dustPos[j*3]+=dustVel[j*3]*dt; dustPos[j*3+1]+=dustVel[j*3+1]*dt; dustPos[j*3+2]+=dustVel[j*3+2]*dt; dustVel[j*3+1]-=0.8*dt; }
+  dustGeo.attributes.position.needsUpdate = true;
+}
 function frame(){
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, clock.getDelta());
@@ -417,19 +501,25 @@ function frame(){
   // pose bike
   bike.position.set(S.x, S.y, S.z);
   bike.rotation.y = S.yaw + S.spin;
-  pitchG.rotation.x = S.pitch; leanG.rotation.z = -S.lean;
-  rig.position.y = -S.preload*0.12; rig.scale.y = 1 - S.preload*0.08;
+  pitchG.rotation.x = S.pitch + (S.nose||0)*0.5; leanG.rotation.z = -S.lean - (S.tweak||0)*0.7; leanG.rotation.y = -(S.tweak||0)*0.45;
+  const tp_ = S.trick; rig.rotation.x = tp_==='up' ? 0.25 : tp_==='down' ? -0.15 : 0; rig.rotation.z = tp_==='left' ? 0.35 : tp_==='right' ? -0.35 : 0;
+  rig.position.z = (tp_ ? 0.15 : 0) + (S.weight||0)*0.12;      // visible fore/aft weight transfer
+  rig.position.y = -(S.susp||0)*0.8; rig.scale.y = 1 - (S.susp||0)*0.5;
+  spawnDust(dt);
   for (const w of wheels) w.rotation.x -= S.speed*dt/0.36;
   // camera
-  const fx = -Math.sin(S.yaw), fz = -Math.cos(S.yaw);
-  const back = 5.2 + S.speed*0.04;
+  const ch = S.travel ?? S.yaw; const fx = -Math.sin(ch), fz = -Math.cos(ch);
+  const back = [5.2,8,3.4][camMode] + S.speed*0.04;
+  const fov = 66 + Math.min(14, S.speed*0.45); if (Math.abs(camera.fov-fov) > 0.05){ camera.fov += (fov-camera.fov)*Math.min(1,dt*3); camera.updateProjectionMatrix(); }
   const tp = new THREE.Vector3(S.x - fx*back, 0, S.z - fz*back);
-  tp.y = Math.max(groundH(tp.x,tp.z), S.y) + 2.3;
+  tp.y = Math.max(groundH(tp.x,tp.z), S.y) + [2.3,3.4,1.7][camMode];
   const tl = new THREE.Vector3(S.x + fx*4, S.y + 1.0, S.z + fz*4);
   if (!camInit || camPos.distanceTo(tp) > 40){ camPos.copy(tp); camLook.copy(tl); camInit = true; }
   const k = 1 - Math.exp(-dt*6);
   camPos.lerp(tp, k); camLook.lerp(tl, 1 - Math.exp(-dt*10));
-  camera.position.copy(camPos); camera.lookAt(camLook);
+  camera.position.copy(camPos);
+  camRoll = THREE.MathUtils.lerp(camRoll, -S.lean*0.18 + (S.sliding ? S.slip*0.1 : 0), Math.min(1, dt*4));
+  camera.up.set(Math.sin(camRoll)*Math.cos(ch), Math.cos(camRoll), -Math.sin(camRoll)*Math.sin(ch)); camera.lookAt(camLook);
   mountains.position.set(camera.position.x, S.y*0.85, camera.position.z);
   skyDome.position.copy(camera.position);
   sun.position.set(S.x+30, S.y+60, S.z+20); sun.target.position.set(S.x, S.y, S.z-10);
@@ -438,7 +528,7 @@ function frame(){
   const kmh = S.speed*3.6; S.maxKmh = Math.max(S.maxKmh, kmh);
   $('speedVal').textContent = Math.round(kmh);
   arc.style.strokeDasharray = `${Math.min(1,kmh/90)*arcLen} 1000`;
-  $('airVal').textContent = (S.air ? S.airT : 0).toFixed(1)+'s';
+  $('airVal').textContent = (S.air && S.airT > 0.1 ? S.airT : 0).toFixed(1)+'s';
   $('airBest').textContent = `best ${S.bestAir.toFixed(1)}s`;
   $('scoreVal').textContent = S.score.toLocaleString();
   $('livesVal').textContent = S.lives>0 ? '♥ '.repeat(S.lives).trim() : '—';
@@ -451,6 +541,6 @@ function frame(){
   if (S.flashT > 0){ S.flashT -= dt; if (S.flashT<=0) centerEl.textContent=''; }
   fpsN++; fpsT+=dt; if (fpsT>1){ window.__fps = fpsN/fpsT; fpsN=0; fpsT=0; }
 }
-window.__game = S; window.__readInput = readInput;
+window.__game = S; window.__readInput = readInput; window.__groundH = groundH; window.__cx = cx;
 window.__sim = (secs, inp) => { const h=1/120; const base={steer:0,pedal:0,brake:0,jump:false,tx:0,ty:0}; for(let t=0;t<secs;t+=h) step(h, Object.assign({}, base, typeof inp==='function'?inp(t):inp)); return {d:-S.z, kmh:S.speed*3.6, air:S.air, lives:S.lives, clean:S.clean, score:S.score, u:S.x-cx(-S.z)}; };
 frame();
