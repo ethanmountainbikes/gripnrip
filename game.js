@@ -457,7 +457,7 @@ function step(dt, inp){
     const slope = (h1-h0)/0.5;
     let a = -G*slope/Math.sqrt(1+slope*slope);
     // pedalling: ~2.5 m/s² from a standstill, fading to zero at 30 km/h, weaker uphill; above 30 km/h speed only comes from gravity and pumping
-    a += inp.pedal * 2.5 * Math.max(0, 1 - S.speed/8.33) / (1 + 4*Math.max(0, slope));
+    a += inp.pedal * 2.5 * Math.max(0, 1 - S.speed/11.11) / (1 + 4*Math.max(0, slope));
     a -= inp.brake * 9 * Math.min(1,S.speed);
     a -= 0.0045*BIKE.drag*S.speed*S.speed + 0.25;
     if (!onTrail) a -= 0.35*S.speed + 1.5;
