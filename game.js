@@ -7,7 +7,8 @@ import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featBase, featAxis, BOULDERS, boulderH, bigBouldersNear, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL, LIFTS, connectors, CW, SHOP } from './world.js';
+import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featBase, featAxis, BOULDERS, boulderH, bigBouldersNear, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL, LIFTS, connectors, CW, SHOP, WORLD, RAMPAGE } from './world.js';
+const RAMP = WORLD === 'rampage';   // Red Bull Rampage-inspired desert world
 
 const G = 9.81;
 // ---------- bikes (shop) ----------
@@ -41,12 +42,12 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
 document.body.prepend(renderer.domElement);
 const scene = new THREE.Scene();
-const SKY = 0xa9cfe6;
+const SKY = RAMP ? 0x9cc4e4 : 0xa9cfe6;
 scene.background = new THREE.Color(SKY);
-scene.fog = new THREE.Fog(0xc4d7e0, 180, 3800);   // fog fades into the sky's horizon colour (atmospheric haze)
+scene.fog = new THREE.Fog(RAMP ? 0xe6d2b4 : 0xc4d7e0, RAMP ? 220 : 180, RAMP ? 3200 : 3800);   // fog fades into the sky's horizon colour (atmospheric haze)
 const camera = new THREE.PerspectiveCamera(68, innerWidth/innerHeight, 0.1, 6000);
-const TEX = makeTextures(Q.tex);
-scene.add(new THREE.HemisphereLight(0xdff0ff, 0x4a6030, 0.9));
+const TEX = makeTextures(Q.tex, RAMP);
+scene.add(new THREE.HemisphereLight(0xdff0ff, RAMP ? 0x9a5534 : 0x4a6030, 0.9));
 const SUN_DIR = new THREE.Vector3(0.45, 0.62, 0.3).normalize();
 const sun = new THREE.DirectionalLight(0xfff1d6, 2.6);
 sun.castShadow = Q.shadow > 0; sun.shadow.mapSize.set(Math.max(512, Q.shadow), Math.max(512, Q.shadow)); sun.shadow.radius = 3;
@@ -108,8 +109,8 @@ terrainMat.onBeforeCompile = sh => {
         normal = normalize(normal + (viewMatrix*vec4(tn.x, 0.0, tn.y, 0.0)).xyz*0.7); }`)
     .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(0.95, 0.55, vSplat.w);'); };
 const chunkIndex = (() => { const idx = []; for (let r=0;r<NV-1;r++) for (let k=0;k<NV-1;k++){ const a=r*NV+k, b=a+1, e=a+NV, f=e+1; idx.push(a,e,b, b,e,f); } return new THREE.BufferAttribute(new Uint32Array(idx),1); })();
-const C_DIRT = new THREE.Color(0x8a6640), C_DIRT2 = new THREE.Color(0x6e4f30), C_GRASS = new THREE.Color(0x5d8a32), C_GRASS2 = new THREE.Color(0x7aa040),
-      C_ROCK = new THREE.Color(0x857d72), C_SNOW = new THREE.Color(0xe9eef2), C_ALP = new THREE.Color(0x8c9a5a);
+const C_DIRT = new THREE.Color(RAMP ? 0xb07a52 : 0x8a6640), C_DIRT2 = new THREE.Color(RAMP ? 0x93603e : 0x6e4f30), C_GRASS = new THREE.Color(RAMP ? 0xb5603a : 0x5d8a32), C_GRASS2 = new THREE.Color(RAMP ? 0xc98552 : 0x7aa040),
+      C_ROCK = new THREE.Color(RAMP ? 0x9c5136 : 0x857d72), C_SNOW = new THREE.Color(0xe9eef2), C_ALP = new THREE.Color(0x8c9a5a);
 function groundColor(x, z, h, ny, dirt, c){
   const n = 0.5+0.5*Math.sin(x*0.7+z*0.3)*Math.cos(z*0.5);
   if (dirt) return c.copy(C_DIRT).lerp(C_DIRT2, n*0.7);
@@ -139,9 +140,9 @@ TEX.needles.map.repeat.set(6, 2); TEX.needles.normal.repeat.set(6, 2);
 const rockG = (() => { const g = new THREE.IcosahedronGeometry(1, 2), p = g.attributes.position;
   for (let i = 0; i < p.count; i++){ const v = new THREE.Vector3().fromBufferAttribute(p, i), n = 1 + 0.18*Math.sin(v.x*3.1 + v.y*2.3) + 0.12*Math.sin(v.z*5.3 - v.x*1.7) + 0.07*Math.sin(v.y*9.1); v.multiplyScalar(n); v.y *= 0.7; p.setXYZ(i, v.x, v.y, v.z); }
   g.computeVertexNormals(); return g; })();
-const rockMat = triplanar(new THREE.MeshStandardMaterial({color:0xb8b2a8, roughness:0.9, flatShading:true}), TEX.rock, 0.45, 0.9);
+const rockMat = triplanar(new THREE.MeshStandardMaterial({color:RAMP ? 0xd09070 : 0xb8b2a8, roughness:0.9, flatShading:true}), TEX.rock, 0.45, 0.9);
 const bushG = (() => { const parts = []; for (let k = 0; k < 4; k++){ const g = new THREE.IcosahedronGeometry(0.55 + 0.2*Math.sin(k*2.1), 1); g.translate(Math.cos(k*1.9)*0.45, 0.35 + 0.15*(k%2), Math.sin(k*1.9)*0.45); parts.push(g); } return mergeGeos(parts); })();
-const bushMat = triplanar(new THREE.MeshStandardMaterial({color:0xffffff, roughness:0.9, flatShading:true}), TEX.needles, 1.2, 0.6);
+const bushMat = triplanar(new THREE.MeshStandardMaterial({color:RAMP ? 0xc8c79a : 0xffffff, roughness:0.9, flatShading:true}), TEX.needles, 1.2, 0.6);
 // wind-swayed grass: one instanced field of blade clumps that follows the rider (cells are world-anchored, so nothing swims)
 const windU = {value:0};
 const grassField = (() => {
@@ -164,7 +165,7 @@ const grassField = (() => {
     const x = (i + r())*cs, z = (j + r())*cs, h = terrainH(x, z);
     e = (r() < 0.2 || h > 335 || isDirt(x, z) || featH(x, z) > 0 || Math.hypot(x-SHOP.x, z-SHOP.z) < 14) ? null : {x, z, h, rot: r()*6.28, s: 0.7 + r()*0.8, t: r()};
     if (cache.size > 250000) cache.clear(); cache.set(k, e); return e; }
-  function rebuild(force){ const R = Q.grassR, cs = Q.grassCell; mesh.visible = R > 0; if (!R){ mesh.count = 0; return; }
+  function rebuild(force){ const R = RAMP ? 0 : Q.grassR, cs = Q.grassCell; mesh.visible = R > 0; if (!R){ mesh.count = 0; return; }
     let n = 0; const i0 = Math.floor((S.x - R)/cs), i1 = Math.floor((S.x + R)/cs), j0 = Math.floor((S.z - R)/cs), j1 = Math.floor((S.z + R)/cs);
     for (let i = i0; i <= i1 && n < MAXN; i++) for (let j = j0; j <= j1 && n < MAXN; j++){ const e = cell(i, j, cs); if (!e) continue; const d = Math.hypot(e.x - S.x, e.z - S.z); if (d > R) continue;
       const fade = Math.min(1, (R - d)/8); q.setFromAxisAngle(UPV, e.rot); M.compose(pv.set(e.x, e.h - 0.02, e.z), q, sv.set(e.s, e.s*fade, e.s)); mesh.setMatrixAt(n, M); col.setHSL(0.22 + e.t*0.07, 0.5, 0.42 + e.t*0.2); mesh.setColorAt(n++, col); }
@@ -185,8 +186,9 @@ function buildChunk(ci, cj){
     nrm[i*3] = -dx/nl; nrm[i*3+1] = 2*RES/nl; nrm[i*3+2] = -dz/nl;
     pos[i*3] = k*RES; pos[i*3+1] = h; pos[i*3+2] = r*RES;
     const ny = 2*RES/nl, dirt = isDirt(x,z) ? 1 : 0, m = 0.5+0.5*Math.sin(x*0.013+Math.cos(z*0.011)*2)*Math.cos(z*0.017);
-    const rock = dirt ? 0 : Math.min(1, Math.max(0, (0.83-ny)/0.1)), snow = dirt ? 0 : (h > 328 && ny > 0.78 ? Math.min(0.9, (h-328)/18) : 0), alp = Math.min(1, Math.max(0, (h-210)/60));
+    const rock = dirt ? 0 : Math.min(1, Math.max(0, ((RAMP ? 0.9 : 0.83)-ny)/0.1)), snow = (dirt || RAMP) ? 0 : (h > 328 && ny > 0.78 ? Math.min(0.9, (h-328)/18) : 0), alp = Math.min(1, Math.max(0, (h-210)/60));
     spl[i*4] = (1-dirt)*(1-rock)*(1-snow); spl[i*4+1] = dirt; spl[i*4+2] = rock*(1-snow); spl[i*4+3] = snow;
+    if (RAMP){ const band = 0.5 + 0.5*Math.sin(h*0.55 + Math.sin(x*0.02)*1.5); c.setRGB(0.95 + 0.15*m - 0.08*band, 0.9 + 0.1*m - 0.1*band, 0.86 + 0.08*m - 0.08*band); } else
     c.setRGB(0.9 + 0.2*m - 0.1*alp, 0.95 + 0.12*m - 0.12*alp, 0.88 + 0.1*m - 0.05*alp); col[i*3]=c.r; col[i*3+1]=c.g; col[i*3+2]=c.b;
   }
   const g = new THREE.BufferGeometry();
@@ -291,6 +293,22 @@ const farU = { value: new THREE.Vector3(0,0,0) };
     const im = new THREE.InstancedMesh(mk(big), bmat, list.length), M = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
     list.forEach((b, i) => { M.compose(new THREE.Vector3(b.x, terrainH(b.x, b.z) + 0.015, b.z), q.setFromEuler(e.set(0, b.rot, 0)), new THREE.Vector3(b.r, b.h, b.r)); im.setMatrixAt(i, M); });
     im.castShadow = im.receiveShadow = true; im.computeBoundingSphere(); scene.add(im); } }
+// ---------- Rampage: finish corral fence + flags, wooden start platforms with scaffold towers ----------
+if (RAMP){ const C0 = RAMPAGE.corral, wood = new THREE.MeshStandardMaterial({color:0x9a7048, roughness:0.85}), steel = new THREE.MeshStandardMaterial({color:0x8d939a, roughness:0.4, metalness:0.7});
+  const post = new THREE.CylinderGeometry(0.07, 0.07, 1.2, 6), rail = new THREE.BoxGeometry(0.06, 0.1, 1), flagG = new THREE.PlaneGeometry(0.9, 2.6);
+  const N = 64, posts = new THREE.InstancedMesh(post, wood, N), rails = new THREE.InstancedMesh(rail, wood, N*2), M = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+  for (let i = 0; i < N; i++){ const a = i/N*Math.PI*2, b = (i+1)/N*Math.PI*2, x = C0.x + Math.cos(a)*C0.r, z = C0.z + Math.sin(a)*C0.r, x2 = C0.x + Math.cos(b)*C0.r, z2 = C0.z + Math.sin(b)*C0.r, h = terrainH(x, z);
+    M.compose(new THREE.Vector3(x, h + 0.6, z), q.identity(), new THREE.Vector3(1,1,1)); posts.setMatrixAt(i, M);
+    const L = Math.hypot(x2-x, z2-z), yaw = Math.atan2(x2-x, z2-z), gap = Math.abs(Math.sin(a) + 1) < 0.08;   // opening at the uphill side where the lines come in
+    for (const [k, y] of [[0, 0.5], [1, 1.0]]){ M.compose(new THREE.Vector3((x+x2)/2, (h + terrainH(x2, z2))/2 + y, (z+z2)/2), q.setFromEuler(e.set(0, yaw, 0)), new THREE.Vector3(1, 1, gap ? 0.001 : L)); rails.setMatrixAt(i*2+k, M); } }
+  scene.add(posts, rails);
+  const cols = [0xd9772b, 0x1f3d27, 0xe8dcc0, 0xc0392b];
+  for (let i = 0; i < 16; i++){ const a = i/16*Math.PI*2 + 0.1, x = C0.x + Math.cos(a)*(C0.r+3), z = C0.z + Math.sin(a)*(C0.r+3), h = terrainH(x, z);
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 4.6, 6), steel); pole.position.set(x, h + 2.3, z); scene.add(pole);
+    const fl = new THREE.Mesh(flagG, new THREE.MeshStandardMaterial({color:cols[i%4], side:THREE.DoubleSide, roughness:0.8})); fl.position.set(x + 0.45, h + 3.2, z); fl.rotation.y = a; scene.add(fl); }
+  for (const tr of trails){ const [x, z] = tr.pts[0], yaw = tr.yaw[0], h = terrainH(x, z);
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(6, 0.3, 6), wood); deck.position.set(x - Math.sin(yaw)*-4, h - 0.12, z - Math.cos(yaw)*-4); deck.rotation.y = yaw; deck.receiveShadow = true; scene.add(deck);
+    for (const [sx, sz] of [[-2.8,-2.8],[2.8,-2.8],[-2.8,2.8],[2.8,2.8]]){ const t = new THREE.Mesh(new THREE.BoxGeometry(0.12, 4.5, 0.12), steel); t.position.set(deck.position.x + Math.cos(yaw)*sx + Math.sin(yaw)*sz, h + 2.1, deck.position.z - Math.sin(yaw)*sx + Math.cos(yaw)*sz); scene.add(t); } } }
 // ---------- trail markers, start/finish banners ----------
 { const poleG = new THREE.CylinderGeometry(0.06,0.06,1.3,6); poleG.translate(0,0.65,0);
   let total = 0; for (const tr of trails) total += 2*Math.ceil(tr.pts.length/8);
@@ -460,11 +478,11 @@ function onPress(code){
 let camMode = 0;
 // ---------- open world: spots, safe respawn, trail runs ----------
 // teleport unlocks: a trail's spot unlocks after you finish that trail once. Flow Line, the park and the meadow are always open.
-const UKEY = 'trailDescent.unlocked';
+const UKEY = RAMP ? 'trailDescent.unlocked.rampage' : 'trailDescent.unlocked';
 const unlocked = new Set((() => { try { return JSON.parse(localStorage.getItem(UKEY) || '[]'); } catch(e){ return []; } })());
 function saveUnlocks(){ try { localStorage.setItem(UKEY, JSON.stringify([...unlocked])); } catch(e){} }
 const spotTrail = i => i < trails.length ? trails[i] : null;
-const ALWAYS = new Set(['Flow Line']);
+const ALWAYS = new Set(['Flow Line', 'Formation Ridge']);
 const isOpen = i => { const tr = spotTrail(i); return !tr || ALWAYS.has(tr.name) || unlocked.has(tr.name); };
 const nextOpen = (from, dir) => { for (let k=1;k<=spots.length;k++){ const j = ((from + dir*k) % spots.length + spots.length) % spots.length; if (isOpen(j)) return j; } return from; };
 let spotI = 1;   // spawn at Flow Line
@@ -614,9 +632,9 @@ function step(dt, inp){
     S.rockT = Math.max(0, (S.rockT||0) - dt);
     let crest = S.gf > 3 && S.landCool <= 0 && (S.lastVyG - vyG)/dt > crestG && S.speed > 4 && S.rockT <= 0;
     const edge = (ng - S.y) < -0.12 && (S.lastVyG - vyG)/dt > G_AIR*3 && S.speed > 1.5;   // rolling off a ledge/lip: the ground drops away faster than you can fall
-    if (edge && !crest && S.rockT <= 0) crest = true;
+    if (edge && !crest && S.rockT <= 0 && S.landCool <= 0) crest = true;   // never re-launch right after touching down (no landing bounce)
     if (crest){ // only leave the ground if the ballistic path really clears the terrain (no micro-hops)
-      let clear = 0; for (let t=0.03; t<=0.18; t+=0.03){ const bx=S.x+S.vx*t, bz=S.z+S.vz*t, by=S.y+S.lastVyG*t-0.5*G_AIR*t*t; clear=Math.max(clear, by-groundH(bx,bz)); }
+      let clear = 0; for (let t=0.03; t<=0.18; t+=0.03){ const bx=S.x+S.vx*t, bz=S.z+S.vz*t, by=S.y+S.lastVyG*t-0.5*G_AIR*t*t; const gap_=by-groundH(bx,bz); if (t < 0.065 && gap_ < 0.03){ clear = 0; break; } clear=Math.max(clear, gap_); }   // must actually separate right away (no 1-frame micro-hops)
       if (clear < 0.4) crest = false; }
     if (pop > 0 || crest){
       S.air = true; S.airT = 0; S.vy = S.lastVyG + pop; S.takeoffPitch = S.pitch; S.spin = 0; S.popped = pop > 0;
@@ -799,7 +817,7 @@ const mm = $('minimap'), mmx = mm.getContext('2d'), MMS = mm.width, mmBg = docum
 { mmBg.width = mmBg.height = MMS; const x = mmBg.getContext('2d'), img = x.createImageData(MMS, MMS), sc = 2*HALF/MMS;
   for (let j=0;j<MMS;j++) for (let i=0;i<MMS;i++){ const wx = -HALF+(i+.5)*sc, wz = -HALF+(j+.5)*sc, h = base(wx,wz), dh = base(wx+sc,wz)-h, k = (j*MMS+i)*4;
     const v = 70 + Math.min(150, Math.max(0, h*0.45)) + dh*4, band = (Math.floor(h/25)&1) ? 8 : 0;
-    img.data[k] = v*0.75+band; img.data[k+1] = v*0.95+band; img.data[k+2] = v*0.7; img.data[k+3] = 255; }
+    if (RAMP){ img.data[k] = v*1.05+band; img.data[k+1] = v*0.66+band; img.data[k+2] = v*0.46; } else { img.data[k] = v*0.75+band; img.data[k+1] = v*0.95+band; img.data[k+2] = v*0.7; } img.data[k+3] = 255; }
   x.putImageData(img, 0, 0);
   const P = (wx,wz) => [(wx+HALF)/sc, (wz+HALF)/sc];
   for (const tr of trails){ const pa = new Path2D(); tr.pts.forEach((p,i)=>{ if (i%3 && i < tr.pts.length-1) return; const [a,b] = P(p[0],p[1]); i ? pa.lineTo(a,b) : pa.moveTo(a,b); }); tr.mmPath = pa; }
@@ -861,7 +879,7 @@ function updateWaypoints(dt){ const W_ = innerWidth, H_ = innerHeight;
 const bm = $('bigmap'), bmx = bm.getContext('2d'); let bigBg = null;
 function makeBigBg(){ const N = 640, cv = document.createElement('canvas'); cv.width = cv.height = N; const x = cv.getContext('2d'), img = x.createImageData(N, N), sc = 2*HALF/N;
   for (let j=0;j<N;j++) for (let i=0;i<N;i++){ const wx = -HALF+(i+.5)*sc, wz = -HALF+(j+.5)*sc, h = base(wx,wz), dh = base(wx+sc,wz)-h, k = (j*N+i)*4;
-    const v = 70 + Math.min(150, Math.max(0, h*0.45)) + dh*8, band = (Math.floor(h/25)&1) ? 8 : 0; img.data[k] = v*0.75+band; img.data[k+1] = v*0.95+band; img.data[k+2] = v*0.7; img.data[k+3] = 255; }
+    const v = 70 + Math.min(150, Math.max(0, h*0.45)) + dh*8, band = (Math.floor(h/25)&1) ? 8 : 0; if (RAMP){ img.data[k] = v*1.05+band; img.data[k+1] = v*0.66+band; img.data[k+2] = v*0.46; } else { img.data[k] = v*0.75+band; img.data[k+1] = v*0.95+band; img.data[k+2] = v*0.7; } img.data[k+3] = 255; }
   x.putImageData(img, 0, 0); return cv; }
 const mapScale = () => { const sz = Math.min(innerWidth - 300, innerHeight - 40), s = sz/(2*HALF); return {s, ox: 20 + (innerWidth - 300 - sz)/2, oy: (innerHeight - sz)/2, sz}; };
 function openMap(){ bigMap.open = true; bigMap.wasPaused = S.paused; S.paused = true; bigMap.cx = S.x; bigMap.cz = S.z; bm.width = innerWidth; bm.height = innerHeight; $('bigmapWrap').classList.remove('hidden'); }
@@ -887,7 +905,8 @@ function mapFrame(dt, inp){
   c.imageSmoothingEnabled = true; c.drawImage(bigBg || (bigBg = makeBigBg()), ox, oy, sz, sz); c.strokeStyle = '#fff'; c.lineWidth = 2; c.strokeRect(ox, oy, sz, sz);
   // connectors, park, shop
   c.strokeStyle = 'rgba(235,215,170,.9)'; c.lineWidth = 1.5; for (const k of connectors){ c.beginPath(); k.pts.forEach((p, i) => { if (i%3 && i < k.pts.length-1) return; const [a,b] = P(p[0],p[1]); i ? c.lineTo(a,b) : c.moveTo(a,b); }); c.stroke(); }
-  { const [a,b] = P(PARK.x, PARK.z); c.fillStyle = 'rgba(160,110,60,.9)'; c.beginPath(); c.arc(a, b, PARK.r*s, 0, 7); c.fill(); c.fillStyle = '#fff'; c.font = 'bold 13px "Barlow Condensed", sans-serif'; c.textAlign = 'center'; c.fillText('🏁 Dirt Jump Park', a, b - PARK.r*s - 6); }
+  if (RAMP){ const [a,b] = P(RAMPAGE.corral.x, RAMPAGE.corral.z); c.strokeStyle = '#d9772b'; c.lineWidth = 3; c.beginPath(); c.arc(a, b, RAMPAGE.corral.r*s, 0, 7); c.stroke(); }
+  if (!RAMP) { const [a,b] = P(PARK.x, PARK.z); c.fillStyle = 'rgba(160,110,60,.9)'; c.beginPath(); c.arc(a, b, PARK.r*s, 0, 7); c.fill(); c.fillStyle = '#fff'; c.font = 'bold 13px "Barlow Condensed", sans-serif'; c.textAlign = 'center'; c.fillText('🏁 Dirt Jump Park', a, b - PARK.r*s - 6); }
   { const [a,b] = P(SHOP.x, SHOP.z); c.font = '18px "Barlow Condensed", sans-serif'; c.textAlign = 'center'; c.fillText('🚲', a, b+6); c.font = 'bold 12px "Barlow Condensed", sans-serif'; c.fillStyle = '#ffe08a'; c.fillText('Bike Shop', a, b+20); }
   // trails (locked = dashed + dim) with checkpoints
   for (const [i, tr] of trails.entries()){ const open = isOpen(i); c.globalAlpha = open ? 1 : 0.55; c.setLineDash(open ? [] : [6,4]);
@@ -916,7 +935,7 @@ function mapFrame(dt, inp){
     const dist = Math.round(Math.hypot(bigMap.cx - S.x, bigMap.cz - S.z)); c.textAlign = 'left'; c.font = 'bold 13px "Barlow Condensed", sans-serif'; c.fillStyle = '#fff'; c.strokeStyle = '#000'; c.lineWidth = 3;
     const t = hov >= 0 ? `${spots[hov].name} — ${isOpen(hov) ? 'A / Enter: teleport' : '🔒 locked'}` : `${dist} m away`; c.strokeText(t, a+16, b-14); c.fillText(t, a+16, b-14); }
   // legend
-  const lx = innerWidth - 270, rows = [['━', '#fff', 'Trail (dashed + 🔒 = locked)'], ['▲', '#f2b800', 'Checkpoint'], ['■', '#e53935', 'Lift station (dashed line = lift)'], ['─', '#ebd7aa', 'Connector path'], ['●', '#a06e3c', 'Dirt Jump Park'], ['🚲', '#fff', 'Bike Shop'], ['①', '#fff', 'Teleport spot'], ['◆', '#3ef0ff', `Waypoint (max ${WP_MAX})`], ['▲', '#ffd84d', 'You']];
+  const lx = innerWidth - 270, rows = [['━', '#fff', 'Trail (dashed + 🔒 = locked)'], ['▲', '#f2b800', 'Checkpoint'], ['■', '#e53935', 'Lift station (dashed line = lift)'], ['─', '#ebd7aa', 'Connector path'], ...(RAMP ? [['◯', '#d9772b', 'Finish corral']] : [['●', '#a06e3c', 'Dirt Jump Park']]), ['🚲', '#fff', 'Bike Shop'], ['①', '#fff', 'Teleport spot'], ['◆', '#3ef0ff', `Waypoint (max ${WP_MAX})`], ['▲', '#ffd84d', 'You']];
   c.fillStyle = 'rgba(26,22,15,.88)'; c.fillRect(lx-12, 20, 262, 46 + rows.length*20 + 140); c.textAlign = 'left'; c.font = '28px "Bebas Neue", sans-serif'; c.fillStyle = '#d9772b'; c.fillText('MAP', lx, 44);
   c.font = '13px "Barlow Condensed", sans-serif'; rows.forEach(([ic, col, label], k) => { c.fillStyle = col; c.fillText(ic, lx, 70 + k*20); c.fillStyle = '#ddd'; c.fillText(label, lx + 26, 70 + k*20); });
   let y = 80 + rows.length*20; c.fillStyle = '#fff'; c.font = 'bold 13px "Barlow Condensed", sans-serif'; c.fillText('Difficulty', lx, y); c.font = '13px "Barlow Condensed", sans-serif';
@@ -952,12 +971,13 @@ function trailItems(){ return trails.map((tr, i) => { const d = DIFF[tr.diff], o
   return {label:`<span class="dIcon" style="color:${d.color === '#111' ? '#e8e2d0' : d.color}">${d.icon}</span> ${open ? '' : '🔒 '}${tr.name}`, sub:`${d.label} · ${tr.type}${open ? '' : ' · finish it once to unlock'}`, disabled:!open, act:() => { spotI = i; startRide(); }}; }); }
 const PAGES = {
   main: () => ({title:null, items:[
-    {label:'Ride', sub:'Free roam from the Valley Meadow', act:() => { spotI = spots.findIndex(s => s.name.startsWith('Valley')); startRide(); }},
+    {label:'Ride', sub:RAMP ? 'Free roam from the Finish Corral' : 'Free roam from the Valley Meadow', act:() => { spotI = spots.findIndex(s => s.name.startsWith(RAMP ? 'Finish Corral' : 'Valley')); startRide(); }},
+    {label:'World', value:RAMP ? 'RAMPAGE' : 'MOUNTAIN', sub:RAMP ? 'Utah desert freeride venue (Red Bull Rampage style)' : 'Alpine bike park', adj:() => switchWorld(), act:() => switchWorld()},
     {label:'Trails', sub:`${trails.filter((_, i) => isOpen(i)).length}/${trails.length} unlocked — drop in at a trail start`, act:() => go('trails')},
     {label:'Bike Shop', sub:`$${S.score.toLocaleString()} DOLLAHS`, act:() => openShop()},
     {label:'Settings', sub:'Quality, music, controls, invert', act:() => go('settings')},
     {label:'Credits', act:() => go('credits')} ]}),
-  trails: () => ({title:'TRAILS', items:[...trailItems(), {label:'Dirt Jump Park', sub:'Pro line · always open', act:() => { spotI = spots.findIndex(s => s.name === 'Dirt Jump Park'); startRide(); }}, {label:'‹ Back', act:back}]}),
+  trails: () => ({title:RAMP ? 'RAMPAGE LINES' : 'TRAILS', items:[...trailItems(), ...(RAMP ? [] : [{label:'Dirt Jump Park', sub:'Pro line · always open', act:() => { spotI = spots.findIndex(s => s.name === 'Dirt Jump Park'); startRide(); }}]), {label:'‹ Back', act:back}]}),
   settings: () => ({title:'SETTINGS', items:[
     {label:'Quality', value:SETTINGS.quality.toUpperCase(), adj:d => { const q = ['low','med','high'], k = Math.max(0, Math.min(2, q.indexOf(SETTINGS.quality) + d)); if (q[k] !== SETTINGS.quality) applyQuality(q[k]); }, act:() => { const q = ['low','med','high']; applyQuality(q[(q.indexOf(SETTINGS.quality)+1)%3]); }},
     {label:'Music', value:ON(SETTINGS.musicOn), adj:() => setMusicOn(!SETTINGS.musicOn), act:() => setMusicOn(!SETTINGS.musicOn)},
@@ -994,6 +1014,7 @@ function openMenu(page){ menu.open = true; menu.page = page; menu.sel = 0; menu.
 function closeMenu(){ menu.open = false; document.body.classList.remove('inmenu'); $('menu').classList.add('hidden'); }
 function go(page){ menu.stack.push([menu.page, menu.sel]); menu.page = page; menu.sel = 0; renderMenu(); }
 function back(){ if (!menu.stack.length){ if (menu.page === 'pause') togglePause(); return; } [menu.page, menu.sel] = menu.stack.pop(); renderMenu(); }
+function switchWorld(){ LS.set('trailDescent.world', RAMP ? 'mountain' : 'rampage'); $('loading').classList.remove('done'); $('loading').textContent = RAMP ? 'LOADING THE MOUNTAIN…' : 'LOADING RAMPAGE…'; setTimeout(() => location.reload(), 50); }
 function startRide(){ closeMenu(); resetGame(); }
 function toMainMenu(){ S.paused = false; S.state = 'menu'; S.run = null; S.lift = null; myChair.visible = false; $('liftRide').style.display = 'none'; camInit = false; openMenu('main'); $('loading').classList.add('done'); }
 function menuKey(code){ const it = menu.items[menu.sel];
@@ -1008,9 +1029,9 @@ function menuFrame(dt, inp){ // analog stick navigation with repeat
   if (Math.abs(y) > 0.6 && menu.repeatT <= 0){ menuKey(y > 0 ? 'DD' : 'DU'); menu.repeatT = 0.22; } else if (Math.abs(y) < 0.3) menu.repeatT = 0;
   const x = inp.lsx || 0; if (Math.abs(x) > 0.7 && (menu.xT = (menu.xT || 0) - dt) <= 0){ menuKey(x > 0 ? 'DR' : 'DL'); menu.xT = 0.3; } else if (Math.abs(x) < 0.3) menu.xT = 0; }
 // slow camera flyover of the mountain behind the main menu
-function flyover(dt){ menu.fly += dt*0.035; const a = menu.fly, cx = 120, cz = -150, r = 760;
+function flyover(dt){ menu.fly += dt*0.035; const a = menu.fly, cx = RAMP ? 0 : 120, cz = RAMP ? -80 : -150, r = RAMP ? 560 : 760;
   const x = cx + Math.cos(a)*r, z = cz + Math.sin(a)*r, y = Math.max(terrainH(x, z), terrainH(cx + Math.cos(a+0.05)*r, cz + Math.sin(a+0.05)*r)) + 110;
-  camera.position.set(x, y, z); camera.up.set(0,1,0); camera.lookAt(cx + Math.cos(a+0.9)*260, 170, cz + Math.sin(a+0.9)*260);
+  camera.position.set(x, y, z); camera.up.set(0,1,0); camera.lookAt(cx + Math.cos(a+0.9)*260, RAMP ? 110 : 170, cz + Math.sin(a+0.9)*260);
   sun.position.set(x+30, y+60, z+20); sun.target.position.set(x - Math.cos(a)*60, y - 60, z - Math.sin(a)*60); return [x, z]; }
 // ---------- bike shop: bikes + cosmetic skins (paint and rider gear; visual only) ----------
 const C = x => new THREE.Color(x);

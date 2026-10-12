@@ -20,9 +20,9 @@ function make(N, fn, nStr){ const H = new Float32Array(N*N), C = new Uint8Clampe
     const t = new THREE.CanvasTexture(cv); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4; if (srgb) t.colorSpace = THREE.SRGBColorSpace; return t; };
   return { map: tex(C, true), normal: tex(Nm, false) }; }
 
-export function makeTextures(N = 256){
+export function makeTextures(N = 256, desert = false){
   const P = 8;  // noise period (tileable)
-  return {
+  const T = {
     grass: make(N, (u, v) => { const n = fbm(u*P, v*P, P, 1), b = fbm(u*P*4, v*P*4, P*4, 2, 3), blade = noise(u*P*16, v*P*64, P*16, 3);
       const h = n*0.5 + blade*0.5, g = 0.7 + 0.5*n + 0.25*(blade-0.5);
       return { h, c: [mix(70, 110, b)*g, mix(110, 150, n)*g, mix(38, 55, b)*g] }; }, 3),
@@ -39,6 +39,16 @@ export function makeTextures(N = 256){
       const tone = 0.85 + 0.25*hash(row, 0, 21), k = (0.6 + 0.4*grain - knot*0.5)*tone*(gap ? 1 : 0.35), h = gap*(0.6 + 0.2*grain) - knot*0.2; return { h, c: [186*k, 136*k, 86*k] }; }, 5),
     needles: make(N, (u, v) => { const s = noise(u*P*12, v*P*3, P*12, 22), f = fbm(u*P*2, v*P*2, P*2, 23, 3), h = s*0.7 + f*0.3, k = 0.55 + 0.6*h; return { h, c: [52*k, 92*k, 50*k] }; }, 5),
   };
+  if (desert){   // Utah desert: red clay (ground), packed tan dirt (lines), banded red sandstone (cliffs), pale sand
+    T.grass = make(N, (u, v) => { const n = fbm(u*P, v*P, P, 31), f = fbm(u*P*4, v*P*4, P*4, 32, 4), [d1, d2] = cells(u*P*5, v*P*5, P*5, 33), crack = Math.min(1, (d2 - d1)*6);
+      const h = n*0.45 + f*0.35 + crack*0.2, k = (0.78 + 0.3*f)*(0.85 + 0.15*crack); return { h, c: [196*k, 104*k, 62*k] }; }, 3);
+    T.dirt = make(N, (u, v) => { const n = fbm(u*P, v*P, P, 34), f = fbm(u*P*4, v*P*4, P*4, 35, 4), [d1] = cells(u*P*7, v*P*7, P*7, 36), peb = Math.max(0, 0.3 - d1)*2.4;
+      const h = n*0.5 + f*0.3 + peb*0.5, k = 0.8 + 0.35*f + peb*0.2; return { h, c: [186*k, 128*k, 84*k] }; }, 4);
+    T.rock = make(N, (u, v) => { const n = fbm(u*P, v*P, P, 37), f = fbm(u*P*3, v*P*3, P*3, 38, 5), band = 0.5 + 0.5*Math.sin((v + 0.08*n)*P*2*Math.PI*3), [d1, d2] = cells(u*P*3, v*P*6, P*3, 39), crack = 0.65 + 0.35*Math.min(1, (d2 - d1)*5);
+      const h = band*0.35 + f*0.4 + crack*0.3, k = (0.62 + 0.38*f)*crack; return { h, c: [(170 + 40*band)*k, (82 + 30*band)*k, (52 + 18*band)*k] }; }, 5);
+    T.snow = make(N, (u, v) => { const n = fbm(u*P, v*P, P, 40), f = fbm(u*P*6, v*P*6, P*6, 41, 3), h = n*0.6 + f*0.4, k = 0.88 + 0.12*n; return { h, c: [226*k, 196*k, 158*k] }; }, 1.5);
+  }
+  return T;
 }
 // world-space triplanar projection for meshes without good UVs (rocks, jumps, terrain features). Keeps three.js lighting/shadows/fog.
 export function triplanar(mat, set, scale = 0.5, nStr = 0.8){

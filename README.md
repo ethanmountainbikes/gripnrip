@@ -148,3 +148,24 @@ The rock gardens on Rock Garden, Forest Singletrack and the DH/enduro trails are
 - Small rocks (0.12–0.45 m) are rideable. The wheels climb each rock's real shape, which gives a jolt and costs some speed. They never launch you.
 - Big rocks (0.65–1.05 m) are solid. Hitting one head-on is a crash, a glancing hit deflects you with some speed lost, and a high enough hop clears it.
 - Every garden keeps a clear lane at least 2 m wide down the middle.
+
+## Rampage world
+Pick **World: Rampage** in the main menu (the page reloads into the new world). It's a separate desert map inspired by the Red Bull Rampage 2025 venue in Virgin, Utah. Everything was built from research; it is not a survey of the real site.
+- **Terrain:** a steep red-sandstone and clay amphitheatre about 215 m tall (the face is up to ~47% grade). Knife-edge ridgelines run down the fall line, with banded sandstone cliffs and stepped desert mesas on the horizon. Sparse desert scrub, no trees and no grass.
+- **Five lines** run from wooden start platforms on the summit ridge to a fenced finish corral on the valley floor:
+  - **Zink Chute** nods to Cam Zink's chute "through the heart of the mountain".
+  - **Goblin Ridge** has the Goblin Drop, a monster step-down off the ridge.
+  - **Canyon Gap Line** has a real canyon carved into the terrain.
+  - **Stratos Drop** nods to the "44-footer".
+  - **Formation Ridge** is a roomier line in the style of the women's venue.
+- **Features:** big dirt drops with long steep landings, wooden deck drops, step-downs, gaps and canyon gaps. They're sized for the 45–65 km/h riders carry down the face, giving about 1.5 s of air.
+- Same physics as the mountain, plus its own spawn, checkpoints, minimap, full map, Summit Shuttle lift and Bike Shop. Trail unlocks are saved separately.
+
+Sources (venue research):
+- Red Bull Rampage 2025 event page: https://www.redbull.com/int-en/events/red-bull-rampage-2025
+- Red Bull, venues overview (men's 2016/17/21 site, women's 2014–15/Formation site; Zink chute; Goblin Drop): https://www.redbull.com/sg-en/red-bull-rampage-venues-overview
+- Red Bull, dig days, first look at the lines ("natural amphitheatre", Zink's chute): https://www.redbull.com/in-en/red-bull-rampage-dig-days
+- Pinkbike, Rampage 2025 returns to two historic venues: https://www.pinkbike.com/news/red-bull-rampage-2025-returns-to-two-historic-venues.html
+- Red Bull, 2025 winner Hayden Zablotny's run (double-drop entrance, step-up): https://www.redbull.com/us-en/red-bull-rampage-winner
+- Pinkbike, 2025 men's final results: https://www.pinkbike.com/news/red-bull-rampage-2025-mens-final-results.html
+- Event-page photo captions (the 75 ft Canyon Gap) and replay commentary (Stratos 44-foot drop, ~50 ft canyon gap): https://www.cyclingeu.com/761397/the-biggest-competition-in-freeride-mtb-red-bull-rampage-2025-2/
