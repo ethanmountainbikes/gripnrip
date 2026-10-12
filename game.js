@@ -1,5 +1,11 @@
 import * as THREE from 'three';
 import { buildBikeRider } from './rider.js';
+import { makeTextures, triplanar } from './textures.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featAxis, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL, LIFTS, connectors, CW, SHOP } from './world.js';
 
 const G = 9.81;
@@ -18,31 +24,58 @@ const EARN = 0.15;   // DOLLAHS earn rate vs. the old REP values (~15%)
 const G_AIR = 9.81*1.35;   // heavier feel in the air: realistic MTB airtime (~0.6-1.0 s off a kicker at 30 km/h)
 let seed = 7; const rnd = () => (seed = (seed*16807) % 2147483647) / 2147483647;
 
+// ---------- settings (quality, inverts, volume) ----------
+const SETTINGS = Object.assign({quality:'med', invertY:false, invertX:false, volume:0.8, musicOn:true, musicVol:0.5}, LS.get('trailDescent.settings', {}));
+const saveSettings = () => LS.set('trailDescent.settings', SETTINGS);
+const QUALITY = { low:{pr:0.75, shadow:0, tex:256, grassR:0, grassCell:2, post:false, rocks:10, bushes:10},
+                  med:{pr:1.0, shadow:1024, tex:256, grassR:38, grassCell:1.0, post:false, rocks:22, bushes:26},
+                  high:{pr:1.5, shadow:2048, tex:512, grassR:55, grassCell:0.75, post:true, rocks:34, bushes:40} };
+let Q = QUALITY[SETTINGS.quality] || QUALITY.med;
 // ---------- Renderer / scene ----------
 const renderer = new THREE.WebGLRenderer({antialias:true});
-renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+renderer.setPixelRatio(Math.min(devicePixelRatio, Q.pr));
 renderer.setSize(innerWidth, innerHeight);
-renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.enabled = Q.shadow > 0; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
 document.body.prepend(renderer.domElement);
 const scene = new THREE.Scene();
 const SKY = 0xa9cfe6;
 scene.background = new THREE.Color(SKY);
-scene.fog = new THREE.Fog(0xbcd6e2, 200, 3800);   // fog fades into the sky's horizon colour
+scene.fog = new THREE.Fog(0xc4d7e0, 180, 3800);   // fog fades into the sky's horizon colour (atmospheric haze)
 const camera = new THREE.PerspectiveCamera(68, innerWidth/innerHeight, 0.1, 6000);
-addEventListener('resize', () => { camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
-scene.add(new THREE.HemisphereLight(0xdff0ff, 0x4a6030, 1.1));
-const sun = new THREE.DirectionalLight(0xfff1d6, 2.0);
-sun.castShadow = true; sun.shadow.mapSize.set(1024,1024);
-Object.assign(sun.shadow.camera, {left:-35,right:35,top:35,bottom:-35,near:1,far:150});
+const TEX = makeTextures(Q.tex);
+scene.add(new THREE.HemisphereLight(0xdff0ff, 0x4a6030, 0.9));
+const SUN_DIR = new THREE.Vector3(0.45, 0.62, 0.3).normalize();
+const sun = new THREE.DirectionalLight(0xfff1d6, 2.6);
+sun.castShadow = Q.shadow > 0; sun.shadow.mapSize.set(Math.max(512, Q.shadow), Math.max(512, Q.shadow)); sun.shadow.radius = 3;
+Object.assign(sun.shadow.camera, {left:-40,right:40,top:40,bottom:-40,near:1,far:160});
 sun.shadow.bias = -0.0005; sun.shadow.normalBias = 0.06;   // no shadow acne / striping on the dirt
 scene.add(sun, sun.target);
-
-// sky gradient dome
-{ const g = new THREE.SphereGeometry(4000, 24, 12);
-  const m = new THREE.ShaderMaterial({side:THREE.BackSide, depthWrite:false, fog:false,
+// post (High): SSAO + subtle bloom; Low/Med render directly
+let composer = null;
+function setupPost(){ composer = null; if (!Q.post) return;
+  composer = new EffectComposer(renderer); composer.addPass(new RenderPass(scene, camera));
+  const ao = new SSAOPass(scene, camera, innerWidth, innerHeight); ao.kernelRadius = 0.6; ao.minDistance = 0.0004; ao.maxDistance = 0.02; composer.addPass(ao);
+  composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.22, 0.5, 0.92)); composer.addPass(new OutputPass()); }
+setupPost();
+addEventListener('resize', () => { camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); if (composer) composer.setSize(innerWidth, innerHeight); });
+function applyQuality(name){ SETTINGS.quality = name; saveSettings(); Q = QUALITY[name];
+  renderer.setPixelRatio(Math.min(devicePixelRatio, Q.pr)); renderer.setSize(innerWidth, innerHeight);
+  renderer.shadowMap.enabled = sun.castShadow = Q.shadow > 0; if (Q.shadow){ sun.shadow.mapSize.set(Q.shadow, Q.shadow); if (sun.shadow.map){ sun.shadow.map.dispose(); sun.shadow.map = null; } }
+  scene.traverse(o => { if (o.material) [].concat(o.material).forEach(m => m.needsUpdate = true); });
+  setupPost(); grassField.rebuild(true); toast(`Quality: ${name.toUpperCase()} (texture detail applies after reload)`); }
+// sky: gradient dome with atmospheric haze toward the horizon, a sun disc and glow (fog matches the horizon colour)
+{ const g = new THREE.SphereGeometry(4000, 32, 16);
+  const m = new THREE.ShaderMaterial({side:THREE.BackSide, depthWrite:false, fog:false, uniforms:{uSun:{value:SUN_DIR}},
     vertexShader:`varying vec3 p; void main(){p=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
-    fragmentShader:`varying vec3 p; void main(){float h=normalize(p).y; vec3 c=mix(vec3(.737,.839,.886),vec3(.35,.6,.88),pow(clamp(h*1.6,0.,1.),0.8)); gl_FragColor=vec4(c,1.);}`});
+    fragmentShader:`varying vec3 p; uniform vec3 uSun; void main(){ vec3 d=normalize(p); float h=d.y;
+      vec3 zen=vec3(.22,.45,.82), hor=vec3(.77,.84,.88); vec3 c=mix(hor,zen,pow(clamp(h*1.4,0.,1.),0.6));
+      float s=max(dot(d,uSun),0.); c+=vec3(1.,.85,.6)*(pow(s,8.)*0.25+pow(s,64.)*0.5) + vec3(1.,.97,.9)*smoothstep(.9994,.9997,s)*2.;
+      c=mix(c,hor,smoothstep(0.08,-0.02,h)*0.9); gl_FragColor=vec4(c,1.);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }`});
   var skyDome = new THREE.Mesh(g, m); skyDome.renderOrder = -1; scene.add(skyDome); }
 
 // distant mountains (follow camera horizontally)
@@ -57,7 +90,22 @@ const mountains = new THREE.Group(); mountains.visible = false;   // replaced by
 
 // ---------- Open world: streamed terrain chunks ----------
 const CH = TCELL, RES = 2, NV = CH/RES + 1, LOAD_R = 420, UNLOAD_R = 560;
-const terrainMat = new THREE.MeshLambertMaterial({vertexColors:true});
+// terrain: per-vertex splat weights (grass, dirt, rock, snow) blend tiled PBR textures sampled in world space at two scales (no visible tiling)
+const terrainMat = new THREE.MeshStandardMaterial({vertexColors:true, roughness:0.95, metalness:0});
+terrainMat.onBeforeCompile = sh => {
+  Object.assign(sh.uniforms, {tG:{value:TEX.grass.map}, tD:{value:TEX.dirt.map}, tR:{value:TEX.rock.map}, tS:{value:TEX.snow.map}, nG:{value:TEX.grass.normal}, nD:{value:TEX.dirt.normal}, nR:{value:TEX.rock.normal}, nS:{value:TEX.snow.normal}});
+  sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec4 splat; varying vec4 vSplat; varying vec3 vTWP;')
+    .replace('#include <project_vertex>', '#include <project_vertex>\nvSplat = splat; vTWP = (modelMatrix*vec4(transformed,1.0)).xyz;');
+  sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec4 vSplat; varying vec3 vTWP; uniform sampler2D tG, tD, tR, tS, nG, nD, nR, nS;\nvec3 tex2(sampler2D t, vec2 p){ return mix(texture2D(t, p*0.33).rgb, texture2D(t, p*0.061).rgb, 0.45); }')
+    .replace('#include <map_fragment>', `#include <map_fragment>
+      vec4 w = vSplat / max(1e-3, vSplat.x + vSplat.y + vSplat.z + vSplat.w); vec2 P = vTWP.xz;
+      vec3 alb = tex2(tG, P)*w.x + tex2(tD, P*1.3)*w.y + tex2(tR, P*0.6)*w.z + tex2(tS, P*0.5)*w.w;
+      diffuseColor.rgb *= alb*1.7;`)
+    .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+      { vec4 w2 = vSplat / max(1e-3, vSplat.x + vSplat.y + vSplat.z + vSplat.w); vec2 P2 = vTWP.xz*0.33;
+        vec2 tn = (texture2D(nG, P2).xy*w2.x + texture2D(nD, P2*1.3).xy*w2.y + texture2D(nR, P2*0.6).xy*w2.z + texture2D(nS, P2*0.5).xy*w2.w)*2.0 - 1.0;
+        normal = normalize(normal + (viewMatrix*vec4(tn.x, 0.0, tn.y, 0.0)).xyz*0.7); }`)
+    .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(0.95, 0.55, vSplat.w);'); };
 const chunkIndex = (() => { const idx = []; for (let r=0;r<NV-1;r++) for (let k=0;k<NV-1;k++){ const a=r*NV+k, b=a+1, e=a+NV, f=e+1; idx.push(a,e,b, b,e,f); } return new THREE.BufferAttribute(new Uint32Array(idx),1); })();
 const C_DIRT = new THREE.Color(0x8a6640), C_DIRT2 = new THREE.Color(0x6e4f30), C_GRASS = new THREE.Color(0x5d8a32), C_GRASS2 = new THREE.Color(0x7aa040),
       C_ROCK = new THREE.Color(0x857d72), C_SNOW = new THREE.Color(0xe9eef2), C_ALP = new THREE.Color(0x8c9a5a);
@@ -71,49 +119,98 @@ function groundColor(x, z, h, ny, dirt, c){
   if (h > 328 && ny > 0.8) c.lerp(C_SNOW, Math.min(0.8, (h-328)/18));
   return c;
 }
-// shared tree / grass geometry
-const trunkG = new THREE.CylinderGeometry(0.18,0.32,1,6); trunkG.translate(0,0.5,0);
-const coneG = new THREE.ConeGeometry(1,1,7); coneG.translate(0,0.5,0);
-const trunkMat = new THREE.MeshLambertMaterial({color:0x5a3d26}), folMat = new THREE.MeshLambertMaterial({color:0xffffff});
-const tuftG = new THREE.ConeGeometry(0.12,0.6,3); tuftG.translate(0,0.3,0);
-const tuftMat = new THREE.MeshLambertMaterial({color:0xffffff});
+// shared tree / rock / bush geometry (instanced per chunk)
+const mergeGeos = gs => { let n = 0; const ps = gs.map(g => g.index ? g.toNonIndexed() : g); for (const g of ps) n += g.attributes.position.count;
+  const P = new Float32Array(n*3), N = new Float32Array(n*3), U = new Float32Array(n*2); let o = 0;
+  for (const g of ps){ if (!g.attributes.normal) g.computeVertexNormals(); P.set(g.attributes.position.array, o*3); N.set(g.attributes.normal.array, o*3); if (g.attributes.uv) U.set(g.attributes.uv.array, o*2); o += g.attributes.position.count; }
+  const r = new THREE.BufferGeometry(); r.setAttribute('position', new THREE.BufferAttribute(P,3)); r.setAttribute('normal', new THREE.BufferAttribute(N,3)); r.setAttribute('uv', new THREE.BufferAttribute(U,2)); return r; };
+const trunkG = new THREE.CylinderGeometry(0.16,0.34,1,8,1); trunkG.translate(0,0.5,0);
+// conifer: 5 layered, drooping tiers with ragged needle edges (spans y 0..1, radius 1)
+const coneG = (() => { const tiers = []; for (let k = 0; k < 5; k++){ const r = 1 - k*0.18, hgt = 0.34 - k*0.03, y0 = k*0.17;
+    const g = new THREE.ConeGeometry(r, hgt, 14, 2, true); const p = g.attributes.position;
+    for (let i = 0; i < p.count; i++){ const x = p.getX(i), y = p.getY(i), z = p.getZ(i), rad = Math.hypot(x, z); if (y < -hgt*0.45 && rad > 0.01){ const a = Math.atan2(z, x), jag = 1 + 0.16*Math.sin(a*7 + k) + 0.08*Math.sin(a*13 + k*2); p.setXYZ(i, x*jag, y - 0.05*r*(jag-0.9), z*jag); } }
+    g.translate(0, y0 + hgt/2, 0); g.computeVertexNormals(); tiers.push(g); }
+  tiers.push(new THREE.ConeGeometry(0.2, 0.25, 8).translate(0, 0.9, 0)); return mergeGeos(tiers); })();
+const trunkMat = new THREE.MeshStandardMaterial({map:TEX.bark.map, normalMap:TEX.bark.normal, roughness:0.95});
+TEX.bark.map.repeat.set(2, 5); TEX.bark.normal.repeat.set(2, 5);
+const folMat = new THREE.MeshStandardMaterial({map:TEX.needles.map, normalMap:TEX.needles.normal, roughness:0.85, side:THREE.DoubleSide});
+TEX.needles.map.repeat.set(6, 2); TEX.needles.normal.repeat.set(6, 2);
+const rockG = (() => { const g = new THREE.IcosahedronGeometry(1, 2), p = g.attributes.position;
+  for (let i = 0; i < p.count; i++){ const v = new THREE.Vector3().fromBufferAttribute(p, i), n = 1 + 0.18*Math.sin(v.x*3.1 + v.y*2.3) + 0.12*Math.sin(v.z*5.3 - v.x*1.7) + 0.07*Math.sin(v.y*9.1); v.multiplyScalar(n); v.y *= 0.7; p.setXYZ(i, v.x, v.y, v.z); }
+  g.computeVertexNormals(); return g; })();
+const rockMat = triplanar(new THREE.MeshStandardMaterial({color:0xb8b2a8, roughness:0.9, flatShading:true}), TEX.rock, 0.45, 0.9);
+const bushG = (() => { const parts = []; for (let k = 0; k < 4; k++){ const g = new THREE.IcosahedronGeometry(0.55 + 0.2*Math.sin(k*2.1), 1); g.translate(Math.cos(k*1.9)*0.45, 0.35 + 0.15*(k%2), Math.sin(k*1.9)*0.45); parts.push(g); } return mergeGeos(parts); })();
+const bushMat = triplanar(new THREE.MeshStandardMaterial({color:0xffffff, roughness:0.9, flatShading:true}), TEX.needles, 1.2, 0.6);
+// wind-swayed grass: one instanced field of blade clumps that follows the rider (cells are world-anchored, so nothing swims)
+const windU = {value:0};
+const grassField = (() => {
+  const blades = []; for (let k = 0; k < 6; k++){ const a = k*1.05 + 0.3, ox = Math.cos(a*2.3)*0.12, oz = Math.sin(a*1.7)*0.12, w = 0.018, h = 0.24 + 0.18*((k*37)%10)/10, lx = Math.cos(a)*w, lz = Math.sin(a)*w, tipx = ox + Math.cos(a+1.2)*0.08, tipz = oz + Math.sin(a+1.2)*0.08;
+    blades.push([ox-lx,0,oz-lz, ox+lx,0,oz+lz, tipx,h,tipz]); }
+  const P = new Float32Array(blades.flat()), C = new Float32Array(P.length);
+  for (let i = 0; i < P.length/3; i++){ const t = P[i*3+1]/0.42; C[i*3] = 0.25 + 0.45*t; C[i*3+1] = 0.38 + 0.42*t; C[i*3+2] = 0.12 + 0.18*t; }
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(P,3)); g.setAttribute('color', new THREE.BufferAttribute(C,3)); g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(P.length).map((_, i) => i%3 === 1 ? 1 : 0), 3));
+  const mat = new THREE.MeshLambertMaterial({vertexColors:true, side:THREE.DoubleSide});
+  mat.onBeforeCompile = sh => { sh.uniforms.uTime = windU;
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime;').replace('#include <begin_vertex>', `#include <begin_vertex>
+      vec4 gw = modelMatrix*instanceMatrix*vec4(0.,0.,0.,1.); float bend = position.y*position.y*3.0, gust = 0.6 + 0.4*sin(uTime*0.6 + gw.x*0.02);
+      transformed.x += sin(uTime*1.9 + gw.x*0.23 + gw.z*0.11)*0.09*bend*gust; transformed.z += sin(uTime*1.4 + gw.z*0.19 + gw.x*0.05)*0.06*bend*gust;`);
+    sh.fragmentShader = sh.fragmentShader.replace('#include <normal_fragment_begin>', 'vec3 normal = normalize((viewMatrix*vec4(0.,1.,0.,0.)).xyz); vec3 nonPerturbedNormal = normal;'); };   /* blades lit like the ground: no dark back faces */
+  const MAXN = 22000, mesh = new THREE.InstancedMesh(g, mat, MAXN); mesh.receiveShadow = true; mesh.frustumCulled = false; mesh.count = 0; scene.add(mesh);
+  const cache = new Map(), M = new THREE.Matrix4(), q = new THREE.Quaternion(), sv = new THREE.Vector3(), pv = new THREE.Vector3(), col = new THREE.Color(), UPV = new THREE.Vector3(0,1,0);
+  let cx = 1e9, cz = 1e9;
+  function cell(i, j, cs){ const k = i + ',' + j + ',' + cs; let e = cache.get(k); if (e !== undefined) return e;
+    let a = (i*73856093 ^ j*19349663 ^ 0x5bd1e995) >>> 0; const r = () => (a = (Math.imul(a, 1664525) + 1013904223) >>> 0)/4294967296;
+    const x = (i + r())*cs, z = (j + r())*cs, h = terrainH(x, z);
+    e = (r() < 0.2 || h > 335 || isDirt(x, z) || featH(x, z) > 0 || Math.hypot(x-SHOP.x, z-SHOP.z) < 14) ? null : {x, z, h, rot: r()*6.28, s: 0.7 + r()*0.8, t: r()};
+    if (cache.size > 250000) cache.clear(); cache.set(k, e); return e; }
+  function rebuild(force){ const R = Q.grassR, cs = Q.grassCell; mesh.visible = R > 0; if (!R){ mesh.count = 0; return; }
+    let n = 0; const i0 = Math.floor((S.x - R)/cs), i1 = Math.floor((S.x + R)/cs), j0 = Math.floor((S.z - R)/cs), j1 = Math.floor((S.z + R)/cs);
+    for (let i = i0; i <= i1 && n < MAXN; i++) for (let j = j0; j <= j1 && n < MAXN; j++){ const e = cell(i, j, cs); if (!e) continue; const d = Math.hypot(e.x - S.x, e.z - S.z); if (d > R) continue;
+      const fade = Math.min(1, (R - d)/8); q.setFromAxisAngle(UPV, e.rot); M.compose(pv.set(e.x, e.h - 0.02, e.z), q, sv.set(e.s, e.s*fade, e.s)); mesh.setMatrixAt(n, M); col.setHSL(0.22 + e.t*0.07, 0.5, 0.42 + e.t*0.2); mesh.setColorAt(n++, col); }
+    mesh.count = n; mesh.instanceMatrix.needsUpdate = true; if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true; cx = S.x; cz = S.z; }
+  window.__dbgGrass = () => ({count: mesh.count, vis: mesh.visible, cache: cache.size});
+  return { rebuild, update(){ if (Math.hypot(S.x - cx, S.z - cz) > 4) rebuild(); } };
+})();
 const chunks = new Map();
 const ckey = (i,j) => i+','+j;
 function buildChunk(ci, cj){
   const x0 = ci*CH, z0 = cj*CH, grp = new THREE.Group();
   const E = NV+2, hs = new Float32Array(E*E);
   for (let r=0;r<E;r++) for (let k=0;k<E;k++) hs[r*E+k] = terrainH(x0+(k-1)*RES, z0+(r-1)*RES);
-  const pos = new Float32Array(NV*NV*3), col = new Float32Array(NV*NV*3), nrm = new Float32Array(NV*NV*3), c = new THREE.Color();
+  const pos = new Float32Array(NV*NV*3), col = new Float32Array(NV*NV*3), nrm = new Float32Array(NV*NV*3), spl = new Float32Array(NV*NV*4), c = new THREE.Color();
   for (let r=0;r<NV;r++) for (let k=0;k<NV;k++){
     const i = r*NV+k, x = x0+k*RES, z = z0+r*RES, h = hs[(r+1)*E+k+1];
     const dx = hs[(r+1)*E+k+2]-hs[(r+1)*E+k], dz = hs[(r+2)*E+k+1]-hs[r*E+k+1], nl = Math.hypot(dx, 2*RES, dz);
     nrm[i*3] = -dx/nl; nrm[i*3+1] = 2*RES/nl; nrm[i*3+2] = -dz/nl;
     pos[i*3] = k*RES; pos[i*3+1] = h; pos[i*3+2] = r*RES;
-    groundColor(x, z, h, 2*RES/nl, isDirt(x,z), c); col[i*3]=c.r; col[i*3+1]=c.g; col[i*3+2]=c.b;
+    const ny = 2*RES/nl, dirt = isDirt(x,z) ? 1 : 0, m = 0.5+0.5*Math.sin(x*0.013+Math.cos(z*0.011)*2)*Math.cos(z*0.017);
+    const rock = dirt ? 0 : Math.min(1, Math.max(0, (0.83-ny)/0.1)), snow = dirt ? 0 : (h > 328 && ny > 0.78 ? Math.min(0.9, (h-328)/18) : 0), alp = Math.min(1, Math.max(0, (h-210)/60));
+    spl[i*4] = (1-dirt)*(1-rock)*(1-snow); spl[i*4+1] = dirt; spl[i*4+2] = rock*(1-snow); spl[i*4+3] = snow;
+    c.setRGB(0.9 + 0.2*m - 0.1*alp, 0.95 + 0.12*m - 0.12*alp, 0.88 + 0.1*m - 0.05*alp); col[i*3]=c.r; col[i*3+1]=c.g; col[i*3+2]=c.b;
   }
   const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(pos,3)); g.setAttribute('normal', new THREE.BufferAttribute(nrm,3)); g.setAttribute('color', new THREE.BufferAttribute(col,3));
+  g.setAttribute('position', new THREE.BufferAttribute(pos,3)); g.setAttribute('normal', new THREE.BufferAttribute(nrm,3)); g.setAttribute('color', new THREE.BufferAttribute(col,3)); g.setAttribute('splat', new THREE.BufferAttribute(spl,4));
   g.setIndex(chunkIndex); g.computeBoundingSphere();
   const m = new THREE.Mesh(g, terrainMat); m.position.set(x0, 0, z0); m.receiveShadow = true; grp.add(m);
-  // trees
+  // trees: textured bark, layered needle foliage, varied height/width/tint
   const ts = treesInCell(ci, cj);
+  const M = new THREE.Matrix4(), q = new THREE.Quaternion(), sv = new THREE.Vector3(), p = new THREE.Vector3(), up = new THREE.Vector3(0,1,0);
   if (ts.length){
-    const trunk = new THREE.InstancedMesh(trunkG, trunkMat, ts.length), f1 = new THREE.InstancedMesh(coneG, folMat, ts.length), f2 = new THREE.InstancedMesh(coneG, folMat, ts.length);
-    const M = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3(), up = new THREE.Vector3(0,1,0);
-    ts.forEach((t, i) => { const h = t.h, rr = h*0.19; q.setFromAxisAngle(up, t.rot);
-      M.compose(p.set(t.x,t.y,t.z), q, s.set(1,h*0.45,1)); trunk.setMatrixAt(i,M);
-      M.compose(p.set(t.x,t.y+h*0.25,t.z), q, s.set(rr,h*0.55,rr)); f1.setMatrixAt(i,M);
-      M.compose(p.set(t.x,t.y+h*0.55,t.z), q, s.set(rr*0.7,h*0.45,rr*0.7)); f2.setMatrixAt(i,M);
-      c.setHSL(0.28+t.hue*0.06, 0.45, 0.16+((t.hue*7)%1)*0.08); f1.setColorAt(i,c); c.offsetHSL(0,0,0.03); f2.setColorAt(i,c); });
-    for (const im of [trunk,f1,f2]){ im.castShadow = true; im.receiveShadow = true; im.computeBoundingSphere(); grp.add(im); }
+    const trunk = new THREE.InstancedMesh(trunkG, trunkMat, ts.length), fol = new THREE.InstancedMesh(coneG, folMat, ts.length);
+    ts.forEach((t, i) => { const h = t.h, wv = 0.85 + ((t.hue*13.7)%1)*0.4, rr = h*0.2*wv; q.setFromAxisAngle(up, t.rot);
+      M.compose(p.set(t.x,t.y,t.z), q, sv.set(0.8+h*0.03, h*0.5, 0.8+h*0.03)); trunk.setMatrixAt(i,M);
+      M.compose(p.set(t.x,t.y+h*0.16,t.z), q, sv.set(rr, h*0.86, rr)); fol.setMatrixAt(i,M);
+      c.setHSL(0.27+t.hue*0.07, 0.35+((t.hue*3.3)%1)*0.2, 0.55+((t.hue*7)%1)*0.3); fol.setColorAt(i,c); });
+    for (const im of [trunk,fol]){ im.castShadow = true; im.receiveShadow = true; im.computeBoundingSphere(); grp.add(im); }
   }
-  // grass tufts
+  // rocks and bushes (kept off trails, paths and jumps)
   { const r = (() => { let a = (ci*73856093 ^ cj*19349663) >>> 0 || 1; return () => (a = (a*16807) % 2147483647) / 2147483647; })();
-    const N = 260, tf = new THREE.InstancedMesh(tuftG, tuftMat, N), M = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3(); let n = 0;
-    for (let i=0;i<N;i++){ const x = x0+r()*CH, z = z0+r()*CH; const h = terrainH(x,z); if (h > 300 || isDirt(x,z) || featH(x,z) > 0) continue;
-      q.setFromAxisAngle(new THREE.Vector3(r()-.5,1,r()-.5).normalize(), r()*0.4); const sc = 0.6+r()*1.2;
-      M.compose(p.set(x,h,z), q, s.set(sc,sc,sc)); tf.setMatrixAt(n,M); c.setHSL(0.22+r()*0.08,0.55,0.3+r()*0.15); tf.setColorAt(n++,c); }
-    tf.count = n; if (n){ tf.computeBoundingSphere(); grp.add(tf); } }
+    const rk = new THREE.InstancedMesh(rockG, rockMat, Q.rocks), bu = new THREE.InstancedMesh(bushG, bushMat, Q.bushes); let nr = 0, nb = 0;
+    for (let i = 0; i < Q.rocks + Q.bushes; i++){ const x = x0+r()*CH, z = z0+r()*CH, h = terrainH(x,z), sc = r(), rot = r()*6.28, rough = r();
+      if (isDirt(x,z) || featH(x,z) > 0 || Math.hypot(x-SHOP.x, z-SHOP.z) < 22 || LIFTS.some(L => Math.hypot(x-L.bx, z-L.bz) < 14 || Math.hypot(x-L.tx, z-L.tz) < 14)) continue;
+      if (i < Q.rocks){ if (h > 330 && rough < 0.5) continue; const s0 = 0.3 + sc*sc*1.6; q.setFromEuler(new THREE.Euler(rough*0.5, rot, sc*0.4)); M.compose(p.set(x, h - s0*0.25, z), q, sv.set(s0*(0.8+rough*0.6), s0, s0)); rk.setMatrixAt(nr++, M); }
+      else { if (h > 300) continue; const s0 = 0.5 + sc*0.9; q.setFromAxisAngle(up, rot); M.compose(p.set(x, h - 0.1, z), q, sv.set(s0, s0*(0.7+rough*0.5), s0)); bu.setMatrixAt(nb, M); c.setHSL(0.24 + rough*0.08, 0.45, 0.55 + sc*0.25); bu.setColorAt(nb++, c); } }
+    rk.count = nr; bu.count = nb; for (const im of [rk, bu]) if (im.count){ im.castShadow = true; im.receiveShadow = true; im.computeBoundingSphere(); grp.add(im); } }
   scene.add(grp); chunks.set(ckey(ci,cj), {grp, ci, cj});
 }
 function disposeChunk(k){ const ch = chunks.get(k); scene.remove(ch.grp);
@@ -150,8 +247,8 @@ const farU = { value: new THREE.Vector3(0,0,0) };
 { const plankTex = (() => { const cv = document.createElement('canvas'); cv.width=64; cv.height=64; const x = cv.getContext('2d');
     x.fillStyle='#b98450'; x.fillRect(0,0,64,64); x.fillStyle='#7a5230'; for(let i=0;i<64;i+=8) x.fillRect(0,i,64,1.5);
     const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; return t; })();
-  const woodMat = new THREE.MeshStandardMaterial({map:plankTex, roughness:0.9, flatShading:true, side:THREE.DoubleSide});
-  const dirtMat = new THREE.MeshLambertMaterial({vertexColors:true, polygonOffset:true, polygonOffsetFactor:-1, polygonOffsetUnits:-2});
+  const woodMat = new THREE.MeshStandardMaterial({map:TEX.planks.map, normalMap:TEX.planks.normal, roughness:0.85, flatShading:true, side:THREE.DoubleSide});   // procedural plank albedo + normal map
+  const dirtMat = triplanar(new THREE.MeshStandardMaterial({vertexColors:true, roughness:0.95, polygonOffset:true, polygonOffsetFactor:-1, polygonOffsetUnits:-2}), TEX.dirt, 0.4, 0.8);
   // height of the rendered terrain mesh itself (same 2 m grid and triangle split as the chunks), so jumps sit exactly on it with no z-fighting
   const meshH = (x, z) => { const k = Math.floor(x/RES), r = Math.floor(z/RES), fx = x/RES-k, fz = z/RES-r;
     const ha = terrainH(k*RES, r*RES), hb = terrainH((k+1)*RES, r*RES), he = terrainH(k*RES, (r+1)*RES);
@@ -294,6 +391,7 @@ function readInput(){
   kbSpacePrev = !!keys.Space;
   inp.steer = THREE.MathUtils.clamp(inp.steer,-1,1); inp.lean = THREE.MathUtils.clamp(inp.lean + inp.kbFlip,-1,1);
   inp.tweak = THREE.MathUtils.clamp(inp.tweak,-1,1);
+  if (SETTINGS.invertY) inp.lean = -inp.lean; if (SETTINGS.invertX) inp.tweak = -inp.tweak;   // Settings: invert options (input mapping only)
   return inp;
 }
 
@@ -310,7 +408,7 @@ function placeAt(x, z, yaw){
 }
 function resetGame(){
   Object.assign(S,{lives:3,bestAir:0,totalAir:0,time:0,maxKmh:0,clean:0,spins:0,flips:0,finishes:0,parkClean:0,state:'riding',paused:false});
-  teleport(spotI, true); $('overlay').classList.add('hidden'); setTimeout(()=>$('help').classList.add('hidden'), 12000);
+  teleport(spotI, true); $('overlay').classList.add('hidden'); closeMenu();
 }
 function crash(reason){ S.lastCrash = reason;
   if (S.crashT>0) return;
@@ -322,11 +420,12 @@ function crash(reason){ S.lastCrash = reason;
   else flash('BAIL!', 1.5);
 }
 function showOverlay(title,msg){ $('overlay').classList.remove('hidden'); $('overlayBox').querySelector('h1').textContent=title; $('overlayMsg').innerHTML=msg; }
-function togglePause(){ if (S.state!=='riding' || shopOpen) return; S.paused=!S.paused; if (S.paused) showOverlay('PAUSED','Press <b>Menu</b> / <b>P</b> to resume<br><small>Press <b>X</b> / <b>O</b> for the 🚲 Bike Shop · <b>Y</b> / <b>H</b> controls help · <b>View</b> / <b>M</b> full map</small>'); else $('overlay').classList.add('hidden'); }
+function togglePause(){ if (S.state!=='riding' || shopOpen || bigMap.open) return; S.paused=!S.paused; if (S.paused) openMenu('pause'); else closeMenu(); }
 function onPress(code){
   if (S.lift){ if (code==='A'||code==='Enter'||code==='Space') S.lift.d = 1e9; return; }   // skip the chairlift ride
   if (shopOpen){ shopKey(code); return; }
   if (bigMap.open){ mapKey(code); return; }
+  if (menu.open){ menuKey(code); return; }
   if ((code==='Back'||code==='KeyM') && S.state==='riding' && !S.lift){ openMap(); return; }
   if (code==='Y' && S.paused){ $('help').classList.toggle('hidden'); return; }   // help moved into the pause menu on the controller
   if ((code==='X'||code==='KeyO') && (S.state==='menu' || S.paused)){ openShop(); return; }
@@ -600,14 +699,17 @@ function spawnDust(dt){
 function frame(){
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, clock.getDelta());
-  const inp = readInput();
+  const inp = readInput(); if (Object.keys(inp.pressed).length) startMusic();
   for (const k in inp.pressed) onPress(k);
   if (S.state==='riding' && !S.paused && S.lift){ liftRide(dt, inp); }
   else if (S.state==='riding' && !S.paused){
     acc += dt; const h = 1/120; while (acc >= h){ step(h, inp); acc -= h; }
     trackWorld(dt); shopProximity(dt); liftProximity(dt);
   } else if (S.state!=='riding' && S.state!=='menu') { step(dt, {steer:0,pedal:0,brake:1,jump:false,tx:0,ty:0}); }
-  animateLifts(dt); updateChunks(S.x, S.z); farU.value.set(S.x, S.z, coveredR);
+  windU.value += dt; grassField.update();
+  if (menu.open) menuFrame(dt, inp);
+  const flyF = S.state === 'menu' ? flyover(dt) : null, fX = flyF ? flyF[0] : S.x, fZ = flyF ? flyF[1] : S.z;
+  animateLifts(dt); updateChunks(fX, fZ); farU.value.set(fX, fZ, coveredR);
   // pose bike
   bike.position.set(S.x, S.y, S.z);
   // whole-bike orientation as one quaternion (yaw * pitch * lean/tweak); after a landing it slerps to the target over ~0.15 s instead of snapping
@@ -635,10 +737,11 @@ function frame(){
   camRoll = THREE.MathUtils.lerp(camRoll, -S.lean*0.18 + (S.sliding ? S.slip*0.1 : 0), Math.min(1, dt*4));
   camera.up.set(Math.sin(camRoll)*Math.cos(ch), Math.cos(camRoll), -Math.sin(camRoll)*Math.sin(ch)); camera.lookAt(camLook);
   if (window.__camSide){ const o = window.__camSide, c = Math.cos(S.yaw), s_ = Math.sin(S.yaw); camera.position.set(S.x + c*o.d + Math.sin(S.yaw)*(o.b||0), S.y + (o.h||1.2), S.z - s_*o.d + Math.cos(S.yaw)*(o.b||0)); camera.up.set(0,1,0); camera.lookAt(S.x, S.y + 0.9, S.z); }   // test hook: side camera for pose screenshots
+  if (flyF) flyover(0);   // main menu: flyover camera replaces the chase cam
   mountains.position.set(camera.position.x, 0, camera.position.z);
   skyDome.position.copy(camera.position);
-  sun.position.set(S.x+30, S.y+60, S.z+20); sun.target.position.set(S.x, S.y, S.z-10);
-  renderer.render(scene, camera);
+  if (!flyF){ sun.position.set(S.x+30, S.y+60, S.z+20); sun.target.position.set(S.x, S.y, S.z-10); }
+  if (composer) composer.render(); else renderer.render(scene, camera);
   // HUD
   const kmh = S.speed*3.6; S.maxKmh = Math.max(S.maxKmh, kmh);
   const shownKmh = Math.max(0, kmh - 5);   // HUD only: display reads 5 km/h under the real speed
@@ -748,12 +851,12 @@ function mapFrame(dt, inp){
   const vx = (inp.lsx||0) + (inp.dpx||0) + kx, vz = (inp.lsy||0) + (inp.dpy||0) + ky, sp = 600;
   bigMap.cx = Math.max(-HALF, Math.min(HALF, bigMap.cx + vx*sp*dt)); bigMap.cz = Math.max(-HALF, Math.min(HALF, bigMap.cz + vz*sp*dt));
   const {s, ox, oy, sz} = mapScale(), P = (x, z) => [ox + (x+HALF)*s, oy + (z+HALF)*s], c = bmx;
-  c.clearRect(0, 0, bm.width, bm.height); c.fillStyle = 'rgba(8,14,20,.88)'; c.fillRect(0, 0, bm.width, bm.height);
+  c.clearRect(0, 0, bm.width, bm.height); c.fillStyle = 'rgba(20,26,18,.92)'; c.fillRect(0, 0, bm.width, bm.height);
   c.imageSmoothingEnabled = true; c.drawImage(bigBg || (bigBg = makeBigBg()), ox, oy, sz, sz); c.strokeStyle = '#fff'; c.lineWidth = 2; c.strokeRect(ox, oy, sz, sz);
   // connectors, park, shop
   c.strokeStyle = 'rgba(235,215,170,.9)'; c.lineWidth = 1.5; for (const k of connectors){ c.beginPath(); k.pts.forEach((p, i) => { if (i%3 && i < k.pts.length-1) return; const [a,b] = P(p[0],p[1]); i ? c.lineTo(a,b) : c.moveTo(a,b); }); c.stroke(); }
-  { const [a,b] = P(PARK.x, PARK.z); c.fillStyle = 'rgba(160,110,60,.9)'; c.beginPath(); c.arc(a, b, PARK.r*s, 0, 7); c.fill(); c.fillStyle = '#fff'; c.font = 'bold 13px sans-serif'; c.textAlign = 'center'; c.fillText('🏁 Dirt Jump Park', a, b - PARK.r*s - 6); }
-  { const [a,b] = P(SHOP.x, SHOP.z); c.font = '18px sans-serif'; c.textAlign = 'center'; c.fillText('🚲', a, b+6); c.font = 'bold 12px sans-serif'; c.fillStyle = '#ffe08a'; c.fillText('Bike Shop', a, b+20); }
+  { const [a,b] = P(PARK.x, PARK.z); c.fillStyle = 'rgba(160,110,60,.9)'; c.beginPath(); c.arc(a, b, PARK.r*s, 0, 7); c.fill(); c.fillStyle = '#fff'; c.font = 'bold 13px "Barlow Condensed", sans-serif'; c.textAlign = 'center'; c.fillText('🏁 Dirt Jump Park', a, b - PARK.r*s - 6); }
+  { const [a,b] = P(SHOP.x, SHOP.z); c.font = '18px "Barlow Condensed", sans-serif'; c.textAlign = 'center'; c.fillText('🚲', a, b+6); c.font = 'bold 12px "Barlow Condensed", sans-serif'; c.fillStyle = '#ffe08a'; c.fillText('Bike Shop', a, b+20); }
   // trails (locked = dashed + dim) with checkpoints
   for (const [i, tr] of trails.entries()){ const open = isOpen(i); c.globalAlpha = open ? 1 : 0.55; c.setLineDash(open ? [] : [6,4]);
     c.strokeStyle = '#000'; c.lineWidth = 5; c.beginPath(); tr.pts.forEach((p, j) => { if (j%3 && j < tr.pts.length-1) return; const [a,b] = P(p[0],p[1]); j ? c.lineTo(a,b) : c.moveTo(a,b); }); c.stroke();
@@ -763,13 +866,13 @@ function mapFrame(dt, inp){
   c.textAlign = 'left';
   for (const L of LIFTS){ const [a,b] = P(L.bx,L.bz), [e,f] = P(L.tx,L.tz); c.strokeStyle = '#111'; c.lineWidth = 4; c.beginPath(); c.moveTo(a,b); c.lineTo(e,f); c.stroke(); c.strokeStyle = L.color; c.lineWidth = 2; c.setLineDash([5,3]); c.stroke(); c.setLineDash([]);
     for (const [p,q] of [[a,b],[e,f]]){ c.fillStyle = L.color; c.fillRect(p-5,q-5,10,10); c.strokeStyle = '#fff'; c.lineWidth = 1.5; c.strokeRect(p-5,q-5,10,10); }
-    c.font = 'bold 12px sans-serif'; c.lineWidth = 3; c.strokeStyle = '#000'; c.fillStyle = '#fff'; const t = `🚡 ${L.short}: ${L.serves.join(', ')}`; c.strokeText(t, a+8, b+4); c.fillText(t, a+8, b+4); }
+    c.font = 'bold 12px "Barlow Condensed", sans-serif'; c.lineWidth = 3; c.strokeStyle = '#000'; c.fillStyle = '#fff'; const t = `🚡 ${L.short}: ${L.serves.join(', ')}`; c.strokeText(t, a+8, b+4); c.fillText(t, a+8, b+4); }
   // trail labels at the start: name, difficulty icon, type, lock state
   for (const [i, tr] of trails.entries()){ const open = isOpen(i), [a,b] = P(tr.pts[0][0], tr.pts[0][1]), d = DIFF[tr.diff];
-    c.font = 'bold 12px sans-serif'; c.lineWidth = 3; c.strokeStyle = '#000'; c.fillStyle = open ? '#fff' : '#aaa'; const t = `${open ? '' : '🔒 '}${tr.name}`; c.strokeText(t, a+9, b-4); c.fillText(t, a+9, b-4);
-    c.font = '11px sans-serif'; c.fillStyle = /^#(000|111|222)/.test(d.color) || d.color==='black' ? '#eee' : d.color; const t2 = `${d.icon} ${d.label} · ${tr.type}`; c.strokeText(t2, a+9, b+9); c.fillText(t2, a+9, b+9); }
+    c.font = 'bold 12px "Barlow Condensed", sans-serif'; c.lineWidth = 3; c.strokeStyle = '#000'; c.fillStyle = open ? '#fff' : '#aaa'; const t = `${open ? '' : '🔒 '}${tr.name}`; c.strokeText(t, a+9, b-4); c.fillText(t, a+9, b-4);
+    c.font = '11px "Barlow Condensed", sans-serif'; c.fillStyle = /^#(000|111|222)/.test(d.color) || d.color==='black' ? '#eee' : d.color; const t2 = `${d.icon} ${d.label} · ${tr.type}`; c.strokeText(t2, a+9, b+9); c.fillText(t2, a+9, b+9); }
   // spots
-  c.textAlign = 'center'; c.font = 'bold 11px sans-serif';
+  c.textAlign = 'center'; c.font = 'bold 11px "Barlow Condensed", sans-serif';
   spots.forEach((p, i) => { const [a,b] = P(p.x, p.z), open = isOpen(i); c.fillStyle = open ? '#fff' : 'rgba(60,60,60,.9)'; c.beginPath(); c.arc(a, b, 8, 0, 7); c.fill(); c.strokeStyle = '#000'; c.lineWidth = 1; c.stroke(); c.fillStyle = open ? '#000' : '#bbb'; c.fillText(open ? String(i+1) : '🔒', a, b+4); });
   // waypoints
   waypoints.forEach((w, i) => { const [a,b] = P(w.x, w.z); c.fillStyle = '#3ef0ff'; c.strokeStyle = '#003'; c.lineWidth = 2; c.beginPath(); c.moveTo(a, b-9); c.lineTo(a+7, b); c.lineTo(a, b+9); c.lineTo(a-7, b); c.closePath(); c.fill(); c.stroke(); c.fillStyle = '#003'; c.fillText(String(i+1), a, b+4); });
@@ -778,18 +881,105 @@ function mapFrame(dt, inp){
   // cursor + hover info
   { const [a,b] = P(bigMap.cx, bigMap.cz); c.strokeStyle = '#fff'; c.lineWidth = 2; c.beginPath(); c.arc(a, b, 10, 0, 7); c.moveTo(a-18, b); c.lineTo(a-6, b); c.moveTo(a+6, b); c.lineTo(a+18, b); c.moveTo(a, b-18); c.lineTo(a, b-6); c.moveTo(a, b+6); c.lineTo(a, b+18); c.stroke();
     let hov = -1; spots.forEach((p, i) => { if (Math.hypot(p.x-bigMap.cx, p.z-bigMap.cz)*s < 22) hov = i; });
-    const dist = Math.round(Math.hypot(bigMap.cx - S.x, bigMap.cz - S.z)); c.textAlign = 'left'; c.font = 'bold 13px sans-serif'; c.fillStyle = '#fff'; c.strokeStyle = '#000'; c.lineWidth = 3;
+    const dist = Math.round(Math.hypot(bigMap.cx - S.x, bigMap.cz - S.z)); c.textAlign = 'left'; c.font = 'bold 13px "Barlow Condensed", sans-serif'; c.fillStyle = '#fff'; c.strokeStyle = '#000'; c.lineWidth = 3;
     const t = hov >= 0 ? `${spots[hov].name} — ${isOpen(hov) ? 'A / Enter: teleport' : '🔒 locked'}` : `${dist} m away`; c.strokeText(t, a+16, b-14); c.fillText(t, a+16, b-14); }
   // legend
   const lx = innerWidth - 270, rows = [['━', '#fff', 'Trail (dashed + 🔒 = locked)'], ['▲', '#f2b800', 'Checkpoint'], ['■', '#e53935', 'Lift station (dashed line = lift)'], ['─', '#ebd7aa', 'Connector path'], ['●', '#a06e3c', 'Dirt Jump Park'], ['🚲', '#fff', 'Bike Shop'], ['①', '#fff', 'Teleport spot'], ['◆', '#3ef0ff', `Waypoint (max ${WP_MAX})`], ['▲', '#ffd84d', 'You']];
-  c.fillStyle = 'rgba(0,0,0,.6)'; c.fillRect(lx-12, 20, 262, 46 + rows.length*20 + 140); c.textAlign = 'left'; c.font = 'bold 16px sans-serif'; c.fillStyle = '#fff'; c.fillText('MAP', lx, 44);
-  c.font = '13px sans-serif'; rows.forEach(([ic, col, label], k) => { c.fillStyle = col; c.fillText(ic, lx, 70 + k*20); c.fillStyle = '#ddd'; c.fillText(label, lx + 26, 70 + k*20); });
-  let y = 80 + rows.length*20; c.fillStyle = '#fff'; c.font = 'bold 13px sans-serif'; c.fillText('Difficulty', lx, y); c.font = '13px sans-serif';
+  c.fillStyle = 'rgba(26,22,15,.88)'; c.fillRect(lx-12, 20, 262, 46 + rows.length*20 + 140); c.textAlign = 'left'; c.font = '28px "Bebas Neue", sans-serif'; c.fillStyle = '#d9772b'; c.fillText('MAP', lx, 44);
+  c.font = '13px "Barlow Condensed", sans-serif'; rows.forEach(([ic, col, label], k) => { c.fillStyle = col; c.fillText(ic, lx, 70 + k*20); c.fillStyle = '#ddd'; c.fillText(label, lx + 26, 70 + k*20); });
+  let y = 80 + rows.length*20; c.fillStyle = '#fff'; c.font = 'bold 13px "Barlow Condensed", sans-serif'; c.fillText('Difficulty', lx, y); c.font = '13px "Barlow Condensed", sans-serif';
   for (const k of ['green','blue','black','dblack']){ y += 18; c.fillStyle = /^#(000|111|222)/.test(DIFF[k].color) || DIFF[k].color==='black' ? '#eee' : DIFF[k].color; c.fillText(`${DIFF[k].icon} ${DIFF[k].label}`, lx, y); }
-  y += 26; c.fillStyle = '#bbb'; c.font = '12px sans-serif';
+  y += 26; c.fillStyle = '#bbb'; c.font = '12px "Barlow Condensed", sans-serif';
   for (const l of ['Stick / D-pad / arrows / mouse: move cursor', 'A / Enter / double-click: teleport', 'X / W / click: set or remove waypoint', 'B / M / View: close']){ c.fillText(l, lx, y); y += 16; }
 }
 syncBeacons();
+// ---------- music: shuffled CC0 playlist (starts after the first user input, per browser autoplay rules) ----------
+const TRACKS = [
+  {file:'music/actiontrack.mp3', title:'Action Track', artist:'LushoGames', src:'opengameart.org/content/action-track'},
+  {file:'music/simplebeat.mp3', title:'Simple Action Beat', artist:'LushoGames', src:'opengameart.org/content/simple-action-beat'},
+  {file:'music/heat-battle-bpm180.mp3', title:'Heat Battle', artist:'MintoDog', src:'opengameart.org/content/heat-battle'},
+  {file:'music/8bit-action-title-bpm150.mp3', title:'8bit Action Title', artist:'MintoDog', src:'opengameart.org/content/8bit-action-title'},
+  {file:'music/rock-theme-3.mp3', title:'Rock Theme 3', artist:'Umplix', src:'opengameart.org/content/rock-theme-3'},
+  {file:'music/fastsong.mp3', title:'Fast Cheerful Punk Rock Lo-fi', artist:'annandistance', src:'opengameart.org/content/fast-cheerful-punk-rock-lo-fi'},
+];
+const music = { el: new Audio(), order: [], i: -1, started: false };
+music.el.preload = 'auto';
+const shuffle = a => { for (let i = a.length-1; i > 0; i--){ const j = Math.floor(Math.random()*(i+1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+function musicVol(){ music.el.volume = SETTINGS.musicOn ? SETTINGS.musicVol : 0; }
+function nextSong(){ if (!SETTINGS.musicOn) return; if (++music.i >= music.order.length){ music.order = shuffle(TRACKS.map((_, k) => k)); music.i = 0; }
+  const t = TRACKS[music.order[music.i]]; music.el.src = t.file; musicVol(); music.el.play().then(() => toast(`♪ Now playing: ${t.title} — ${t.artist} (CC0)`)).catch(() => {}); }
+music.el.addEventListener('ended', nextSong);
+function startMusic(){ if (music.started || !SETTINGS.musicOn) return; music.started = true; nextSong(); }
+for (const ev of ['keydown', 'pointerdown']) addEventListener(ev, startMusic, {once:false});
+function setMusicOn(on){ SETTINGS.musicOn = on; saveSettings(); if (on){ if (!music.started){ music.started = true; nextSong(); } else if (music.el.paused){ musicVol(); music.el.play().catch(()=>{}); } } else music.el.pause(); }
+
+// ---------- menus: main menu (flyover), trails, settings, credits, pause ----------
+const menu = { open:false, page:'main', sel:0, stack:[], repeatT:0, fly:0 };
+const ON = v => v ? 'ON' : 'OFF', PCT = v => Math.round(v*100) + '%';
+function trailItems(){ return trails.map((tr, i) => { const d = DIFF[tr.diff], open = isOpen(i);
+  return {label:`<span class="dIcon" style="color:${d.color === '#111' ? '#e8e2d0' : d.color}">${d.icon}</span> ${open ? '' : '🔒 '}${tr.name}`, sub:`${d.label} · ${tr.type}${open ? '' : ' · finish it once to unlock'}`, disabled:!open, act:() => { spotI = i; startRide(); }}; }); }
+const PAGES = {
+  main: () => ({title:null, items:[
+    {label:'Ride', sub:'Free roam from the Valley Meadow', act:() => { spotI = spots.findIndex(s => s.name.startsWith('Valley')); startRide(); }},
+    {label:'Trails', sub:`${trails.filter((_, i) => isOpen(i)).length}/${trails.length} unlocked — drop in at a trail start`, act:() => go('trails')},
+    {label:'Bike Shop', sub:`$${S.score.toLocaleString()} DOLLAHS`, act:() => openShop()},
+    {label:'Settings', sub:'Quality, music, controls, invert', act:() => go('settings')},
+    {label:'Credits', act:() => go('credits')} ]}),
+  trails: () => ({title:'TRAILS', items:[...trailItems(), {label:'Dirt Jump Park', sub:'Pro line · always open', act:() => { spotI = spots.findIndex(s => s.name === 'Dirt Jump Park'); startRide(); }}, {label:'‹ Back', act:back}]}),
+  settings: () => ({title:'SETTINGS', items:[
+    {label:'Quality', value:SETTINGS.quality.toUpperCase(), adj:d => { const q = ['low','med','high'], k = Math.max(0, Math.min(2, q.indexOf(SETTINGS.quality) + d)); if (q[k] !== SETTINGS.quality) applyQuality(q[k]); }, act:() => { const q = ['low','med','high']; applyQuality(q[(q.indexOf(SETTINGS.quality)+1)%3]); }},
+    {label:'Music', value:ON(SETTINGS.musicOn), adj:() => setMusicOn(!SETTINGS.musicOn), act:() => setMusicOn(!SETTINGS.musicOn)},
+    {label:'Music volume', value:PCT(SETTINGS.musicVol), adj:d => { SETTINGS.musicVol = Math.max(0, Math.min(1, Math.round((SETTINGS.musicVol + d*0.1)*10)/10)); saveSettings(); musicVol(); }},
+    {label:'Sound volume', value:PCT(SETTINGS.volume), sub:'for sound effects (coming later)', adj:d => { SETTINGS.volume = Math.max(0, Math.min(1, Math.round((SETTINGS.volume + d*0.1)*10)/10)); saveSettings(); }},
+    {label:'Invert lean / flip (left stick ↕)', value:ON(SETTINGS.invertY), adj:() => { SETTINGS.invertY = !SETTINGS.invertY; saveSettings(); }, act:() => { SETTINGS.invertY = !SETTINGS.invertY; saveSettings(); }},
+    {label:'Invert whip / tweak (right stick ↔)', value:ON(SETTINGS.invertX), adj:() => { SETTINGS.invertX = !SETTINGS.invertX; saveSettings(); }, act:() => { SETTINGS.invertX = !SETTINGS.invertX; saveSettings(); }},
+    {label:'Controls / help', value:$('help').classList.contains('hidden') ? 'SHOW' : 'HIDE', act:() => $('help').classList.toggle('hidden')},
+    {label:'‹ Back', act:back} ]}),
+  credits: () => ({title:'CREDITS', html:`<div class="credits"><p><b>SICK RIPZ</b> — an open-world mountain bike game in the browser.</p>
+    <p><b>Game, code, world, rider and bike models, textures:</b> made procedurally for this project (Three.js r160).</p>
+    <p><b>Music (CC0, from OpenGameArt.org):</b><br>${TRACKS.map(t => `${t.title} — ${t.artist} <small>(${t.src})</small>`).join('<br>')}</p>
+    <p><b>Fonts:</b> Bebas Neue & Barlow Condensed (SIL Open Font License, Google Fonts).</p>
+    <p><b>Trick references:</b> Red Bull slopestyle trick dictionary, X Games BMX Tricktionary, riding.guide.</p>
+    <p><b>Engine:</b> three.js (MIT).</p></div>`, items:[{label:'‹ Back', act:back}]}),
+  pause: () => ({title:'PAUSED', items:[
+    {label:'Resume', act:() => togglePause()},
+    {label:'Map', sub:'View / M', act:() => { closeMenu(); openMap(); bigMap.wasPaused = false; }},
+    {label:'Bike Shop', act:() => openShop()},
+    {label:'Skip song', sub: music.started && SETTINGS.musicOn && music.i >= 0 ? `Now: ${TRACKS[music.order[music.i]].title} — ${TRACKS[music.order[music.i]].artist}` : 'Music is off or not started', act:() => { if (!music.started){ music.started = true; } nextSong(); }},
+    {label:'Settings', act:() => go('settings')},
+    {label:'Controls / help', act:() => $('help').classList.toggle('hidden')},
+    {label:'Main Menu', sub:'Leave the ride (progress and DOLLAHS are saved)', act:() => toMainMenu()} ]}),
+};
+function renderMenu(){ const P = PAGES[menu.page](), el = $('menuPanel');
+  menu.items = P.items; menu.sel = Math.max(0, Math.min(menu.sel, P.items.length-1));
+  el.innerHTML = (P.title ? `<h2>${P.title}</h2>` : '') + (P.html || '') + `<ul class="mItems${menu.page === 'trails' ? ' scroll' : ''}">` + P.items.map((it, k) =>
+    `<li data-k="${k}" class="${k === menu.sel ? 'sel' : ''}${it.disabled ? ' dis' : ''}"><span class="mLabel">${it.label}</span>${it.value !== undefined ? `<span class="mVal">${it.adj ? '‹ ' : ''}${it.value}${it.adj ? ' ›' : ''}</span>` : ''}${it.sub ? `<small>${it.sub}</small>` : ''}</li>`).join('') + '</ul>';
+  $('menuLogo').style.display = menu.page === 'main' ? '' : 'none';
+  el.querySelectorAll('li').forEach(li => { const k = +li.dataset.k; li.onmouseenter = () => { if (menu.sel !== k){ menu.sel = k; renderMenu(); } }; li.onclick = () => { menu.sel = k; menuKey('Enter'); }; });
+  const s = el.querySelector('li.sel'); if (s && s.scrollIntoView) s.scrollIntoView({block:'nearest'});
+  $('menuHint').textContent = menu.page === 'main' ? 'D-pad / stick / arrows: choose · A / Enter: select' : 'D-pad / stick / arrows: choose · ← → change · A / Enter: select · B / Esc: back'; }
+function openMenu(page){ menu.open = true; menu.page = page; menu.sel = 0; menu.stack = []; $('menu').classList.remove('hidden'); $('menu').classList.toggle('pause', page === 'pause'); document.body.classList.toggle('inmenu', page !== 'pause'); renderMenu(); }
+function closeMenu(){ menu.open = false; document.body.classList.remove('inmenu'); $('menu').classList.add('hidden'); }
+function go(page){ menu.stack.push([menu.page, menu.sel]); menu.page = page; menu.sel = 0; renderMenu(); }
+function back(){ if (!menu.stack.length){ if (menu.page === 'pause') togglePause(); return; } [menu.page, menu.sel] = menu.stack.pop(); renderMenu(); }
+function startRide(){ closeMenu(); resetGame(); }
+function toMainMenu(){ S.paused = false; S.state = 'menu'; S.run = null; S.lift = null; myChair.visible = false; $('liftRide').style.display = 'none'; camInit = false; openMenu('main'); $('loading').classList.add('done'); }
+function menuKey(code){ const it = menu.items[menu.sel];
+  if (['DU','ArrowUp','KeyW'].includes(code)){ do { menu.sel = (menu.sel - 1 + menu.items.length) % menu.items.length; } while (menu.items[menu.sel].disabled && menu.items.some(i => !i.disabled) && false); renderMenu(); }
+  else if (['DD','ArrowDown','KeyS'].includes(code)){ menu.sel = (menu.sel + 1) % menu.items.length; renderMenu(); }
+  else if (['DL','ArrowLeft','KeyA','DR','ArrowRight','KeyD'].includes(code)){ if (it.adj){ it.adj(['DL','ArrowLeft','KeyA'].includes(code) ? -1 : 1); renderMenu(); } }
+  else if (['A','Enter','Space'].includes(code)){ if (it.disabled){ toast('🔒 Locked — finish that trail once (ride there or take a lift) to unlock it'); return; } it.act && it.act(); if (menu.open) renderMenu(); }
+  else if (['B','Escape','Backspace'].includes(code)) back();
+  else if ((code === 'Start' || code === 'KeyP') && menu.page === 'pause') togglePause(); }
+function menuFrame(dt, inp){ // analog stick navigation with repeat
+  const y = inp.lsy || 0; menu.repeatT -= dt;
+  if (Math.abs(y) > 0.6 && menu.repeatT <= 0){ menuKey(y > 0 ? 'DD' : 'DU'); menu.repeatT = 0.22; } else if (Math.abs(y) < 0.3) menu.repeatT = 0;
+  const x = inp.lsx || 0; if (Math.abs(x) > 0.7 && (menu.xT = (menu.xT || 0) - dt) <= 0){ menuKey(x > 0 ? 'DR' : 'DL'); menu.xT = 0.3; } else if (Math.abs(x) < 0.3) menu.xT = 0; }
+// slow camera flyover of the mountain behind the main menu
+function flyover(dt){ menu.fly += dt*0.035; const a = menu.fly, cx = 120, cz = -150, r = 760;
+  const x = cx + Math.cos(a)*r, z = cz + Math.sin(a)*r, y = Math.max(terrainH(x, z), terrainH(cx + Math.cos(a+0.05)*r, cz + Math.sin(a+0.05)*r)) + 110;
+  camera.position.set(x, y, z); camera.up.set(0,1,0); camera.lookAt(cx + Math.cos(a+0.9)*260, 170, cz + Math.sin(a+0.9)*260);
+  sun.position.set(x+30, y+60, z+20); sun.target.position.set(x - Math.cos(a)*60, y - 60, z - Math.sin(a)*60); return [x, z]; }
 // ---------- bike shop ----------
 let shopOpen = false, shopSel = 0, shopWasPaused = false;
 function applyBike(){ frameMat.color.set(BIKE.color); leanG.scale.set(...BIKE.scale); }
@@ -884,7 +1074,7 @@ const SHOP_POS = {x:SHOP.x, z:SHOP.z, yaw:SHOP.yaw};   // placed in world.js >= 
       for (const sd of [-1,1]){ const x = P[i][0] + nx*CW*sd, z = P[i][1] + nz*CW*sd; v.push(x, terrainH(x,z) + 0.07, z); const cc = (i%7<3) ? c1 : c2; col.push(cc.r, cc.g, cc.b); } }
     for (let i=0;i<P.length-1;i++){ const a = b0+i*2; idx.push(a, a+2, a+1, a+1, a+2, a+3); } }
   const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(v,3)); g.setAttribute('color', new THREE.Float32BufferAttribute(col,3)); g.setIndex(idx); g.computeVertexNormals();
-  const m = new THREE.Mesh(g, new THREE.MeshLambertMaterial({vertexColors:true, side:THREE.DoubleSide, polygonOffset:true, polygonOffsetFactor:-2, polygonOffsetUnits:-2})); m.receiveShadow = true; scene.add(m); }
+  const m = new THREE.Mesh(g, triplanar(new THREE.MeshStandardMaterial({vertexColors:true, roughness:0.95, side:THREE.DoubleSide, polygonOffset:true, polygonOffsetFactor:-2, polygonOffsetUnits:-2}), TEX.gravel, 0.5, 0.9)); /* gravel */ m.receiveShadow = true; scene.add(m); }
 // ---------- chairlifts: towers, cable, moving chairs; ride from the bottom station to the top ----------
 const liftObjs = [];
 { const steel = new THREE.MeshLambertMaterial({color:0x6b7078}), wood = new THREE.MeshLambertMaterial({color:0x7a5534}), roofM = new THREE.MeshLambertMaterial({color:0x2f3b4a});
@@ -941,7 +1131,7 @@ function shopProximity(dt){ S.shopCool = Math.max(0, (S.shopCool||0) - dt);
   const dx = S.x - (SHOP_POS.x - Math.sin(SHOP_POS.yaw)*8), dz = S.z - (SHOP_POS.z - Math.cos(SHOP_POS.yaw)*8);   // porch steps
   if (!shopOpen && S.shopCool <= 0 && !S.air && dx*dx + dz*dz < 9) openShop(); }
 S.score = LS.get('trailDescent.dollahs', 0); S.savedScore = S.score; applyBike();
-showOverlay('TRAIL DESCENT', menuMsg());
+openMenu('main'); setTimeout(() => $('loading').classList.add('done'), 300);
 teleport(spotI, true);
 window.__game = S; window.__readInput = readInput; window.__groundH = groundH; window.__lift = i => startLift(i); window.__world = { LIFTS, connectors, trails, features, spots, PARK, SHOP, terrainH, featH, isDirt, nearTrails, base, inPark };
 window.__BR = BR; window.__teleport = i => teleport(i); window.__unlocked = unlocked; window.__isOpen = isOpen; window.__chunks = () => chunks.size; window.__renderer = renderer;

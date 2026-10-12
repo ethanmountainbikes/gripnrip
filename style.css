@@ -45,3 +45,44 @@ canvas{display:block}
 .wpMarker span{color:#fff}
 .wpMarker.edge{opacity:.85;background:rgba(0,30,40,.55);padding:3px 7px;border-radius:10px;border:1px solid #3ef0ff}
 #bigmapWrap.hidden{display:none}
+
+/* ===== SICK RIPZ: rugged MTB theme (dirt orange, forest green, cream; topo lines + dirt grain) ===== */
+:root{--dirt:#d9772b;--dirt2:#a8541c;--forest:#2f5d3a;--forest2:#1f3d27;--cream:#f3e9d2;--ink:#17140f;--panel:rgba(26,22,15,.84);
+  --grain:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .55 0 0 0 0 .4 0 0 0 0 .25 0 0 0 .22 0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E")}
+html,body{font-family:"Barlow Condensed","Arial Narrow",Arial,sans-serif;color:var(--cream)}
+.lbl,#timer,#center,#speedVal,#airVal,#scoreVal,#shop h2,#help h3,#menu h2,#overlayBox h1{font-family:"Bebas Neue","Barlow Condensed",Impact,sans-serif;font-weight:400;letter-spacing:1.5px}
+.panelish,#lives,#help,#shop,#toast,#liftRide,#menuPanel{background:var(--grain),var(--panel);border:2px solid rgba(217,119,43,.85);border-radius:4px;box-shadow:0 4px 18px rgba(0,0,0,.45)}
+#lives{border-left:6px solid var(--dirt)}#livesVal{color:#e8553e}
+#airVal,#scoreVal{font-size:48px}#speedVal{font-size:58px;top:52px}.unit{font-family:"Bebas Neue";letter-spacing:2px}
+.bar{stroke:var(--dirt)}.track{stroke:rgba(23,20,15,.55)}
+#trick{color:#ffcf6b;font-family:"Bebas Neue";font-size:26px;letter-spacing:1px}
+#center{color:var(--cream);text-shadow:0 3px 0 var(--dirt2),0 6px 14px rgba(0,0,0,.6);font-size:64px}
+#progress{background:rgba(23,20,15,.6);border:1px solid rgba(243,233,210,.4);height:10px}
+#toast{border-radius:4px;border-left:6px solid var(--forest);font-size:17px;font-weight:600}
+#minimap{border:3px solid var(--cream);outline:2px solid var(--dirt);border-radius:3px}
+#help{border-left:6px solid var(--forest)}#help th{color:var(--dirt);font-family:"Bebas Neue";letter-spacing:1px;font-weight:400;font-size:16px}
+#shop{border-top:6px solid var(--dirt)}#shop h2{color:var(--dirt);font-size:36px}.bike.sel{outline:2px solid var(--dirt);background:rgba(217,119,43,.15)}.sbar i{background:var(--dirt)}#shopBal{color:#9fd18b;font-family:"Bebas Neue";font-size:26px}
+#liftLegend{font-family:"Barlow Condensed";font-size:13px}
+#loading{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:var(--grain),url(topo.svg),#1f3d27;font:400 46px "Bebas Neue",Impact,sans-serif;letter-spacing:4px;color:var(--cream);z-index:60;transition:opacity .6s}
+#loading.done{opacity:0;pointer-events:none}
+#menu{position:fixed;inset:0;z-index:15;display:flex;flex-direction:column;justify-content:center;padding-left:7vw;background:linear-gradient(90deg,rgba(18,24,16,.82) 0%,rgba(18,24,16,.55) 38%,rgba(0,0,0,0) 70%)}
+#menu.hidden{display:none}
+#menu::before{content:"";position:absolute;inset:0;background:url(topo.svg);opacity:.18;pointer-events:none;mask-image:linear-gradient(90deg,#000 0%,transparent 60%);-webkit-mask-image:linear-gradient(90deg,#000 0%,transparent 60%)}
+#menu.pause{background:rgba(12,14,10,.55)}
+#menuLogo{position:relative;margin-bottom:18px}
+.logoMark svg{width:130px;height:65px;display:block;margin-bottom:-6px;filter:drop-shadow(0 3px 0 rgba(0,0,0,.5))}
+.logo{margin:0;font:400 128px/0.86 "Bebas Neue",Impact,sans-serif;letter-spacing:6px;transform:skewX(-8deg);color:var(--cream);text-shadow:5px 5px 0 var(--dirt2),9px 9px 0 rgba(0,0,0,.45)}
+.logo span:last-child{color:var(--dirt);margin-left:18px;text-shadow:5px 5px 0 var(--forest2),9px 9px 0 rgba(0,0,0,.45)}
+.tagline{font:600 20px "Barlow Condensed";letter-spacing:5px;color:#cbbf9f;margin-top:10px}
+#menuPanel{position:relative;width:min(470px,86vw);padding:14px 16px;border-top:6px solid var(--dirt)}
+#menuPanel h2{margin:0 0 8px;color:var(--dirt);font-size:40px}
+.mItems{list-style:none;margin:0;padding:0}.mItems.scroll{max-height:58vh;overflow:auto}
+.mItems li{position:relative;padding:8px 14px 8px 18px;margin:3px 0;cursor:pointer;border-left:4px solid transparent;font:400 30px/1 "Bebas Neue",Impact,sans-serif;letter-spacing:1.5px;display:flex;flex-wrap:wrap;align-items:baseline;gap:10px}
+.mItems li small{flex-basis:100%;font:600 15px "Barlow Condensed";letter-spacing:.5px;color:#bfb497}
+.mItems li .mVal{margin-left:auto;color:#9fd18b;font-size:24px}
+.mItems li.sel{background:linear-gradient(90deg,rgba(217,119,43,.9),rgba(217,119,43,.25));border-left-color:var(--cream);color:#fff}
+.mItems li.sel small{color:#fbe8cc}.mItems li.dis{opacity:.5}
+.dIcon{font-size:20px;text-shadow:0 0 2px #000}
+.credits{font-size:18px;line-height:1.35;max-height:56vh;overflow:auto}.credits small{color:#a99f86}
+#menuHint{margin-top:12px;font:600 16px "Barlow Condensed";letter-spacing:1px;color:#d8ccb0;text-shadow:0 1px 2px #000}
+body.inmenu #hud,body.inmenu #help,body.inmenu #wpMarkers{display:none}

@@ -1,4 +1,6 @@
-# Trail Descent
+# SICK RIPZ
+
+*(repo: trail-descent)*
 
 A low-poly open-world mountain-bike game in the browser, inspired by Descenders / Mavrix. Built with Three.js (r160 from a CDN via an import map). It's plain static files with no build step.
 
@@ -119,3 +121,18 @@ Run it locally with `python3 -m http.server`, then open http://localhost:8000.
   - ↘ Tailwhip: feet off, the frame spins around the head tube while the bars and body stay put
   - RS click (C+U): Barspin: the bars, fork and front wheel spin a full turn; release to catch them
   - Whip, table and scrub come from the right stick (tweak), flips tuck the rider in, and in a 360 the rider looks over their shoulder.
+
+## Realism pass, main menu & quality
+- All textures (dirt, gravel, grass, rock, snow, bark, wood planks, needles + normal maps) are **generated procedurally** at load (`textures.js`), no third-party images.
+- Terrain splatting by slope/height, conifers with bark and layered needles, instanced rocks/bushes, wind-swayed instanced grass, ACES tone mapping, sky with sun disc, atmospheric fog.
+- Quality Low / Med / High (High adds SSAO + bloom) under Settings.
+- Main menu with 3D flyover: Ride, Trails, Bike Shop, Settings, Credits; works with controller (D-pad/stick + A/B) and keyboard/mouse. Pause → Main Menu.
+
+## Music
+NCS was considered, but its FAQ says: *"Q. Can I use NCS music in my game? … Please get in touch via our commercial licensing form"*, so CC0 tracks from OpenGameArt are used instead:
+- "Action Track" and "Simple Action Beat": LushoGames (CC0)
+- "Heat Battle (BPM180)" and "8bit Action Title (BPM150)": MintoDog (CC0)
+- "Rock Theme 3": Umplix (CC0)
+- "Fast Song": annandistance (CC0)
+
+Tracks play shuffled once you first press a key or button. Settings has music on/off and volume, and Skip Song is in the pause menu.
