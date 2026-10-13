@@ -103,3 +103,12 @@ body.inshop #shop{left:auto;right:3vw;transform:translateY(-50%);width:min(500px
 #menu.hidden #menuPanel{translate:-18px 0}#menuPanel{transition:translate .25s ease}
 #overlay.hidden #overlayBox{scale:.96}#overlayBox{transition:scale .25s ease}
 #trick,#center,#flash,#toast{transition:opacity .25s ease}
+
+/* multiplayer */
+#mpAsk{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center}
+#mpAsk .mpBox{background:#2a2b24;border:2px solid #d9772b;border-radius:8px;padding:18px 22px;text-align:center;color:#f0e8d8;font-family:'Barlow Condensed',sans-serif}
+#mpAsk h3{margin:0 0 10px;font-family:'Bebas Neue',sans-serif;font-size:28px;letter-spacing:2px}
+#mpAsk input{font:700 34px 'Barlow Condensed',monospace;letter-spacing:8px;text-transform:uppercase;width:220px;text-align:center;padding:6px;border-radius:6px;border:2px solid #777;background:#111;color:#fff;margin-bottom:12px}
+#mpAsk button{font:700 18px 'Barlow Condensed',sans-serif;padding:6px 18px;border-radius:5px;border:0;background:#d9772b;color:#fff;cursor:pointer}
+#mpAsk #mpNo{background:#555}
+.mpNote{font-size:14px;opacity:.8;margin:0 0 8px}

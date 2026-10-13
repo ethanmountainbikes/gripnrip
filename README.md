@@ -203,3 +203,9 @@ Settings → **Graphics**: Low / Medium / High / Max. The setting is saved, and 
 - **Performance (laptop-friendly Max):** an adaptive quality governor measures real frame time each second and steps the render scale (1.5x down to 0.65x of CSS pixels, capped by the display) and then god rays, motion blur, bloom and shadow refresh rate down when under 45 FPS, and back up slowly when there is headroom. Max starts at 1.25x (not the full Retina 2x). GTAO/SSAO are off (they re-render the whole scene); god rays, speed blur, tone mapping, vignette and grade are one merged full-screen pass; the shadow map is 2048 with a tight frustum around the rider; no MSAA back buffer on Medium+ (SMAA instead).
 - Settings → **FPS counter** shows FPS, frame time, the worst frame, and the current render scale.
 - Physics and gameplay are identical on every setting.
+
+## Multiplayer (private rooms)
+Main menu (or pause menu) → **Multiplayer** → *Create room* gives a 6-character code; friends choose *Join with code* and type it.
+Up to 8 riders see each other ride (smoothed), with their bikes/skins and preset name tags. Press **1–6** while riding for emotes.
+There is no chat: names and emotes are presets, rooms are private by code, the host can lock the room or remove riders, and
+nothing is stored. If the server can't be reached the game just stays single-player. The server lives in `server/` (see its README).

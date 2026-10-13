@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { buildBikeRider } from './rider.js';
+import { initNet, NAME_A, NAME_B, EMOTES, cleanCode } from './net.js';
 import { makeTextures, triplanar } from './textures.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -57,7 +58,7 @@ Object.assign(sun.shadow.camera, {left:-40,right:40,top:40,bottom:-40,near:1,far
 sun.shadow.bias = -0.0005; sun.shadow.normalBias = 0.06;   // no shadow acne / striping on the dirt
 scene.add(sun, sun.target);
 // post (High): SSAO + subtle bloom; Low/Med render directly
-let composer = null, GFX = null;   // GFX: graphics upgrade (Medium/High/Max), loaded on demand from gfx.js
+let composer = null, GFX = null, NET = null;   // GFX: graphics upgrade (Medium/High/Max), loaded on demand from gfx.js
 function setupPost(){ composer = null; if (!Q.post || GFX) return;
   composer = new EffectComposer(renderer); composer.addPass(new RenderPass(scene, camera));
   const ao = new SSAOPass(scene, camera, innerWidth, innerHeight); ao.kernelRadius = 0.6; ao.minDistance = 0.0004; ao.maxDistance = 0.02; composer.addPass(ao);
@@ -490,6 +491,7 @@ function crash(reason){ S.lastCrash = reason; sfxCrash();
 function showOverlay(title,msg){ $('overlay').classList.remove('hidden'); $('overlayBox').querySelector('h1').textContent=title; $('overlayMsg').innerHTML=msg; }
 function togglePause(){ if (S.state!=='riding' || shopOpen || bigMap.open) return; S.paused=!S.paused; if (S.paused) openMenu('pause'); else closeMenu(); }
 function onPress(code){
+  if (/^Digit[1-6]$/.test(code) && NET && NET.st.status === 'in' && !menu.open){ NET.emote(+code.slice(5) - 1); return; }
   if (S.lift){ if (code==='A'||code==='Enter'||code==='Space') S.lift.d = 1e9; return; }   // skip the chairlift ride
   if (shopOpen){ shopKey(code); return; }
   if (bigMap.open){ mapKey(code); return; }
@@ -862,6 +864,7 @@ function frame(){
   mountains.position.set(camera.position.x, 0, camera.position.z);
   skyDome.position.copy(camera.position);
   if (!flyF){ sun.position.set(S.x+30, S.y+60, S.z+20); sun.target.position.set(S.x, S.y, S.z-10); }
+  if (NET) NET.update(dt);
   if (GFX) GFX.render(dt); else if (composer) composer.render(); else renderer.render(scene, camera);
   fpsMeter(dt);
   // HUD
@@ -1051,6 +1054,7 @@ const PAGES = {
     {label:'World', value:RAMP ? 'RAMPAGE' : 'MOUNTAIN', sub:RAMP ? 'Utah desert freeride venue (Red Bull Rampage style)' : 'Alpine bike park', adj:() => switchWorld(), act:() => switchWorld()},
     {label:'Trails', sub:`${trails.filter((_, i) => isOpen(i)).length}/${trails.length} unlocked — drop in at a trail start`, act:() => go('trails')},
     {label:'Bike Shop', sub:`$${S.score.toLocaleString()} DOLLAHS`, act:() => openShop()},
+    {label:'Multiplayer', value:NET && NET.st.status === 'in' ? 'ROOM ' + NET.st.code : undefined, sub:'Ride with friends in a private room (room code)', act:() => go('multi')},
     {label:'Settings', sub:'Graphics, quality, music, controls, invert', act:() => go('settings')},
     {label:'Credits', act:() => go('credits')} ]}),
   trails: () => ({title:RAMP ? 'RAMPAGE LINES' : 'TRAILS', items:[...trailItems(), ...(RAMP ? [] : [{label:'Dirt Jump Park', sub:'Pro line · always open', act:() => { spotI = spots.findIndex(s => s.name === 'Dirt Jump Park'); startRide(); }}]), {label:'‹ Back', act:back}]}),
@@ -1066,6 +1070,19 @@ const PAGES = {
     {label:'Invert whip / tweak (right stick ↔)', value:ON(SETTINGS.invertX), adj:() => { SETTINGS.invertX = !SETTINGS.invertX; saveSettings(); }, act:() => { SETTINGS.invertX = !SETTINGS.invertX; saveSettings(); }},
     {label:'Controls / help', value:$('help').classList.contains('hidden') ? 'SHOW' : 'HIDE', act:() => $('help').classList.toggle('hidden')},
     {label:'‹ Back', act:back} ]}),
+  multi: () => { const st = NET ? NET.st : {status:'off'}, inRoom = st.status === 'in', host = inRoom && st.id === st.host, nm = mpName();
+    const items = [];
+    if (!inRoom){
+      items.push({label:'Create room', sub:st.status === 'connecting' ? 'Connecting…' : 'Get a private 6-character code to share with friends', act:() => { NET.create().then(() => renderMenu()); renderMenu(); }});
+      items.push({label:'Join with code', sub:'Type the code your friend gives you', act:() => askCode()}); }
+    else {
+      items.push({label:'Room code', value:st.code, sub:`${st.peers.size + 1}/8 riders · share this code (in person / family chat). Press 1–6 while riding for emotes.`, act:() => {}});
+      if (host) items.push({label:'Lock room', value:ON(st.locked), sub:'When locked, nobody new can join', adj:() => NET.lock(!st.locked), act:() => NET.lock(!st.locked)});
+      if (host) for (const p of st.peers.values()) items.push({label:`Remove ${p.label}`, sub:'Kick this rider from the room', act:() => NET.kick(p.id)});
+      items.push({label:'Leave room', act:() => { NET.leave(); renderMenu(); }}); }
+    items.push({label:'Your rider name', value:`${NAME_A[nm[0]]} ${NAME_B[nm[1]]}`.toUpperCase(), sub:'Preset names only · ← → to change' + (inRoom ? ' (applies next time you join)' : ''), adj:d => { const k = (nm[0]*NAME_B.length + nm[1] + d*7 + NAME_A.length*NAME_B.length) % (NAME_A.length*NAME_B.length); LS.set('trailDescent.mpName', [Math.floor(k/NAME_B.length), k % NAME_B.length]); }, act:() => { const n = [Math.floor(Math.random()*NAME_A.length), Math.floor(Math.random()*NAME_B.length)]; LS.set('trailDescent.mpName', n); }});
+    items.push({label:'‹ Back', act:back});
+    return {title:'MULTIPLAYER', html:'<p class="mpNote">Private rooms only — no chat, preset names and emotes. Your rider position and look are shared with the room while you are in it; nothing is stored.</p>', items}; },
   credits: () => ({title:'CREDITS', html:`<div class="credits"><p><b>Grip 'N Rip</b> — an open-world mountain bike game in the browser.</p>
     <p><b>Game, code, world, rider and bike models, textures:</b> made procedurally for this project (Three.js r160).</p>
     <p><b>Music (CC0, from OpenGameArt.org):</b><br>${TRACKS.map(t => `${t.title} — ${t.artist} <small>(${t.src})</small>`).join('<br>')}</p>
@@ -1077,6 +1094,7 @@ const PAGES = {
     {label:'Resume', act:() => togglePause()},
     {label:'Map', sub:'View / M', act:() => { closeMenu(); openMap(); bigMap.wasPaused = false; }},
     {label:'Bike Shop', act:() => openShop()},
+    {label:'Multiplayer', value:NET && NET.st.status === 'in' ? 'ROOM ' + NET.st.code : undefined, act:() => go('multi')},
     {label:'Skip song', sub: music.started && SETTINGS.musicOn && music.i >= 0 ? `Now: ${TRACKS[music.order[music.i]].title} — ${TRACKS[music.order[music.i]].artist}` : 'Music is off or not started', act:() => { if (!music.started){ music.started = true; } nextSong(); }},
     {label:'Settings', act:() => go('settings')},
     {label:'Controls / help', act:() => $('help').classList.toggle('hidden')},
@@ -1161,7 +1179,11 @@ let chromeEnv = null;
 function setSkin(mat, it, fallback){ const u = mat.userData.skin;
   if (u){ u.uMode.value = it.mode || 0; u.uA.value.set(it.a ?? fallback); if (it.b !== undefined) u.uB.value.set(it.b); if (it.c !== undefined) u.uC.value.set(it.c); }
   mat.color.set(it.a ?? fallback); }
-function applySkins(over){ const M = BR.M, g = k => (over && over[0] === k) ? over[1] : equippedSkin(BIKE, k);
+function applySkins(over){ skinRider(BR, BIKE, k => (over && over[0] === k) ? over[1] : equippedSkin(BIKE, k)); }
+// skin any bike+rider (yours, or a remote rider in multiplayer: sk = [bike, paint, jersey, pants, helmet, goggles] indices)
+function skinRemote(BRx, leanX, sk){ const bk = BIKES[sk[0]] || BIKES[0]; leanX.scale.set(...bk.scale); skinRider(BRx, bk, k => SKINS[k][sk[1 + SKIN_CATS.indexOf(k)]] || SKINS[k][0]); }
+const mySkin = () => [Math.max(0, BIKES.indexOf(BIKE)), ...SKIN_CATS.map(c => Math.max(0, SKINS[c].indexOf(equippedSkin(BIKE, c))))].map(v => Math.min(31, v));
+function skinRider(BR, BIKE, g){ const M = BR.M;
   const p = g('paint'); setSkin(M.frame, p, BIKE.color); M.frame.roughness = p.r ?? 0.4; M.frame.metalness = p.m ?? 0.3;
   if (p.env && !chromeEnv){ const pm = new THREE.PMREMGenerator(renderer); chromeEnv = pm.fromScene(new RoomEnvironment(), 0.04).texture; }
   M.frame.envMap = p.env ? chromeEnv : null; M.frame.needsUpdate = true;
@@ -1172,7 +1194,7 @@ let shopOpen = false, shopSel = 0, shopWasPaused = false, shopTab = 0, shopT = 0
 function applyBike(){ leanG.scale.set(...BIKE.scale); applySkins(); }
 function shopItems(){ const t = SHOP_TABS[shopTab]; return t === 'bikes' ? BIKES : SKINS[t]; }
 function openShop(){ shopOpen = true; shopWasPaused = S.paused; if (S.state==='riding') S.paused = true; shopTab = 0; shopSel = BIKES.indexOf(BIKE); shopT = 0; renderShop(); $('shop').classList.remove('hidden'); document.body.classList.add('inshop'); }
-function closeShop(){ shopOpen = false; applySkins(); $('shop').classList.add('hidden'); document.body.classList.remove('inshop'); if (S.state==='riding'){ S.paused = shopWasPaused; if (!S.paused) $('overlay').classList.add('hidden'); } S.shopCool = 3; }
+function closeShop(){ shopOpen = false; applySkins(); if (NET) NET.sendSkin(); $('shop').classList.add('hidden'); document.body.classList.remove('inshop'); if (S.state==='riding'){ S.paused = shopWasPaused; if (!S.paused) $('overlay').classList.add('hidden'); } S.shopCool = 3; }
 function bar(v){ const p = Math.round(50 + (v-1)*250); return `<span class="sbar"><i style="width:${Math.max(8,Math.min(100,p))}%"></i></span>`; }
 const hex = c => '#' + C(c).getHexString();
 function swatch(it, cat){ if (cat === 'paint' && it.id === 'stock') return hex(BIKE.color);
@@ -1384,6 +1406,18 @@ function shopProximity(dt){ S.shopCool = Math.max(0, (S.shopCool||0) - dt);
   const dx = S.x - (SHOP_POS.x - Math.sin(SHOP_POS.yaw)*8), dz = S.z - (SHOP_POS.z - Math.cos(SHOP_POS.yaw)*8);   // porch steps
   if (!shopOpen && S.shopCool <= 0 && !S.air && dx*dx + dz*dz < 9) openShop(); }
 S.score = LS.get('trailDescent.dollahs', 0); S.savedScore = S.score; applyBike();
+// ---------- multiplayer (net.js): private rooms, remote riders; stays solo if the server can't be reached ----------
+function mpName(){ let n = LS.get('trailDescent.mpName', null); if (!Array.isArray(n) || !(n[0] >= 0 && n[0] < NAME_A.length && n[1] >= 0 && n[1] < NAME_B.length)){ n = [Math.floor(Math.random()*NAME_A.length), Math.floor(Math.random()*NAME_B.length)]; LS.set('trailDescent.mpName', n); } return n; }
+function askCode(){ const ov = document.createElement('div'); ov.id = 'mpAsk';
+  ov.innerHTML = `<div class="mpBox"><h3>JOIN A ROOM</h3><input id="mpCode" maxlength="6" autocomplete="off" spellcheck="false" placeholder="ABC123"><div><button id="mpGo">Join</button> <button id="mpNo">Cancel</button></div></div>`;
+  document.body.appendChild(ov); const inp = ov.querySelector('#mpCode'); inp.focus();
+  const done = go => { const c = cleanCode(inp.value); ov.remove(); if (go) { NET.join(c); setTimeout(renderMenu, 1200); } };
+  inp.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') done(true); if (e.key === 'Escape') done(false); });
+  inp.addEventListener('keyup', e => e.stopPropagation()); inp.addEventListener('input', () => { inp.value = cleanCode(inp.value); });
+  ov.querySelector('#mpGo').onclick = () => done(true); ov.querySelector('#mpNo').onclick = () => done(false); }
+try { NET = initNet({THREE, scene, camera, S, bike, buildBikeRider, skinTo:skinRemote, mySkin, myName:mpName, worldIdx:() => RAMP ? 1 : 0, toast, trickKeys:Object.keys(BR.TRICK_OF), drive:() => DRV,
+  onWorld:(w, code) => { LS.set('trailDescent.world', w ? 'rampage' : 'mountain'); toast(`Room is on ${w ? 'RAMPAGE' : 'THE MOUNTAIN'} — switching world…`); setTimeout(() => location.reload(), 900); } });
+  NET.on(() => { if (menu.open && menu.page === 'multi') renderMenu(); }); window.__net = NET; } catch (e) { console.warn('multiplayer unavailable', e); NET = null; }
 openMenu('main'); setTimeout(() => $('loading').classList.add('done'), 300);
 teleport(spotI, true);
 window.__features = features; window.__respawn = () => respawnSafe(); window.__game = S; window.__readInput = readInput; window.__groundH = groundH; window.__lift = i => startLift(i); window.__world = { LIFTS, connectors, trails, features, spots, PARK, SHOP, terrainH, featH, isDirt, nearTrails, base, inPark };
