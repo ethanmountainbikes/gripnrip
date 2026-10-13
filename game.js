@@ -7,7 +7,7 @@ import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featBase, featAxis, BOULDERS, boulderH, bigBouldersNear, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL, LIFTS, connectors, CW, SHOP, WORLD, RAMPAGE } from './world.js';
+import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featBase, featAxis, BOULDERS, boulderH, bigBouldersNear, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL, LIFTS, connectors, CW, SHOP, WORLD, RAMPAGE, trailDist } from './world.js';
 import { initSfx, setSfxVolume, updateSfx, sfxLand, sfxCrash, sfxLiftStart } from './sfx.js';
 const RAMP = WORLD === 'rampage';   // Red Bull Rampage-inspired desert world
 
@@ -1032,7 +1032,7 @@ function trailItems(){ return trails.map((tr, i) => { const d = DIFF[tr.diff], o
   return {label:`<span class="dIcon" style="color:${d.color === '#111' ? '#e8e2d0' : d.color}">${d.icon}</span> ${open ? '' : '🔒 '}${tr.name}`, sub:`${d.label} · ${tr.type}${open ? '' : ' · finish it once to unlock'}`, disabled:!open, act:() => { spotI = i; startRide(); }}; }); }
 const PAGES = {
   main: () => ({title:null, items:[
-    {label:'Ride', sub:RAMP ? 'Free roam from the Valley Overlook' : 'Free roam from the Valley Meadow', act:() => { spotI = spots.findIndex(s => s.name.startsWith(RAMP ? 'Valley Overlook' : 'Valley')); startRide(); }},
+    {label:'Ride', sub:RAMP ? 'Free roam from the Valley Overlook' : 'Free roam from the base plaza', act:() => { spotI = spots.findIndex(s => s.name.startsWith(RAMP ? 'Valley Overlook' : 'Valley Base')); startRide(); }},
     {label:'World', value:RAMP ? 'RAMPAGE' : 'MOUNTAIN', sub:RAMP ? 'Utah desert freeride venue (Red Bull Rampage style)' : 'Alpine bike park', adj:() => switchWorld(), act:() => switchWorld()},
     {label:'Trails', sub:`${trails.filter((_, i) => isOpen(i)).length}/${trails.length} unlocked — drop in at a trail start`, act:() => go('trails')},
     {label:'Bike Shop', sub:`$${S.score.toLocaleString()} DOLLAHS`, act:() => openShop()},
@@ -1296,6 +1296,44 @@ const liftObjs = [];
     const chairs = new THREE.InstancedMesh(chairG, new THREE.MeshLambertMaterial({color:new THREE.Color(L.color)}), nC); scene.add(chairs);
     const hangers = new THREE.InstancedMesh(new THREE.BoxGeometry(0.08,2.2,0.08), steel, nC); scene.add(hangers);
     liftObjs.push({L, cableY, chairs, hangers, nC, off, sx, sz, phase:0}); } }
+// ---------- wayfinding signs at every lift top: a signpost with one arrow blade per outgoing trail (name + difficulty symbol) ----------
+// Blades are two single-sided faces back to back (arrow drawn for each side, so text is never mirrored); the post is vertical and
+// sunk into the ground, placed beside the unload area where every blade is seen at an angle and clear of every path and trail.
+window.__signs = [];
+{ const postM = new THREE.MeshLambertMaterial({color:0x5a3d22});
+  const bladeTex = (tr, flip) => { const cv = document.createElement('canvas'); cv.width = 512; cv.height = 96; const c = cv.getContext('2d'), d = DIFF[tr.diff];
+    c.save(); if (flip){ c.translate(512, 0); c.scale(-1, 1); }
+    c.fillStyle = '#f4ead2'; c.beginPath(); c.moveTo(0,4); c.lineTo(440,4); c.lineTo(508,48); c.lineTo(440,92); c.lineTo(0,92); c.closePath(); c.fill();
+    c.lineWidth = 6; c.strokeStyle = '#3b2a17'; c.stroke(); c.restore();
+    const x0 = flip ? 96 : 14;   // text block sits away from the arrow tip on both faces
+    if (tr.diff === 'green'){ c.fillStyle = d.color; c.beginPath(); c.arc(x0+30, 48, 26, 0, 7); c.fill(); }
+    else if (tr.diff === 'blue'){ c.fillStyle = d.color; c.fillRect(x0+6, 22, 52, 52); }
+    else { c.fillStyle = '#111'; const dia = (cx) => { c.beginPath(); c.moveTo(cx, 18); c.lineTo(cx+22, 48); c.lineTo(cx, 78); c.lineTo(cx-22, 48); c.closePath(); c.fill(); };
+      if (tr.diff === 'dblack'){ dia(x0+18); dia(x0+48); } else dia(x0+30); }
+    c.fillStyle = '#1d150c'; c.font = 'bold 46px "Barlow Condensed", Arial, sans-serif'; c.textBaseline = 'middle'; c.fillText(tr.name.toUpperCase(), x0 + (tr.diff === 'dblack' ? 80 : 70), 50, 400 - (tr.diff === 'dblack' ? 10 : 0));
+    const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t; };
+  for (const L of LIFTS){ const ux = L.tx + L.dx*7, uz = L.tz + L.dz*7;
+    const outs = L.serves.map(n => trails.find(t => t.name === n)).filter(Boolean).map(tr => {
+      const c = connectors.find(c => Math.hypot(c.pts[0][0]-L.tx, c.pts[0][1]-L.tz) < 3 && Math.hypot(c.pts[c.pts.length-1][0]-tr.pts[0][0], c.pts[c.pts.length-1][1]-tr.pts[0][1]) < 3);
+      const q = c ? c.pts[Math.min(c.pts.length-1, 12)] : tr.pts[0]; return {tr, q}; });
+    let best = null;
+    for (let r = 6; r <= 12; r += 1.5) for (let k = 0; k < 32; k++){ const a = k/32*Math.PI*2, x = ux + Math.cos(a)*r, z = uz + Math.sin(a)*r;
+      const clear = Math.min(...connectors.map(c => c.pts.reduce((m, p) => Math.min(m, Math.hypot(p[0]-x, p[1]-z)), 1e9))), tclear = trailDist(x, z);
+      if (clear < CW + 2.5 || tclear < W + 2.5 || featH(x, z) > 0.01) continue;
+      const vx = x - ux, vz = z - uz, vl = Math.hypot(vx, vz);
+      let worst = 1; for (const o of outs){ const bx = o.q[0]-x, bz = o.q[1]-z, bl = Math.hypot(bx, bz) || 1; worst = Math.min(worst, Math.abs((bx*vz - bz*vx)/(bl*vl))); }   // |sin| between blade and line of sight
+      const sc = worst*10 - r*0.15 + Math.min(clear, 8)*0.2; if (!best || sc > best.sc) best = {x, z, sc, worst, clear}; }
+    if (!best) best = {x: ux + 8, z: uz, worst: 0, clear: 0};
+    const g0 = terrainH(best.x, best.z), H = 2.0 + 0.42*outs.length, post = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, H + 0.4, 8), postM);
+    post.position.set(best.x, g0 + H/2 - 0.2, best.z); post.castShadow = true; scene.add(post);
+    const cap = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.22, 8), postM); cap.position.set(best.x, g0 + H + 0.1, best.z); scene.add(cap);
+    const rec = {lift: L.name, trailClear: +trailDist(best.x, best.z).toFixed(1), x: best.x, z: best.z, ground: g0, postBottom: g0 - 0.4, postTop: g0 + H, vertical: true, unload: [ux, uz], minSin: +best.worst.toFixed(2), pathClear: +best.clear.toFixed(1), blades: []};
+    outs.forEach((o, i) => { const bx = o.q[0]-best.x, bz = o.q[1]-best.z, th = Math.atan2(-bz, bx), y = g0 + H - 0.3 - i*0.42;
+      const grp = new THREE.Group(); grp.position.set(best.x, y, best.z); grp.rotation.y = th;
+      for (const side of [0, 1]){ const m = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 0.32), new THREE.MeshBasicMaterial({map: bladeTex(o.tr, side === 1)}));
+        m.position.set(0.95, 0, side ? -0.012 : 0.012); if (side) m.rotation.y = Math.PI; grp.add(m); }
+      scene.add(grp); rec.blades.push({trail: o.tr.name, diff: o.tr.diff, dir: [+(bx/Math.hypot(bx,bz)).toFixed(3), +(bz/Math.hypot(bx,bz)).toFixed(3)], y: +y.toFixed(2), rotX: grp.rotation.x, rotZ: grp.rotation.z}); });
+    window.__signs.push(rec); } }
 const myChair = new THREE.Group(); { const m = new THREE.MeshLambertMaterial({color:0x333a44}); const seat = new THREE.Mesh(new THREE.BoxGeometry(1.8,0.15,0.7), m); seat.position.y = 0.55; myChair.add(seat); const back = new THREE.Mesh(new THREE.BoxGeometry(1.8,0.8,0.12), m); back.position.set(0,0.95,0.35); myChair.add(back); const bar = new THREE.Mesh(new THREE.BoxGeometry(0.08,1.9,0.08), m); bar.position.set(0,1.5,0.35); myChair.add(bar); myChair.visible = false; scene.add(myChair); }
 const LIFT_SPEED = 5;   // m/s along the cable
 const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _v = new THREE.Vector3(), _s = new THREE.Vector3(1,1,1);

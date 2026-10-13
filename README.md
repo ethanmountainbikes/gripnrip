@@ -83,16 +83,26 @@ Run it locally with `python3 -m http.server`, then open http://localhost:8000.
 - Pedalling now pushes up to 55 km/h on the flat (65 km/h uphill, shown 5 lower on the speedometer), and climbing is much easier.
 
 ## Chairlifts, connector paths and money
-- Three chairlifts. Ride into a bottom station to sit on a chair and ride up (A / Enter skips the ride):
-  - **Lift A, Summit Express:** from the valley by the shop to Summit DH, Flow Line, Freeride Ridge and North Face.
-  - **Lift B, West Ridge:** from the park to Forest Singletrack and Meadow Flow.
-  - **Lift C, East Hills:** to Pump Line and Hilltop Jumps.
-  Lifts are always open, including for trails you haven't unlocked for teleport yet.
-- Narrow gravel connector paths link the lifts, trail starts and ends, the park and the shop. They show as thin lines on the minimap.
-- Grass no longer slows you down; it only has less grip than dirt.
-- Trail jumps are sized to the speed you carry at each one. Jumps on faster sections are bigger, and those on slower sections are smaller, within the trail's difficulty.
-- DOLLAHS: tricks and landings pay about 15% of the old REP values, and finishing a trail pays (1000 + trail length ÷ 2) × 0.15.
+The mountain is laid out like a real bike park. Every trail starts near a lift top, fans out down the mountain, and finishes at a lift bottom station, with its finish gate just above the station. Each lift top has a wayfinding signpost with one arrow blade per trail, showing the trail name and difficulty symbol.
+- **Base plaza** (valley): Summit Express (A), Send Tower Lift (G) and West Ridge Lift (B) bottoms, the bike shop and the dirt-jump park.
+  - **A, Summit Express:** goes to Summit DH, Flow Line and Freeride Ridge. Summit DH finishes back at A.
+  - **G, Send Tower Lift:** goes to MEGA SEND, which finishes back at G. Flow Line also finishes at G.
+  - **B, West Ridge:** goes to Forest Singletrack and Meadow Flow, which both finish back at B.
+- **C, East Hills:** goes to Pump Line and Hilltop Jumps, which both finish at C's bottom.
+- **D, Boreal Chair:** goes to Boreal Enduro and Drop Zone, which both finish at D.
+- **E, East Ridge Chair:** goes to Rock Garden and Eastern Traverse. Freeride Ridge also finishes at E.
+- **F, North Face Chair:** goes to North Face, which finishes at F.
+- **H, Ridgeback Chair:** goes to Ridgeback Flow, which finishes at H.
+- **Rampage:** all lines finish in the corral, right next to the Summit Shuttle pickup.
 
+Lifts are always open. Only short gravel paths are left: from a lift top to the trail starts, from a finish to the lift below it, and around the plaza. A layout audit (`liftcheck`) checks the following:
+- Paths stay at least 6 m from any trail except where they join it.
+- No trails cross.
+- Nothing goes through the dirt-jump park.
+- Stations and towers are at least 15 m clear.
+- Every finish is near a lift bottom.
+
+Each park roll-in has a 12% pedal-up ramp at its back.
 ## Bigger map, new trails, shop and flip landings
 - The map is ~32% larger (2.76 km square); the new outer band has rolling forested hills. All original trails, the park, lifts and paths are unchanged.
 - New trails: **Boreal Enduro** (Enduro, black), **Ridgeback Flow** (Flow, blue), **Eastern Traverse** (Cross-country, green), with speed-sized jumps, checkpoints, arches and unlock-on-finish teleports.

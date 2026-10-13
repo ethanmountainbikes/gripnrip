@@ -1,3 +1,4 @@
+:root{--mm:clamp(180px,26vh,320px)}
 *{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden;background:#9cc;font-family:"Segoe UI",Arial,sans-serif;color:#fff}
 canvas{display:block}
 #hud{position:fixed;inset:0;pointer-events:none;text-shadow:0 2px 4px rgba(0,0,0,.6)}
@@ -25,7 +26,7 @@ canvas{display:block}
 #overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.45)}
 #overlay.hidden{display:none}#overlayBox{text-align:center}#overlayBox h1{font-size:64px;margin:0;letter-spacing:4px;color:#ff8c1a}
 #overlayBox p{font-size:22px}
-#minimap{position:absolute;top:84px;right:20px;width:180px;height:180px;border:2px solid rgba(255,255,255,.8);border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.4)}
+#minimap{position:absolute;top:84px;right:20px;width:var(--mm);height:var(--mm);border:2px solid rgba(255,255,255,.8);border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.4)}
 #timer{white-space:nowrap}
 #shop{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:20;background:rgba(15,20,25,.92);padding:16px 22px;border-radius:12px;width:min(760px,94vw);box-shadow:0 8px 30px rgba(0,0,0,.6)}
 #shop.hidden{display:none}#shop h2{margin:0 0 10px;color:#ffd84d}#shopBal{float:right;color:#7CFC8A;font-size:18px}
@@ -33,7 +34,7 @@ canvas{display:block}
 .sw{width:34px;height:34px;border-radius:6px;flex:none;border:2px solid #fff}.bn{flex:1.2}.bn small{display:block;opacity:.75}.st{flex:1.6;font-size:12px}.pr{flex:none;width:120px;text-align:right;font-weight:800}
 .sbar{display:inline-block;width:52px;height:6px;background:#333;border-radius:3px;margin:0 6px 0 3px;vertical-align:middle}.sbar i{display:block;height:100%;background:#ffb020;border-radius:3px}
 #overlay{z-index:10}
-#liftLegend{position:absolute;top:270px;right:20px;width:184px;font:11px/1.35 Arial,sans-serif;color:#fff;text-shadow:0 1px 2px #000;pointer-events:none}
+#liftLegend{position:absolute;top:calc(84px + var(--mm) + 10px);right:20px;width:calc(var(--mm) + 4px);max-height:calc(100vh - 84px - var(--mm) - 220px);overflow:hidden;font:11px/1.35 Arial,sans-serif;color:#fff;text-shadow:0 1px 2px #000;pointer-events:none}
 #liftLegend b{display:inline-block;width:14px;height:10px;margin-right:4px;border:1px solid #fff;vertical-align:middle}
 #liftRide{position:absolute;left:50%;bottom:120px;transform:translateX(-50%);background:rgba(0,0,0,.55);color:#fff;padding:8px 16px;border-radius:8px;font:bold 16px Arial;display:none}
 
