@@ -25,3 +25,10 @@ export CLOUDFLARE_ACCOUNT_ID=8f1d2ae5c0d2cc2d7259e55922cbd7db
 npx wrangler deploy
 ```
 The client's server URL is `MP_SERVER` at the top of `net.js`.
+
+## Cloud saves + leaderboards (Durable Object `Store`, SQLite, no extra API permission needed)
+`POST /save/put|get|delete {code, data}` · `POST /lb/submit {code, world, trail, name, time, cps[], combo}` · `POST /lb/stat {code, cat, val, air?, dur?}` · `POST /lb/get {cat, world, trail, code?}`.
+Save codes: 16 chars, stored as SHA-256(PEPPER + code). Secrets: `PEPPER`, `ADMIN` (`wrangler secret put`). `/admin/purge {key, before, saves}` removes rows for moderation.
+`src/trails.json` (trail lengths + checkpoint positions) is generated from `world.js` — regenerate and redeploy if trails change:
+`node -e` script in the repo history (import world.js with a fake localStorage per world).
+Why not D1/KV: the token has no D1 permission (would need *Account → D1 → Edit*), and KV's free tier allows only 1,000 writes/day; SQLite-backed Durable Objects are on the free plan with far higher limits and strong consistency.

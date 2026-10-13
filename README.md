@@ -209,3 +209,9 @@ Main menu (or pause menu) → **Multiplayer** → *Create room* gives a 6-charac
 Up to 8 riders see each other ride (smoothed), with their bikes/skins and preset name tags. Press **1–6** while riding for emotes.
 There is no chat: names and emotes are presets, rooms are private by code, the host can lock the room or remove riders, and
 nothing is stored. If the server can't be reached the game just stays single-player. The server lives in `server/` (see its README).
+
+## Cloud save + leaderboards
+- On first launch the game makes a private **save code** (`XXXX-XXXX-XXXX-XXXX`) and asks you to write it down. Settings → **Cloud Save** shows it again, syncs, restores with a code on another browser, or deletes your cloud data.
+- Local first: progress stays in the browser and syncs (debounced, and after trail finishes) when online. Merging never loses owned bikes/skins or unlocks; best times keep the fastest; DOLLAHS/settings come from the newest copy (or the restored save).
+- **Leaderboards** (main and pause menu; LB/RB or Q/E switch category, D-pad changes world/trail): fastest time per trail, trick combo per run per trail, most tricks in one jump, biggest airtime, longest jump, top speed, lifetime DOLLAHS, trails completed, dirt jump park best line. Top 20 + your rank; preset rider names only. "NEW BEST!" toasts on personal bests.
+- Server checks (see `server/README.md`): trail times need every checkpoint in order and each split under the 30 m/s physics cap; airtime ≤ 4 s; jump distance ≤ 30 m/s × airtime; tricks bounded by airtime; top speed ≤ 108 km/h; combo/park scores bounded by duration; lifetime DOLLAHS growth bounded by time; rate limits. Save codes are stored only as salted SHA-256 hashes; no personal data.

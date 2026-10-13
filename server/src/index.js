@@ -10,13 +10,18 @@ const CODE_RE = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$/;
 const MAX_PLAYERS = 8, MAX_RATE = 30;          // msgs per second per rider
 // preset lists live in the client; the server only checks index ranges
 export const LIMITS = { nameA: 32, nameB: 32, emote: 12, skinCat: 6, skinVal: 32, trick: 32, world: 2 };
-const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET', 'Cache-Control': 'no-store' };
+const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type', 'Cache-Control': 'no-store' };
+export { Store } from './store.js';
 const json = (o, s = 200) => new Response(JSON.stringify(o), { status: s, headers: { 'Content-Type': 'application/json', ...CORS } });
 
 export default {
   async fetch(req, env) {
     const url = new URL(req.url), parts = url.pathname.split('/').filter(Boolean);
     if (url.pathname === '/health') return json({ ok: true });
+    if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
+    if (parts[0] === 'save' || parts[0] === 'lb' || parts[0] === 'admin') {   // cloud saves + leaderboards (POST JSON)
+      if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
+      return env.STORE.get(env.STORE.idFromName('global')).fetch(req); }
     if (parts[0] === 'new') {
       for (let tries = 0; tries < 5; tries++) {
         const b = crypto.getRandomValues(new Uint8Array(6)); let code = ''; for (const x of b) code += ALPHA[x % ALPHA.length];

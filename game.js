@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { buildBikeRider } from './rider.js';
 import { initNet, NAME_A, NAME_B, EMOTES, cleanCode } from './net.js';
+import { initCloud, CATS as LB_CATS, fmtCode, cleanSaveCode } from './cloud.js';
 import { makeTextures, triplanar } from './textures.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -58,7 +59,7 @@ Object.assign(sun.shadow.camera, {left:-40,right:40,top:40,bottom:-40,near:1,far
 sun.shadow.bias = -0.0005; sun.shadow.normalBias = 0.06;   // no shadow acne / striping on the dirt
 scene.add(sun, sun.target);
 // post (High): SSAO + subtle bloom; Low/Med render directly
-let composer = null, GFX = null, NET = null;   // GFX: graphics upgrade (Medium/High/Max), loaded on demand from gfx.js
+let composer = null, GFX = null, NET = null, CLOUD = null;   // GFX: graphics upgrade (Medium/High/Max), loaded on demand from gfx.js
 function setupPost(){ composer = null; if (!Q.post || GFX) return;
   composer = new EffectComposer(renderer); composer.addPass(new RenderPass(scene, camera));
   const ao = new SSAOPass(scene, camera, innerWidth, innerHeight); ao.kernelRadius = 0.6; ao.minDistance = 0.0004; ao.maxDistance = 0.02; composer.addPass(ao);
@@ -367,7 +368,7 @@ const releaseKeys = () => { for (const k in keys) keys[k] = false; };
 addEventListener('blur', releaseKeys); document.addEventListener('visibilitychange', () => { if (document.hidden) releaseKeys(); });
 addEventListener('keyup', e => { if (e.key === 'Meta') releaseKeys(); });
 const toastEl = document.getElementById('toast'); let toastT;
-function toast(msg){ toastEl.textContent = msg; toastEl.style.opacity = 1; clearTimeout(toastT); toastT = setTimeout(()=>toastEl.style.opacity=0, 2500); }
+function toast(msg){ (window.__toastLog ||= []).push(msg); if (window.__toastLog.length > 50) window.__toastLog.shift(); toastEl.textContent = msg; toastEl.style.opacity = 1; clearTimeout(toastT); toastT = setTimeout(()=>toastEl.style.opacity=0, 2500); }
 addEventListener('gamepadconnected', e => { knownPads[e.gamepad.index]=true; toast('🎮 Controller connected: ' + e.gamepad.id.slice(0,40)); });
 addEventListener('gamepaddisconnected', e => { delete knownPads[e.gamepad.index]; toast('Controller disconnected'); });
 setTimeout(()=>{ if (!Object.keys(knownPads).length) toast(window.isSecureContext ? '🎮 Using a controller? Press any button on it to connect' : 'Controllers need https (or localhost)'); }, 800);
@@ -479,7 +480,7 @@ function resetGame(){
   Object.assign(S,{lives:3,bestAir:0,totalAir:0,time:0,maxKmh:0,clean:0,spins:0,flips:0,finishes:0,parkClean:0,state:'riding',paused:false});
   teleport(spotI, true); $('overlay').classList.add('hidden'); closeMenu();
 }
-function crash(reason){ S.lastCrash = reason; sfxCrash();
+function crash(reason){ S.lastCrash = reason; sfxCrash(); endParkLine();
   if (S.crashT>0) return;
   S.crashT = 2.0; S.air = false; trickEl.textContent = reason;
   // health only counts during a trail run; in free roam a crash just respawns you
@@ -572,10 +573,13 @@ function trackWorld(dt){
   if (cur){ const tr = trails[cur.t];
     if (cur.s < 18 && (!S.run || S.run.t !== cur.t)) { S.run = {t:cur.t, start:S.time, s:cur.s}; S.lives = 3; trickEl.textContent = `⏱ ${tr.name} — run started`; S.trickMsgT = 2; }
     if (S.run && S.run.t === cur.t){ S.run.s = Math.max(S.run.s, cur.s);
-      const cps = tr.cps || []; while ((S.run.cp ?? -1) + 1 < cps.length && cur.s >= cps[(S.run.cp ?? -1) + 1].s - 2 && cur.s < cps[(S.run.cp ?? -1) + 1].s + 25){ S.run.cp = (S.run.cp ?? -1) + 1; toast(`🚩 Checkpoint ${S.run.cp+1}/${cps.length} · ${tr.name}`); flash('CHECKPOINT', 1.0); }
+      const cps = tr.cps || []; while ((S.run.cp ?? -1) + 1 < cps.length && cur.s >= cps[(S.run.cp ?? -1) + 1].s - 2 && cur.s < cps[(S.run.cp ?? -1) + 1].s + 25){ S.run.cp = (S.run.cp ?? -1) + 1; (S.run.cpt ||= [])[S.run.cp] = S.time - S.run.start; toast(`🚩 Checkpoint ${S.run.cp+1}/${cps.length} · ${tr.name}`); flash('CHECKPOINT', 1.0); }
       if (cur.s > tr.len - 8){ const time = S.time - S.run.start, bonus = Math.round((1000 + tr.len/2)*EARN);
         S.finishes++; S.score += bonus; flash('FINISH!', 2.5); trickEl.textContent = `${tr.name} in ${fmtTime(time)}  +$${bonus}`; S.trickMsgT = 3.5;
-        S.best ||= {}; if (!S.best[tr.name] || time < S.best[tr.name]){ S.best[tr.name] = time; toast(`🏁 New best on ${tr.name}: ${fmtTime(time)}`); }
+        S.best ||= {}; if (!S.best[tr.name] || time < S.best[tr.name]){ S.best[tr.name] = time; LS.set('trailDescent.best.' + WORLD, S.best); toast(`⭐ NEW BEST! ${tr.name}: ${fmtTime(time)}`); }
+        { const cps = tr.cps || [], cpt = S.run.cpt || [];
+          if (CLOUD && cps.length === cpt.filter(x => x != null).length) CLOUD.trail(RAMP ? 1 : 0, S.run.t, tr.name, time, cpt, S.run.combo || 0);
+          else if (CLOUD) setTimeout(() => toast('Leaderboard: missed a checkpoint, so this time is not ranked'), 2500); }
         if (!unlocked.has(tr.name)){ const pro = trails.find(o => o.unlockAny && o !== tr), wasPro = pro && anyOtherDone(pro); unlocked.add(tr.name); saveUnlocks(); setTimeout(()=>toast(`🔓 Unlocked: ${tr.name} — teleport there any time`), 1200);
           if (pro && !wasPro && anyOtherDone(pro)) setTimeout(()=>toast(`☠ ${pro.name} UNLOCKED — the hardest line on the mountain. PRO only.`), 4200); }
         S.run = null; } } }
@@ -693,7 +697,7 @@ function step(dt, inp){
       if (clear < 0.4) crest = false; }
     if (pop > 0 || crest){
       S.air = true; S.airT = 0; S.vy = (backFeat ? Math.min(S.lastVyG, 0.1*S.speed) : S.lastVyG) + pop; S.takeoffPitch = S.pitch; S.spin = 0; S.popped = pop > 0;
-      S.tweakT = 0; S.tricksDone = new Set(); S.wYaw = 0; S.wPitch = 0; S.yaw = S.travel + slip*0.5; S.travel = S.yaw; S.nose = 0;
+      S.toX = S.x; S.toZ = S.z; S.tweakT = 0; S.tricksDone = new Set(); S.wYaw = 0; S.wPitch = 0; S.yaw = S.travel + slip*0.5; S.travel = S.yaw; S.nose = 0;
       // scrub: laying the bike over (right stick sideways) at takeoff keeps you low and fast
       const lay = Math.abs(inp.tweak);
       S.scrub = S.vy > 2 ? lay : 0;
@@ -773,7 +777,12 @@ function land(gh, gp){
     if ((S.tweakT||0) > 0.15){ parts.push('Tweak'); pts += Math.round(150 + S.tweakT*300); }
     parts.push(`${S.airT.toFixed(1)}s air`);
     if (Math.abs(pe) < 0.2 && Math.abs(se) < 0.2){ parts.push('Perfect!'); pts = Math.round(pts*1.25); }
-    pts = Math.max(1, Math.round(pts*EARN)); S.score += pts; S.clean++; if (inPark(S.x,S.z)) S.parkClean = (S.parkClean||0) + 1; S.totalAir += S.airT; S.bestAir = Math.max(S.bestAir, S.airT);
+    pts = Math.max(1, Math.round(pts*EARN));
+    { const nTricks = Math.abs(flips) + Math.abs(spins) + (S.tricksDone ? S.tricksDone.size : 0) + ((S.scrub||0) > 0.5 ? 1 : 0) + ((S.tweakT||0) > 0.15 ? 1 : 0);
+      if (CLOUD) CLOUD.jump(S.airT, Math.hypot(S.x - (S.toX ?? S.x), S.z - (S.toZ ?? S.z)), nTricks);
+      if (S.run) S.run.combo = (S.run.combo || 0) + pts;
+      if (inPark(S.x, S.z)){ if (!S.parkLine) S.parkLine = {pts:0, t0:S.time}; S.parkLine.pts += pts; } }
+    S.score += pts; S.clean++; if (inPark(S.x,S.z)) S.parkClean = (S.parkClean||0) + 1; S.totalAir += S.airT; S.bestAir = Math.max(S.bestAir, S.airT);
     trickEl.textContent = parts.join(' + ') + `  +$${pts}`; S.trickMsgT = 2.5;
   }
 }
@@ -875,7 +884,9 @@ function frame(){
   $('airVal').textContent = (S.air && S.airT > 0.1 ? S.airT : 0).toFixed(1)+'s';
   $('airBest').textContent = `best ${S.bestAir.toFixed(1)}s`;
   $('scoreVal').textContent = '$' + S.score.toLocaleString();
-  if (S.score !== S.savedScore){ S.savedScore = S.score; LS.set('trailDescent.dollahs', S.score); }
+  if (S.score !== S.savedScore){ if (S.score > S.savedScore) LS.set('trailDescent.earned', LS.get('trailDescent.earned', 0) + (S.score - S.savedScore)); S.savedScore = S.score; LS.set('trailDescent.dollahs', S.score); }
+  if (S.parkLine && !S.air && !inPark(S.x, S.z)) endParkLine();
+  if (CLOUD && S.state === 'riding' && !S.lift && (S.statT = (S.statT || 0) + dt) > 2){ S.statT = 0; if (S.maxKmh > 1) CLOUD.speed(Math.min(S.maxKmh, 108)); }
   $('lives').style.display = S.run ? '' : 'none';
   $('livesVal').textContent = S.lives>0 ? '♥ '.repeat(S.lives).trim() : '—';
   const run = S.run && trails[S.run.t];
@@ -1055,10 +1066,12 @@ const PAGES = {
     {label:'Trails', sub:`${trails.filter((_, i) => isOpen(i)).length}/${trails.length} unlocked — drop in at a trail start`, act:() => go('trails')},
     {label:'Bike Shop', sub:`$${S.score.toLocaleString()} DOLLAHS`, act:() => openShop()},
     {label:'Multiplayer', value:NET && NET.st.status === 'in' ? 'ROOM ' + NET.st.code : undefined, sub:'Ride with friends in a private room (room code)', act:() => go('multi')},
+    {label:'Leaderboards', sub:'Fastest times, biggest air, top speed… (LB / RB or Q / E: category)', act:() => openBoards()},
     {label:'Settings', sub:'Graphics, quality, music, controls, invert', act:() => go('settings')},
     {label:'Credits', act:() => go('credits')} ]}),
   trails: () => ({title:RAMP ? 'RAMPAGE LINES' : 'TRAILS', items:[...trailItems(), ...(RAMP ? [] : [{label:'Dirt Jump Park', sub:'Pro line · always open', act:() => { spotI = spots.findIndex(s => s.name === 'Dirt Jump Park'); startRide(); }}]), {label:'‹ Back', act:back}]}),
   settings: () => ({title:'SETTINGS', items:[
+    {label:'Cloud Save', value:CLOUD ? ({synced:'SYNCED', offline:'OFFLINE', idle:'…'})[CLOUD.st.status] || '' : 'OFF', sub:'Your save code, restore on another browser', act:() => go('cloud')},
     {label:'Graphics', value:(SETTINGS.gfx||'low').toUpperCase(), sub:'Low = classic look · Medium / High / Max = HDR sky, PBR textures, shadows, post FX (reloads)', adj:d => setGfx(d), act:() => setGfx(1, true)},
     {label:'FPS counter', value:ON(SETTINGS.fpsOn), adj:() => { SETTINGS.fpsOn = !SETTINGS.fpsOn; saveSettings(); }, act:() => { SETTINGS.fpsOn = !SETTINGS.fpsOn; saveSettings(); }},
     {label:'Time of day', value:({morning:'MORNING', noon:'NOON', golden:'GOLDEN HOUR'})[SETTINGS.tod || 'noon'], sub:'Graphics Medium and up (reloads)', adj:d => setTod(d), act:() => setTod(1)},
@@ -1083,6 +1096,17 @@ const PAGES = {
     items.push({label:'Your rider name', value:`${NAME_A[nm[0]]} ${NAME_B[nm[1]]}`.toUpperCase(), sub:'Preset names only · ← → to change' + (inRoom ? ' (applies next time you join)' : ''), adj:d => { const k = (nm[0]*NAME_B.length + nm[1] + d*7 + NAME_A.length*NAME_B.length) % (NAME_A.length*NAME_B.length); LS.set('trailDescent.mpName', [Math.floor(k/NAME_B.length), k % NAME_B.length]); }, act:() => { const n = [Math.floor(Math.random()*NAME_A.length), Math.floor(Math.random()*NAME_B.length)]; LS.set('trailDescent.mpName', n); }});
     items.push({label:'‹ Back', act:back});
     return {title:'MULTIPLAYER', html:'<p class="mpNote">Private rooms only — no chat, preset names and emotes. Your rider position and look are shared with the room while you are in it; nothing is stored.</p>', items}; },
+  cloud: () => { const c = CLOUD && CLOUD.st; return {title:'CLOUD SAVE', html:`<p class="mpNote">Your progress (DOLLAHS, bikes, skins, unlocks, best times) is saved on this device and backed up online.<br>Use your <b>save code</b> to get it back on another browser. Keep it secret — anyone with the code can load your save.</p>`, items:[
+      {label:'Your save code', value:c ? (cloudShow ? fmtCode(c.code) : '••••-••••-••••-••••') : '—', sub:cloudShow ? 'Write this down somewhere safe!' : 'Select to show', act:() => { cloudShow = !cloudShow; }},
+      {label:'Sync now', value:c ? ({synced:'SYNCED', offline:'OFFLINE', idle:'…'})[c.status] || '' : '', sub:c && c.lastSync ? 'Last synced ' + new Date(c.lastSync).toLocaleString() : 'Not synced yet', act:() => { CLOUD && CLOUD.push().then(ok => { toast(ok ? '☁ Synced' : '📡 Offline — will sync later'); if (menu.open) renderMenu(); }); }},
+      {label:'Restore with code', sub:'Load your save from another browser (merges with this one)', act:() => askSaveCode()},
+      {label:'Delete my cloud data', sub:'Removes the online copy + your leaderboard entries (this device keeps its progress)', act:() => { if (cloudDel){ CLOUD && CLOUD.wipe(); cloudDel = false; } else { cloudDel = true; toast('Select again to confirm deleting your cloud data'); setTimeout(() => cloudDel = false, 5000); } }},
+      {label:'‹ Back', act:back} ]}; },
+  boards: () => { const C = LB_CATS[LBV.cat], tl = trails, html = LBV.res === undefined ? '<p class="mpNote">Loading…</p>' : !LBV.res || !LBV.res.ok ? '<p class="mpNote">📡 Leaderboards are offline right now.</p>' : boardHtml(LBV.res, C);
+    const items = [{label:'Category', value:C.label.toUpperCase(), sub:'LB / RB (Q / E) or ← →', adj:d => lbMove(d, 0)}];
+    if (C.per === 'trail'){ items.push({label:'World', value:RAMP ? 'RAMPAGE' : 'MOUNTAIN', sub:'Switching world reloads the game', adj:() => switchWorld()}); items.push({label:'Trail', value:(tl[LBV.trail] || {}).name || '', adj:d => { LBV.trail = (LBV.trail + d + tl.length) % tl.length; lbLoad(); }}); }
+    items.push({label:'‹ Back', act:back});
+    return {title:'LEADERBOARDS', html, items}; },
   credits: () => ({title:'CREDITS', html:`<div class="credits"><p><b>Grip 'N Rip</b> — an open-world mountain bike game in the browser.</p>
     <p><b>Game, code, world, rider and bike models, textures:</b> made procedurally for this project (Three.js r160).</p>
     <p><b>Music (CC0, from OpenGameArt.org):</b><br>${TRACKS.map(t => `${t.title} — ${t.artist} <small>(${t.src})</small>`).join('<br>')}</p>
@@ -1095,6 +1119,7 @@ const PAGES = {
     {label:'Map', sub:'View / M', act:() => { closeMenu(); openMap(); bigMap.wasPaused = false; }},
     {label:'Bike Shop', act:() => openShop()},
     {label:'Multiplayer', value:NET && NET.st.status === 'in' ? 'ROOM ' + NET.st.code : undefined, act:() => go('multi')},
+    {label:'Leaderboards', act:() => openBoards()},
     {label:'Skip song', sub: music.started && SETTINGS.musicOn && music.i >= 0 ? `Now: ${TRACKS[music.order[music.i]].title} — ${TRACKS[music.order[music.i]].artist}` : 'Music is off or not started', act:() => { if (!music.started){ music.started = true; } nextSong(); }},
     {label:'Settings', act:() => go('settings')},
     {label:'Controls / help', act:() => $('help').classList.toggle('hidden')},
@@ -1116,6 +1141,7 @@ function switchWorld(){ LS.set('trailDescent.world', RAMP ? 'mountain' : 'rampag
 function startRide(){ closeMenu(); resetGame(); }
 function toMainMenu(){ S.paused = false; S.state = 'menu'; S.run = null; S.lift = null; myChair.visible = false; $('liftRide').style.display = 'none'; camInit = false; openMenu('main'); $('loading').classList.add('done'); }
 function menuKey(code){ const it = menu.items[menu.sel];
+  if (menu.page === 'boards' && ['LB','RB','KeyQ','KeyE'].includes(code)){ lbMove(['LB','KeyQ'].includes(code) ? -1 : 1, 1); return; }
   if (['DU','ArrowUp','KeyW'].includes(code)){ do { menu.sel = (menu.sel - 1 + menu.items.length) % menu.items.length; } while (menu.items[menu.sel].disabled && menu.items.some(i => !i.disabled) && false); renderMenu(); }
   else if (['DD','ArrowDown','KeyS'].includes(code)){ menu.sel = (menu.sel + 1) % menu.items.length; renderMenu(); }
   else if (['DL','ArrowLeft','KeyA','DR','ArrowRight','KeyD'].includes(code)){ if (it.adj){ it.adj(['DL','ArrowLeft','KeyA'].includes(code) ? -1 : 1); renderMenu(); } }
@@ -1405,8 +1431,38 @@ function endLift(){ const L = LIFTS[S.lift.i]; S.lift = null; myChair.visible = 
 function shopProximity(dt){ S.shopCool = Math.max(0, (S.shopCool||0) - dt);
   const dx = S.x - (SHOP_POS.x - Math.sin(SHOP_POS.yaw)*8), dz = S.z - (SHOP_POS.z - Math.cos(SHOP_POS.yaw)*8);   // porch steps
   if (!shopOpen && S.shopCool <= 0 && !S.air && dx*dx + dz*dz < 9) openShop(); }
-S.score = LS.get('trailDescent.dollahs', 0); S.savedScore = S.score; applyBike();
+S.score = LS.get('trailDescent.dollahs', 0); S.savedScore = S.score; applyBike(); S.best = LS.get('trailDescent.best.' + WORLD, {});
+function endParkLine(){ if (S.parkLine && CLOUD) CLOUD.park(S.parkLine.pts, Math.max(0.5, S.time - S.parkLine.t0)); S.parkLine = null; }
 // ---------- multiplayer (net.js): private rooms, remote riders; stays solo if the server can't be reached ----------
+// ---------- cloud save + leaderboards (cloud.js) ----------
+let cloudShow = false, cloudDel = false; const LBV = {cat:0, trail:0, res:undefined, seq:0};
+function boardHtml(r, C){ const rows = r.top.map(e => `<tr class="${e.me ? 'me' : ''}"><td>${e.rank}</td><td>${CLOUD.nameOf(e.name)}${e.me ? ' (you)' : ''}</td><td>${C.fmt(e.v)}</td></tr>`).join('');
+  const mine = r.me ? `<p class="lbMe">You: <b>#${r.me.rank}</b> of ${r.total} · ${C.fmt(r.me.v)}</p>` : `<p class="lbMe">${r.total ? r.total + ' riders ranked' : 'No times yet'} · you're not on this board yet</p>`;
+  return `<table class="lbT">${rows || '<tr><td colspan=3>Be the first!</td></tr>'}</table>${mine}`; }
+async function lbLoad(){ const C = LB_CATS[LBV.cat], seq = ++LBV.seq; LBV.res = undefined; if (menu.open && menu.page === 'boards') renderMenu();
+  const r = CLOUD ? await CLOUD.board(C.id, RAMP ? 1 : 0, LBV.trail) : null; if (seq !== LBV.seq) return; LBV.res = r; if (menu.open && menu.page === 'boards') renderMenu(); }
+function lbMove(d, keepSel){ LBV.cat = (LBV.cat + d + LB_CATS.length) % LB_CATS.length; lbLoad(); }
+function openBoards(){ if (S.run) LBV.trail = S.run.t; go('boards'); lbLoad(); }
+// finish screen: top 5 + your rank for this trail
+const lbPanel = document.createElement('div'); lbPanel.id = 'lbPanel'; document.body.appendChild(lbPanel); let lbPanelT = 0;
+function showFinishBoard(r){ if (!r || !r.top) return; const C = LB_CATS.find(c => c.id === (r.cat || 'time'));
+  lbPanel.innerHTML = `<h4>🏁 ${r.label || ''} — LEADERBOARD</h4>` + boardHtml({...r, top:r.top.slice(0, 5)}, C) + (r.improved ? '<p class="lbMe">⭐ New personal best on the board!</p>' : '');
+  lbPanel.classList.add('on'); clearTimeout(lbPanelT); lbPanelT = setTimeout(() => lbPanel.classList.remove('on'), 9000); }
+function askSaveCode(){ const ov = document.createElement('div'); ov.id = 'mpAsk';
+  ov.innerHTML = `<div class="mpBox"><h3>RESTORE SAVE</h3><input id="mpCode" maxlength="19" autocomplete="off" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX" style="width:420px;letter-spacing:3px;font-size:28px"><div><button id="mpGo">Restore</button> <button id="mpNo">Cancel</button></div></div>`;
+  document.body.appendChild(ov); const inp = ov.querySelector('#mpCode'); inp.focus();
+  const done = go => { const c = cleanSaveCode(inp.value); ov.remove(); if (go) CLOUD && CLOUD.restore(c); };
+  inp.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') done(true); if (e.key === 'Escape') done(false); }); inp.addEventListener('keyup', e => e.stopPropagation());
+  inp.addEventListener('input', () => { inp.value = fmtCode(cleanSaveCode(inp.value)); });
+  ov.querySelector('#mpGo').onclick = () => done(true); ov.querySelector('#mpNo').onclick = () => done(false); }
+function showNewCode(){ const ov = document.createElement('div'); ov.id = 'mpAsk';
+  ov.innerHTML = `<div class="mpBox"><h3>YOUR SAVE CODE</h3><p style="font:700 30px 'Barlow Condensed',monospace;letter-spacing:3px;margin:6px 0 4px">${fmtCode(CLOUD.st.code)}</p><p class="mpNote">✏️ Write this down! It brings your bikes, skins, DOLLAHS and unlocks back on another computer<br>(Settings → Cloud Save → Restore with code). Don't share it — it's like a password.</p><button id="mpGo">I wrote it down</button></div>`;
+  document.body.appendChild(ov); const ok = () => { LS.set('trailDescent.codeShown', true); ov.remove(); removeEventListener('keydown', kd, true); }; const kd = e => { if (e.key === 'Enter'){ e.stopPropagation(); ok(); } };
+  addEventListener('keydown', kd, true); ov.querySelector('#mpGo').onclick = ok; }
+mpName();   // make sure a preset name exists before the first sync
+if (!navigator.webdriver || window.__cloudTest) try { CLOUD = initCloud({toast, reload:() => location.reload(), onBoard:showFinishBoard});
+  CLOUD.on(() => { if (menu.open && (menu.page === 'cloud' || menu.page === 'settings')) renderMenu(); }); window.__cloud = CLOUD;
+  if (!LS.get('trailDescent.codeShown', false) && (!navigator.webdriver || window.__forceCodePrompt)) setTimeout(showNewCode, 1500); } catch (e){ console.warn('cloud save unavailable', e); CLOUD = null; }
 function mpName(){ let n = LS.get('trailDescent.mpName', null); if (!Array.isArray(n) || !(n[0] >= 0 && n[0] < NAME_A.length && n[1] >= 0 && n[1] < NAME_B.length)){ n = [Math.floor(Math.random()*NAME_A.length), Math.floor(Math.random()*NAME_B.length)]; LS.set('trailDescent.mpName', n); } return n; }
 function askCode(){ const ov = document.createElement('div'); ov.id = 'mpAsk';
   ov.innerHTML = `<div class="mpBox"><h3>JOIN A ROOM</h3><input id="mpCode" maxlength="6" autocomplete="off" spellcheck="false" placeholder="ABC123"><div><button id="mpGo">Join</button> <button id="mpNo">Cancel</button></div></div>`;
