@@ -182,3 +182,21 @@ Sources (venue research):
 - Red Bull, 2025 winner Hayden Zablotny's run (double-drop entrance, step-up): https://www.redbull.com/us-en/red-bull-rampage-winner
 - Pinkbike, 2025 men's final results: https://www.pinkbike.com/news/red-bull-rampage-2025-mens-final-results.html
 - Event-page photo captions (the 75 ft Canyon Gap) and replay commentary (Stratos 44-foot drop, ~50 ft canyon gap): https://www.cyclingeu.com/761397/the-biggest-competition-in-freeride-mtb-red-bull-rampage-2025-2/
+
+## Graphics settings
+
+Settings → **Graphics**: Low / Medium / High / Max. The setting is saved, and changing it reloads the page.
+
+- **Low** is the classic look, exactly as before. The upgrade code (`gfx.js`) isn't even loaded.
+- **Medium / High / Max** load `gfx.js` from the same three.js r160 CDN, plus the addons, and add:
+  - a physical sky plus image-based lighting from a CC0 Poly Haven HDRI (alpine `pizzo_pernice_puresky` for the Mountain, `quarry_01_puresky` for Rampage)
+  - ACES tone mapping and PBR materials everywhere
+  - soft high-resolution sun shadows that follow the rider (2048 on Medium, 4096 on High and Max)
+  - distance haze with aerial perspective
+  - CC0 Poly Haven ground, rock, bark and gravel textures, with the rock layer projected triplanar on steep slopes and a detail normal on trails
+  - denser wind-swayed grass
+  - a glossy frame
+  - drifting dust in Rampage
+  - post effects: bloom, vignette, a light colour grade and SMAA. High adds SSAO, sun glare and depth of field on the cinematic cameras. Max adds GTAO and speed-based motion blur.
+- On Max, if the game runs under 40 FPS for about 4 seconds, a toast suggests a lower setting. It never switches by itself.
+- Physics and gameplay are identical on every setting.
