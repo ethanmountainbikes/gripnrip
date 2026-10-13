@@ -120,3 +120,26 @@ body.inshop #shop{left:auto;right:3vw;transform:translateY(-50%);width:min(500px
 .lbMe{font:600 14px 'Barlow Condensed',sans-serif;margin:4px 0 8px;color:#ffd27a}
 #lbPanel{position:fixed;right:14px;top:290px;z-index:58;width:300px;background:rgba(20,22,18,.82);border:2px solid #d9772b;border-radius:8px;padding:8px 12px;color:#f0e8d8;display:none}
 #lbPanel.on{display:block} #lbPanel h4{margin:0 0 4px;font:700 18px 'Bebas Neue',sans-serif;letter-spacing:1px}
+/* ===== phones / short screens (iPhone landscape ~343px tall, portrait ~393px wide): compact main menu so it fits; desktop sizes untouched ===== */
+@media (max-height:500px),(max-width:600px){
+  #menu{justify-content:flex-start;padding:max(6px,env(safe-area-inset-top)) 10px 6px max(3vw,env(safe-area-inset-left));overflow:hidden}
+  #menuLogo{margin-bottom:6px;flex:none}.logoMark svg{width:54px;height:27px}
+  .logo{font-size:44px;letter-spacing:3px;text-shadow:3px 3px 0 var(--dirt2)}.tagline{font-size:11px;letter-spacing:2px;margin-top:4px}
+  #menuPanel{padding:6px 8px;border-top-width:4px;min-height:0;display:flex;flex-direction:column;flex:0 1 auto;overflow:hidden}
+  #menuPanel h2{font-size:24px;margin:0 0 4px}
+  #menuPanel .mItems,.mItems.scroll{overflow:auto;max-height:none;min-height:0}
+  .mItems li{font-size:20px;padding:4px 10px 4px 12px;margin:2px 0;gap:6px}.mItems li small{font-size:12px}.mItems li .mVal{font-size:17px}
+  .credits{font-size:14px}#menuHint{margin-top:4px;font-size:11px;flex:none}
+}
+@media (max-height:500px) and (orientation:landscape){ #menuLogo{position:absolute;right:max(12px,env(safe-area-inset-right));top:8px;text-align:right} #menu{padding-top:6px} #menuPanel{max-height:calc(100% - 26px)} }
+#rotateHint{display:none}
+@media (orientation:portrait) and (pointer:coarse) and (max-width:600px){ #rotateHint{display:block;position:fixed;left:50%;bottom:max(14px,env(safe-area-inset-bottom));transform:translateX(-50%);z-index:40;pointer-events:none;padding:8px 14px;border-radius:6px;background:rgba(12,14,10,.82);border:2px solid rgba(217,119,43,.85);color:#f3e9d2;font:600 15px "Barlow Condensed",sans-serif;letter-spacing:1px;white-space:nowrap} }
+/* phones: smaller minimap + speedometer so they don't overlap; lift legend hidden (big map M / Back still shows lifts) */
+@media (max-height:500px),(max-width:600px){
+  :root{--mm:min(150px,34vh,40vw)}
+  #speedVal{font-size:38px;top:34px}#speedo .unit,#speedo .lbl{font-size:12px}#airVal,#scoreVal{font-size:30px}
+  #minimap{top:max(52px,env(safe-area-inset-top));right:max(10px,env(safe-area-inset-right))}
+  #speedo{width:120px;height:120px;bottom:max(18px,env(safe-area-inset-bottom));right:max(8px,env(safe-area-inset-right))}
+  #liftLegend,#liftLegend.side{display:none}
+}
+@media (orientation:portrait) and (pointer:coarse) and (max-width:600px){ #rotateHint{top:max(52px,env(safe-area-inset-top));bottom:auto;left:12px;transform:none;font-size:13px} body:not(.inmenu) #rotateHint{display:none} }

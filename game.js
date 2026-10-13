@@ -1048,7 +1048,7 @@ function nextSong(){ if (!SETTINGS.musicOn) return; if (++music.i >= music.order
   const t = TRACKS[music.order[music.i]]; music.el.src = t.file; musicVol(); music.el.play().then(() => toast(`♪ Now playing: ${t.title} — ${t.artist} (CC0)`)).catch(() => {}); }
 music.el.addEventListener('ended', nextSong);
 function startMusic(){ initSfx(); setSfxVolume(SETTINGS.volume); if (music.started || !SETTINGS.musicOn) return; music.started = true; nextSong(); }
-for (const ev of ['keydown', 'pointerdown']) addEventListener(ev, startMusic, {once:false});
+for (const ev of ['keydown', 'pointerdown', 'touchend', 'click']) addEventListener(ev, startMusic, {once:false});
 function setMusicOn(on){ SETTINGS.musicOn = on; saveSettings(); if (on){ if (!music.started){ music.started = true; nextSong(); } else if (music.el.paused){ musicVol(); music.el.play().catch(()=>{}); } } else music.el.pause(); }
 
 // ---------- menus: main menu (flyover), trails, settings, credits, pause ----------
