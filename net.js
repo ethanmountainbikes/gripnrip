@@ -4,7 +4,7 @@
 export const MP_SERVER = 'https://gripnrip-rooms.gripnrip.workers.dev';
 export const NAME_A = ['Rapid','Turbo','Dusty','Rowdy','Sneaky','Mega','Gnarly','Flowy','Shreddy','Brave','Lucky','Swift','Muddy','Rad','Chill','Wild','Sunny','Rocky','Zippy','Epic','Steady','Bouncy','Speedy','Mighty','Sandy','Frosty','Pumped','Clever','Jolly','Sendy','Happy','Comet'];
 export const NAME_B = ['Marmot','Fox','Eagle','Goat','Lynx','Bear','Moose','Otter','Falcon','Badger','Coyote','Hawk','Ram','Wolf','Raven','Bison','Puma','Gecko','Owl','Hare','Elk','Beaver','Lizard','Viper','Yak','Panda','Tiger','Rhino','Koala','Bobcat','Heron','Orca'];
-export const EMOTES = ['👍 Nice!', '🔥 Sick line!', '😂 Haha', '⏳ Wait for me', '🏁 Race?', '👋 Hi!'];
+export const EMOTES = ['👍 Nice!', '🔥 Sick line!', '⏳ Wait for me', '🏁 Race?'];   // D-pad up / right / down / left, keyboard T + 1-4
 const CODE_ALPHA = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 export const cleanCode = s => (s || '').toUpperCase().split('').filter(c => CODE_ALPHA.includes(c)).join('').slice(0, 6);
 const SEND_HZ = 15, DELAY = 0.12, EXTRA = 0.15;
@@ -17,7 +17,7 @@ export function initNet(g){   // g: {THREE, scene, camera, S, bike, buildBikeRid
   const hud = document.createElement('div'); hud.id = 'mpHud'; hud.style.cssText = 'position:fixed;left:50%;top:64px;transform:translateX(-50%);z-index:55;font:600 13px/1.35 "Barlow Condensed",sans-serif;color:#fff;background:rgba(20,24,20,0.6);padding:6px 10px;border-radius:6px;display:none;pointer-events:none;text-align:center;max-width:320px'; document.body.appendChild(hud);
   const renderHud = () => { if (!st.ws || st.status !== 'in'){ hud.style.display = 'none'; return; } hud.style.display = 'block';
     const me = `${NAME_A[g.myName()[0]]} ${NAME_B[g.myName()[1]]}`;
-    hud.innerHTML = `ROOM <b style="letter-spacing:2px">${st.code}</b>${st.locked ? ' 🔒' : ''} · ${st.peers.size + 1}/8<br><small>${me}${st.id === st.host ? ' (host)' : ''} + ${[...st.peers.values()].map(p => p.label).join(", ")} · Emotes: keys 1–6</small>`; };
+    hud.innerHTML = `ROOM <b style="letter-spacing:2px">${st.code}</b>${st.locked ? ' 🔒' : ''} · ${st.peers.size + 1}/8<br><small>${me}${st.id === st.host ? ' (host)' : ''} + ${[...st.peers.values()].map(p => p.label).join(", ")} · Emotes (stopped or on a lift): T + 1–4 · D-pad</small>`; };
   // ---- remote riders
   const tagTex = (text, sub) => { const cv = document.createElement('canvas'); cv.width = 256; cv.height = 64; const c = cv.getContext('2d');
     c.fillStyle = 'rgba(0,0,0,0.55)'; c.beginPath(); c.roundRect ? c.roundRect(4, 8, 248, 48, 12) : c.rect(4, 8, 248, 48); c.fill();

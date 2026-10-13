@@ -206,7 +206,7 @@ Settings → **Graphics**: Low / Medium / High / Max. The setting is saved, and 
 
 ## Multiplayer (private rooms)
 Main menu (or pause menu) → **Multiplayer** → *Create room* gives a 6-character code; friends choose *Join with code* and type it.
-Up to 8 riders see each other ride (smoothed), with their bikes/skins and preset name tags. Press **1–6** while riding for emotes.
+Up to 8 riders see each other ride (smoothed), with their bikes/skins and preset name tags. 4 emotes (👍 🔥 ⏳ 🏁) while stopped or on a lift: keyboard **T + 1–4**, controller **D-pad** (up/right/down/left); 1–6 stay teleports.
 There is no chat: names and emotes are presets, rooms are private by code, the host can lock the room or remove riders, and
 nothing is stored. If the server can't be reached the game just stays single-player. The server lives in `server/` (see its README).
 

@@ -31,12 +31,16 @@ const G_AIR = 9.81*1.35;   // heavier feel in the air: realistic MTB airtime (~0
 let seed = 7; const rnd = () => (seed = (seed*16807) % 2147483647) / 2147483647;
 
 // ---------- settings (quality, inverts, volume) ----------
-const SETTINGS = Object.assign({gfx:'low', tod:'noon', fpsOn:false, quality:'med', invertY:false, invertX:false, volume:0.8, musicOn:true, musicVol:0.5}, LS.get('trailDescent.settings', {}));
+const SETTINGS = Object.assign({gfx:'low', tod:'noon', fpsOn:false, invertY:false, invertX:false, volume:0.8, musicOn:true, musicVol:0.5}, LS.get('trailDescent.settings', {}));
 const saveSettings = () => LS.set('trailDescent.settings', SETTINGS);
 const QUALITY = { low:{pr:0.75, shadow:0, tex:256, grassR:0, grassCell:2, post:false, rocks:10, bushes:10},
                   med:{pr:1.0, shadow:1024, tex:256, grassR:38, grassCell:1.0, post:false, rocks:22, bushes:26},
                   high:{pr:1.5, shadow:2048, tex:512, grassR:55, grassCell:0.75, post:true, rocks:34, bushes:40} };
-let Q = QUALITY[SETTINGS.quality] || QUALITY.med;
+// one Graphics setting: the old separate Quality row is folded in (Low/Medium = the old default "med" detail, High/Max = "high").
+// Old saves: the quality key is simply dropped (Graphics already decides everything; gfx.js overrides pixel ratio/shadows/grass).
+if ('quality' in SETTINGS){ delete SETTINGS.quality; saveSettings(); }
+const GFX_Q = {low:'med', medium:'med', high:'high', max:'high'};
+let Q = QUALITY[GFX_Q[SETTINGS.gfx || 'low']] || QUALITY.med;
 // ---------- Renderer / scene ----------
 const renderer = new THREE.WebGLRenderer({antialias:(SETTINGS.gfx || 'low') === 'low', powerPreference:(SETTINGS.gfx || 'low') === 'low' ? 'default' : 'high-performance'});   // Medium+ anti-alias in post (SMAA), so no MSAA back buffer
 renderer.setPixelRatio(Math.min(devicePixelRatio, Q.pr));
@@ -71,11 +75,6 @@ function setGfx(d, wrap){ const i = GFX_L.indexOf(SETTINGS.gfx || 'low'); let k 
   SETTINGS.gfx = GFX_L[k]; saveSettings(); toast(`Graphics: ${GFX_L[k].toUpperCase()} — reloading…`); setTimeout(() => location.reload(), 700); }
 const TODS = ['morning', 'noon', 'golden'];
 function setTod(d){ const i = TODS.indexOf(SETTINGS.tod || 'noon'), k = (i + d + 3) % 3; SETTINGS.tod = TODS[k]; saveSettings(); if ((SETTINGS.gfx || 'low') === 'low'){ toast('Time of day applies on Graphics Medium and up'); return; } toast(`Time of day: ${TODS[k]} — reloading…`); setTimeout(() => location.reload(), 700); }
-function applyQuality(name){ SETTINGS.quality = name; saveSettings(); Q = QUALITY[name];
-  if (!GFX) renderer.setPixelRatio(Math.min(devicePixelRatio, Q.pr)); renderer.setSize(innerWidth, innerHeight); if (GFX) GFX.resize();
-  renderer.shadowMap.enabled = sun.castShadow = Q.shadow > 0; if (Q.shadow){ sun.shadow.mapSize.set(Q.shadow, Q.shadow); if (sun.shadow.map){ sun.shadow.map.dispose(); sun.shadow.map = null; } }
-  scene.traverse(o => { if (o.material) [].concat(o.material).forEach(m => m.needsUpdate = true); });
-  setupPost(); grassField.rebuild(true); toast(`Quality: ${name.toUpperCase()} (texture detail applies after reload)`); }
 // sky: gradient dome with atmospheric haze toward the horizon, a sun disc and glow (fog matches the horizon colour)
 { const g = new THREE.SphereGeometry(4000, 32, 16);
   const m = new THREE.ShaderMaterial({side:THREE.BackSide, depthWrite:false, fog:false, uniforms:{uSun:{value:SUN_DIR}},
@@ -491,8 +490,12 @@ function crash(reason){ S.lastCrash = reason; sfxCrash(); endParkLine();
 }
 function showOverlay(title,msg){ $('overlay').classList.remove('hidden'); $('overlayBox').querySelector('h1').textContent=title; $('overlayMsg').innerHTML=msg; }
 function togglePause(){ if (S.state!=='riding' || shopOpen || bigMap.open) return; S.paused=!S.paused; if (S.paused) openMenu('pause'); else closeMenu(); }
+let emoteArm = 0;
 function onPress(code){
-  if (/^Digit[1-6]$/.test(code) && NET && NET.st.status === 'in' && !menu.open){ NET.emote(+code.slice(5) - 1); return; }
+  if (NET && NET.st.status === 'in' && !menu.open && !bigMap.open && !shopOpen && (S.lift || (S.speed||0)*3.6 < 3)){   // emotes: only when (nearly) stopped or on a lift
+    if (code === 'KeyT'){ emoteArm = performance.now() + 2500; toast('Emote: 1 👍  2 🔥  3 ⏳  4 🏁'); return; }
+    if (/^Digit[1-4]$/.test(code) && (keys.KeyT || performance.now() < emoteArm)){ emoteArm = 0; NET.emote(+code.slice(5) - 1); return; }
+    if (['DU','DR','DD','DL'].includes(code)){ NET.emote({DU:0, DR:1, DD:2, DL:3}[code]); return; } }
   if (S.lift){ if (code==='A'||code==='Enter'||code==='Space') S.lift.d = 1e9; return; }   // skip the chairlift ride
   if (shopOpen){ shopKey(code); return; }
   if (bigMap.open){ mapKey(code); return; }
@@ -1072,10 +1075,9 @@ const PAGES = {
   trails: () => ({title:RAMP ? 'RAMPAGE LINES' : 'TRAILS', items:[...trailItems(), ...(RAMP ? [] : [{label:'Dirt Jump Park', sub:'Pro line · always open', act:() => { spotI = spots.findIndex(s => s.name === 'Dirt Jump Park'); startRide(); }}]), {label:'‹ Back', act:back}]}),
   settings: () => ({title:'SETTINGS', items:[
     {label:'Cloud Save', value:CLOUD ? ({synced:'SYNCED', offline:'OFFLINE', idle:'…'})[CLOUD.st.status] || '' : 'OFF', sub:'Your save code, restore on another browser', act:() => go('cloud')},
-    {label:'Graphics', value:(SETTINGS.gfx||'low').toUpperCase(), sub:'Low = classic look · Medium / High / Max = HDR sky, PBR textures, shadows, post FX (reloads)', adj:d => setGfx(d), act:() => setGfx(1, true)},
+    {label:'Graphics', value:(SETTINGS.gfx||'low').toUpperCase(), sub:'Low = classic look · Medium / High / Max = HDR sky, PBR textures, shadows, post FX, more detail (reloads)', adj:d => setGfx(d), act:() => setGfx(1, true)},
     {label:'FPS counter', value:ON(SETTINGS.fpsOn), adj:() => { SETTINGS.fpsOn = !SETTINGS.fpsOn; saveSettings(); }, act:() => { SETTINGS.fpsOn = !SETTINGS.fpsOn; saveSettings(); }},
     {label:'Time of day', value:({morning:'MORNING', noon:'NOON', golden:'GOLDEN HOUR'})[SETTINGS.tod || 'noon'], sub:'Graphics Medium and up (reloads)', adj:d => setTod(d), act:() => setTod(1)},
-    {label:'Quality', value:SETTINGS.quality.toUpperCase(), adj:d => { const q = ['low','med','high'], k = Math.max(0, Math.min(2, q.indexOf(SETTINGS.quality) + d)); if (q[k] !== SETTINGS.quality) applyQuality(q[k]); }, act:() => { const q = ['low','med','high']; applyQuality(q[(q.indexOf(SETTINGS.quality)+1)%3]); }},
     {label:'Music', value:ON(SETTINGS.musicOn), adj:() => setMusicOn(!SETTINGS.musicOn), act:() => setMusicOn(!SETTINGS.musicOn)},
     {label:'Music volume', value:PCT(SETTINGS.musicVol), adj:d => { SETTINGS.musicVol = Math.max(0, Math.min(1, Math.round((SETTINGS.musicVol + d*0.1)*10)/10)); saveSettings(); musicVol(); }},
     {label:'Sound volume', value:PCT(SETTINGS.volume), sub:'sound effects (0% = mute)', adj:d => { SETTINGS.volume = Math.max(0, Math.min(1, Math.round((SETTINGS.volume + d*0.1)*10)/10)); saveSettings(); setSfxVolume(SETTINGS.volume); }},
@@ -1089,7 +1091,7 @@ const PAGES = {
       items.push({label:'Create room', sub:st.status === 'connecting' ? 'Connecting…' : 'Get a private 6-character code to share with friends', act:() => { NET.create().then(() => renderMenu()); renderMenu(); }});
       items.push({label:'Join with code', sub:'Type the code your friend gives you', act:() => askCode()}); }
     else {
-      items.push({label:'Room code', value:st.code, sub:`${st.peers.size + 1}/8 riders · share this code (in person / family chat). Press 1–6 while riding for emotes.`, act:() => {}});
+      items.push({label:'Room code', value:st.code, sub:`${st.peers.size + 1}/8 riders · share this code (in person / family chat). Emotes when stopped or on a lift: T + 1–4 (controller: D-pad).`, act:() => {}});
       if (host) items.push({label:'Lock room', value:ON(st.locked), sub:'When locked, nobody new can join', adj:() => NET.lock(!st.locked), act:() => NET.lock(!st.locked)});
       if (host) for (const p of st.peers.values()) items.push({label:`Remove ${p.label}`, sub:'Kick this rider from the room', act:() => NET.kick(p.id)});
       items.push({label:'Leave room', act:() => { NET.leave(); renderMenu(); }}); }

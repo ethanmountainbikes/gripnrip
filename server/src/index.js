@@ -9,7 +9,7 @@ const ALPHA = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';   // no 0/O, 1/I/L
 const CODE_RE = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$/;
 const MAX_PLAYERS = 8, MAX_RATE = 30;          // msgs per second per rider
 // preset lists live in the client; the server only checks index ranges
-export const LIMITS = { nameA: 32, nameB: 32, emote: 12, skinCat: 6, skinVal: 32, trick: 32, world: 2 };
+export const LIMITS = { nameA: 32, nameB: 32, emote: 4, skinCat: 6, skinVal: 32, trick: 32, world: 2 };
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type', 'Cache-Control': 'no-store' };
 export { Store } from './store.js';
 const json = (o, s = 200) => new Response(JSON.stringify(o), { status: s, headers: { 'Content-Type': 'application/json', ...CORS } });
