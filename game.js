@@ -29,14 +29,14 @@ const G_AIR = 9.81*1.35;   // heavier feel in the air: realistic MTB airtime (~0
 let seed = 7; const rnd = () => (seed = (seed*16807) % 2147483647) / 2147483647;
 
 // ---------- settings (quality, inverts, volume) ----------
-const SETTINGS = Object.assign({gfx:'low', tod:'noon', quality:'med', invertY:false, invertX:false, volume:0.8, musicOn:true, musicVol:0.5}, LS.get('trailDescent.settings', {}));
+const SETTINGS = Object.assign({gfx:'low', tod:'noon', fpsOn:false, quality:'med', invertY:false, invertX:false, volume:0.8, musicOn:true, musicVol:0.5}, LS.get('trailDescent.settings', {}));
 const saveSettings = () => LS.set('trailDescent.settings', SETTINGS);
 const QUALITY = { low:{pr:0.75, shadow:0, tex:256, grassR:0, grassCell:2, post:false, rocks:10, bushes:10},
                   med:{pr:1.0, shadow:1024, tex:256, grassR:38, grassCell:1.0, post:false, rocks:22, bushes:26},
                   high:{pr:1.5, shadow:2048, tex:512, grassR:55, grassCell:0.75, post:true, rocks:34, bushes:40} };
 let Q = QUALITY[SETTINGS.quality] || QUALITY.med;
 // ---------- Renderer / scene ----------
-const renderer = new THREE.WebGLRenderer({antialias:true});
+const renderer = new THREE.WebGLRenderer({antialias:(SETTINGS.gfx || 'low') === 'low', powerPreference:(SETTINGS.gfx || 'low') === 'low' ? 'default' : 'high-performance'});   // Medium+ anti-alias in post (SMAA), so no MSAA back buffer
 renderer.setPixelRatio(Math.min(devicePixelRatio, Q.pr));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = Q.shadow > 0; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -70,7 +70,7 @@ function setGfx(d, wrap){ const i = GFX_L.indexOf(SETTINGS.gfx || 'low'); let k 
 const TODS = ['morning', 'noon', 'golden'];
 function setTod(d){ const i = TODS.indexOf(SETTINGS.tod || 'noon'), k = (i + d + 3) % 3; SETTINGS.tod = TODS[k]; saveSettings(); if ((SETTINGS.gfx || 'low') === 'low'){ toast('Time of day applies on Graphics Medium and up'); return; } toast(`Time of day: ${TODS[k]} — reloading…`); setTimeout(() => location.reload(), 700); }
 function applyQuality(name){ SETTINGS.quality = name; saveSettings(); Q = QUALITY[name];
-  renderer.setPixelRatio(Math.min(devicePixelRatio, Q.pr)); renderer.setSize(innerWidth, innerHeight);
+  if (!GFX) renderer.setPixelRatio(Math.min(devicePixelRatio, Q.pr)); renderer.setSize(innerWidth, innerHeight); if (GFX) GFX.resize();
   renderer.shadowMap.enabled = sun.castShadow = Q.shadow > 0; if (Q.shadow){ sun.shadow.mapSize.set(Q.shadow, Q.shadow); if (sun.shadow.map){ sun.shadow.map.dispose(); sun.shadow.map = null; } }
   scene.traverse(o => { if (o.material) [].concat(o.material).forEach(m => m.needsUpdate = true); });
   setupPost(); grassField.rebuild(true); toast(`Quality: ${name.toUpperCase()} (texture detail applies after reload)`); }
@@ -863,6 +863,7 @@ function frame(){
   skyDome.position.copy(camera.position);
   if (!flyF){ sun.position.set(S.x+30, S.y+60, S.z+20); sun.target.position.set(S.x, S.y, S.z-10); }
   if (GFX) GFX.render(dt); else if (composer) composer.render(); else renderer.render(scene, camera);
+  fpsMeter(dt);
   // HUD
   const kmh = S.speed*3.6; S.maxKmh = Math.max(S.maxKmh, kmh);
   const shownKmh = Math.max(0, kmh - 5);   // HUD only: display reads 5 km/h under the real speed
@@ -1035,6 +1036,12 @@ function setMusicOn(on){ SETTINGS.musicOn = on; saveSettings(); if (on){ if (!mu
 
 // ---------- menus: main menu (flyover), trails, settings, credits, pause ----------
 const menu = { open:false, page:'main', sel:0, stack:[], repeatT:0, fly:0 };
+// on-screen FPS counter (Settings → FPS counter); shows the governor's render scale on Medium and up
+const fpsEl = document.createElement('div'); fpsEl.id = 'fpsMeter'; fpsEl.style.cssText = 'position:fixed;left:50%;top:44px;transform:translateX(-50%);z-index:60;font:600 12px/1.2 ui-monospace,monospace;color:#e8f5e0;background:rgba(0,0,0,0.45);padding:3px 8px;border-radius:4px;pointer-events:none;display:none'; document.body.appendChild(fpsEl);
+const fpsM = {acc:0, n:0, worst:0};
+function fpsMeter(dt){ if (!SETTINGS.fpsOn){ if (fpsEl.style.display !== 'none') fpsEl.style.display = 'none'; return; } fpsEl.style.display = 'block';
+  fpsM.acc += dt; fpsM.n++; fpsM.worst = Math.max(fpsM.worst, dt);
+  if (fpsM.acc >= 0.5){ const f = fpsM.n/fpsM.acc; fpsEl.textContent = `${f.toFixed(0)} FPS · ${(fpsM.acc/fpsM.n*1000).toFixed(1)} ms · worst ${(fpsM.worst*1000).toFixed(0)} ms` + (GFX && GFX.gov ? ` · ${(SETTINGS.gfx || '').toUpperCase()} ${Math.round(GFX.gov.rs*100)}% scale` : ''); fpsM.acc = 0; fpsM.n = 0; fpsM.worst = 0; } }
 const ON = v => v ? 'ON' : 'OFF', PCT = v => Math.round(v*100) + '%';
 function trailItems(){ return trails.map((tr, i) => { const d = DIFF[tr.diff], open = isOpen(i);
   return {label:`<span class="dIcon" style="color:${d.color === '#111' ? '#e8e2d0' : d.color}">${d.icon}</span> ${open ? '' : '🔒 '}${tr.name}`, sub:`${d.label} · ${tr.type}${open ? '' : tr.unlockAny ? ' · finish any other Rampage line to unlock' : ' · finish it once to unlock'}`, disabled:!open, act:() => { spotI = i; startRide(); }}; }); }
@@ -1049,6 +1056,7 @@ const PAGES = {
   trails: () => ({title:RAMP ? 'RAMPAGE LINES' : 'TRAILS', items:[...trailItems(), ...(RAMP ? [] : [{label:'Dirt Jump Park', sub:'Pro line · always open', act:() => { spotI = spots.findIndex(s => s.name === 'Dirt Jump Park'); startRide(); }}]), {label:'‹ Back', act:back}]}),
   settings: () => ({title:'SETTINGS', items:[
     {label:'Graphics', value:(SETTINGS.gfx||'low').toUpperCase(), sub:'Low = classic look · Medium / High / Max = HDR sky, PBR textures, shadows, post FX (reloads)', adj:d => setGfx(d), act:() => setGfx(1, true)},
+    {label:'FPS counter', value:ON(SETTINGS.fpsOn), adj:() => { SETTINGS.fpsOn = !SETTINGS.fpsOn; saveSettings(); }, act:() => { SETTINGS.fpsOn = !SETTINGS.fpsOn; saveSettings(); }},
     {label:'Time of day', value:({morning:'MORNING', noon:'NOON', golden:'GOLDEN HOUR'})[SETTINGS.tod || 'noon'], sub:'Graphics Medium and up (reloads)', adj:d => setTod(d), act:() => setTod(1)},
     {label:'Quality', value:SETTINGS.quality.toUpperCase(), adj:d => { const q = ['low','med','high'], k = Math.max(0, Math.min(2, q.indexOf(SETTINGS.quality) + d)); if (q[k] !== SETTINGS.quality) applyQuality(q[k]); }, act:() => { const q = ['low','med','high']; applyQuality(q[(q.indexOf(SETTINGS.quality)+1)%3]); }},
     {label:'Music', value:ON(SETTINGS.musicOn), adj:() => setMusicOn(!SETTINGS.musicOn), act:() => setMusicOn(!SETTINGS.musicOn)},
@@ -1381,7 +1389,7 @@ teleport(spotI, true);
 window.__features = features; window.__respawn = () => respawnSafe(); window.__game = S; window.__readInput = readInput; window.__groundH = groundH; window.__lift = i => startLift(i); window.__world = { LIFTS, connectors, trails, features, spots, PARK, SHOP, terrainH, featH, isDirt, nearTrails, base, inPark };
 window.__BR = BR; window.__teleport = i => teleport(i); window.__unlocked = unlocked; window.__isOpen = isOpen; window.__chunks = () => chunks.size; window.__renderer = renderer; window.__place = (x, z, yaw) => { placeAt(x, z, yaw); S.air = false; };
 window.__sim = (secs, inp) => { const h=1/120; const base={steer:0,pedal:0,brake:0,jump:false,tx:0,ty:0}; for(let t=0;t<secs;t+=h){ step(h, Object.assign({}, base, typeof inp==='function'?inp(t):inp)); trackWorld(h); } return {x:S.x, z:S.z, kmh:S.speed*3.6, air:S.air, lives:S.lives, clean:S.clean, score:S.score}; };
-if (SETTINGS.gfx && SETTINGS.gfx !== 'low') import('./gfx.js').then(m => { GFX = m.initGfx({level:SETTINGS.gfx, renderer, scene, camera, sun, SUN_DIR, skyDome, TEX, terrainMat, trunkMat, frameMat, RAMP, S, groundH, terrainH, getCam:() => camMode, toast, tod:SETTINGS.tod, coneG, trunkG, bushG, rockG, folMat, bushMat, rockMat, farU, farMesh:FARMESH, grassMesh:grassField.mesh, chunks, treesInCell, TCELL, HALF, LOAD_R, isDirt, featH, trailDist,
+if (SETTINGS.gfx && SETTINGS.gfx !== 'low') import('./gfx.js').then(m => { GFX = m.initGfx({level:SETTINGS.gfx, renderer, scene, camera, sun, SUN_DIR, skyDome, TEX, terrainMat, trunkMat, frameMat, RAMP, S, groundH, terrainH, getCam:() => camMode, toast, tod:SETTINGS.tod, coneG, trunkG, bushG, rockG, folMat, bushMat, rockMat, farU, farMesh:FARMESH, grassMesh:grassField.mesh, chunks, treesInCell, TCELL, HALF, LOAD_R, isDirt, featH, trailDist, groundColor,
     setGrass:(r, c) => { Q = {...Q, grassR:r, grassCell:c}; grassField.rebuild(true); }}); composer = null; window.__gfx = GFX; }).catch(e => { console.warn('graphics upgrade failed, using Low', e); });
 window.__gfxLevel = SETTINGS.gfx;
 frame();window.__shop = { open: openShop, key: shopKey, close: closeShop };

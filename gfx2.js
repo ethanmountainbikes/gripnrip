@@ -46,12 +46,13 @@ function quad(arr, a, b, c, d, n){ // a,b,c,d: [x,y,z,u,v]
 const finish = (A) => { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(A.p, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(A.n, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(A.u, 2)); g.computeBoundingSphere(); return g; };
 // conifer in the same unit space as the old cone stack (y 0..1, radius <= 1): 12 whorls of drooping branch cards
 function coniferCards(){ const A = {p:[], n:[], u:[]};
-  for (let k = 0; k < 13; k++){ const y = 0.03 + k*0.075, R = Math.max(0.12, (1.02 - y)*1.0), nb = Math.max(4, Math.round(9 - k*0.35));
-    for (let j = 0; j < nb; j++){ const a = k*0.83 + j/nb*6.283 + Math.sin(k*3.1 + j)*0.2, dx = Math.cos(a), dz = Math.sin(a), px = -dz, pz = dx, wd = 0.22*R + 0.06, dr = R*(0.3 + 0.08*Math.sin(j + k));
-      const nn = [dx*0.35, 0.94, dz*0.35];
+  // 12 whorls of drooping branch cards, tapering to a pointed crown (no flat top), plus a spire of crossed tapered cards
+  for (let k = 0; k < 12; k++){ const y = 0.03 + k*0.068, R = Math.max(0.05, Math.pow(1.0 - y, 1.15)*1.02), nb = Math.max(3, Math.round(8 - k*0.4));
+    for (let j = 0; j < nb; j++){ const a = k*0.83 + j/nb*6.283 + Math.sin(k*3.1 + j)*0.2, dx = Math.cos(a), dz = Math.sin(a), px = -dz, pz = dx, wd = 0.22*R + 0.05, dr = R*(0.32 + 0.08*Math.sin(j + k)) + 0.02;
+      const nn = [dx*0.62, 0.78, dz*0.62];
       quad(A, [px*wd*0.3, y + 0.02, pz*wd*0.3, 0, 0], [dx*R + px*wd, y - dr, dz*R + pz*wd, 1, 0], [dx*R - px*wd, y - dr, dz*R - pz*wd, 1, 1], [-px*wd*0.3, y + 0.02, -pz*wd*0.3, 0, 1], nn); } }
-  for (let j = 0; j < 3; j++){ const a = j*1.05, dx = Math.cos(a)*0.13, dz = Math.sin(a)*0.13;   // leader
-    quad(A, [-dx, 0.86, -dz, 0, 0], [-dx, 1.03, -dz, 1, 0], [dx, 1.03, dz, 1, 1], [dx, 0.86, dz, 0, 1], [0, 0.3, 1]); }
+  for (let j = 0; j < 3; j++){ const a = j*1.047, dx = Math.cos(a), dz = Math.sin(a), w0 = 0.11, w1 = 0.012;   // spire: tapered crossed cards, branch texture sideways
+    quad(A, [-dx*w0, 0.74, -dz*w0, 0.15, 0.0], [-dx*w1, 1.06, -dz*w1, 0.95, 0.42], [dx*w1, 1.06, dz*w1, 0.95, 0.58], [dx*w0, 0.74, dz*w0, 0.15, 1.0], [dz*0.5, 0.85, -dx*0.5]); }
   return finish(A); }
 // round clump of crossed leaf cards (bush, unit size like the old bush: radius ~1, centred at y 0.4)
 function clumpCards(n = 14, flat = 0.75){ const A = {p:[], n:[], u:[]}; let s = 3;
@@ -143,13 +144,13 @@ export function showcase(o, P, ctx){
         vec3 wp = ic + rgt*position.x*sx + vec3(0., position.y*sy, 0.);
         vec4 mvPosition = viewMatrix*vec4(wp, 1.0); gl_Position = projectionMatrix*mvPosition;
         if (distance(ic.xz, uFar.xy) < uFar.z - 30.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);`); };
-    const MAXI = 90000, mesh = new THREE.InstancedMesh(ig, im, MAXI); mesh.count = 0; mesh.frustumCulled = false; scene.add(mesh);
+    const MAXI = 22000, mesh = new THREE.InstancedMesh(ig, im, MAXI); mesh.count = 0; mesh.frustumCulled = false; scene.add(mesh);
     const cells = []; const R = Math.ceil((o.HALF + 400)/o.TCELL); for (let i = -R; i < R; i++) for (let j = -R; j < R; j++) cells.push([i, j]);
     cells.sort((a, b) => Math.hypot(a[0], a[1]) - Math.hypot(b[0], b[1]));
-    const M = new THREE.Matrix4(), q = new THREE.Quaternion(), c = new THREE.Color(); let ci = 0;
-    imp = {step(budget){ const t0 = performance.now(); while (ci < cells.length && performance.now() - t0 < budget && mesh.count < MAXI){ const [i, j] = cells[ci++];
-      for (const t of o.treesInCell(i, j)){ if (mesh.count >= MAXI) break; const s = t.h; M.compose(new THREE.Vector3(t.x, t.y, t.z), q, new THREE.Vector3(s, s, s)); mesh.setMatrixAt(mesh.count, M); c.setHSL(0.27 + t.hue*0.07, 0.3, 0.75 + ((t.hue*7)%1)*0.2); mesh.setColorAt(mesh.count++, c); } }
-      mesh.instanceMatrix.needsUpdate = true; if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true; }}; }
+    const M = new THREE.Matrix4(), q = new THREE.Quaternion(), c = new THREE.Color(), vp = new THREE.Vector3(), vs = new THREE.Vector3(); let ci = 0; out.impRT = rt; out.impMesh = mesh;
+    imp = {step(budget){ if (ci >= cells.length || mesh.count >= MAXI) return; const t0 = performance.now(), n0 = mesh.count; while (ci < cells.length && performance.now() - t0 < budget && mesh.count < MAXI){ const [i, j] = cells[ci++];
+      for (const t of o.treesInCell(i, j)){ if (mesh.count >= MAXI) break; const s = t.h; M.compose(vp.set(t.x, t.y, t.z), q, vs.set(s, s, s)); mesh.setMatrixAt(mesh.count, M); c.setHSL(0.27 + t.hue*0.07, 0.3, 0.75 + ((t.hue*7)%1)*0.2); mesh.setColorAt(mesh.count++, c); } }
+      if (mesh.count === n0) return; mesh.instanceMatrix.needsUpdate = true; if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true; }}; }
 
   // ---- dramatic distant terrain: ridged ranges beyond the map, snow caps / sandstone banding, rim light
   if (o.farMesh){ o.farMesh.visible = false;
@@ -157,10 +158,12 @@ export function showcase(o, P, ctx){
     const edge0 = o.HALF + 120;
     for (let r = 0; r < N; r++) for (let k = 0; k < N; k++){ const x = -FAR + k*S, z = -FAR + r*S, e = Math.max(Math.abs(x), Math.abs(z)) - edge0; let h = o.terrainH(x, z);
       if (e > 0){ const m = sm(0, 900, e), rd = ridged(x/1500 + 11, z/1500 - 7, 6);
-        if (RAMP){ const raw = rd*520*m; h += Math.round(raw/38)*38*0.7 + raw*0.3; } else h += m*(rd*rd*1500 + 120*vnoise(x/300, z/300)); }
+        if (RAMP){ const raw = rd*520*m; h += Math.round(raw/38)*38*0.7 + raw*0.3; } else h += sm(300, 2200, e)*(rd*rd*620 + 60*vnoise(x/300, z/300)); }
       H[r*N + k] = h; pos[(r*N+k)*3] = x; pos[(r*N+k)*3+1] = h - 0.6; pos[(r*N+k)*3+2] = z; }
     for (let r = 0; r < N; r++) for (let k = 0; k < N; k++){ const i = r*N + k, h = H[i], hx = H[r*N + Math.min(N-1, k+1)] - H[r*N + Math.max(0, k-1)], hz = H[Math.min(N-1, r+1)*N + k] - H[Math.max(0, r-1)*N + k], ny = 2*S/Math.hypot(hx, 2*S, hz), x = -FAR + k*S, z = -FAR + r*S;
       if (RAMP){ const band = 0.5 + 0.5*Math.sin(h*0.11 + vnoise(x/400, z/400)*2.5), b2 = 0.5 + 0.5*Math.sin(h*0.37); c.setRGB(0.62 + 0.18*band + 0.06*b2, 0.30 + 0.12*band + 0.04*b2, 0.18 + 0.08*band); if (ny < 0.7) c.multiplyScalar(0.85 + 0.15*band); }
+      else if (o.groundColor){ o.groundColor(x, z, h, ny, false, c); { const l = 0.3*c.r + 0.59*c.g + 0.11*c.b; c.lerp(new THREE.Color(l, l, l), 0.35); c.lerp(new THREE.Color(0.62, 0.63, 0.66), sm(0.8, 0.5, ny)*0.5); }
+        const snow = Math.min(1, sm(330 + 90*vnoise(x/250, z/250), 470, h)*sm(0.22, 0.55, ny) + sm(650, 800, h)*0.8); c.lerp(new THREE.Color(0.95, 0.97, 1.0), snow); }
       else { const rock = sm(0.86, 0.62, ny), alt = sm(250, 650, h); c.setRGB(0.27, 0.40, 0.18).lerp(new THREE.Color(0.34, 0.38, 0.24), alt).lerp(new THREE.Color(0.40, 0.39, 0.37), Math.max(rock, alt*0.7));
         const snow = sm(520 + 120*vnoise(x/250, z/250), 760, h)*sm(0.45, 0.75, ny) + sm(950, 1150, h)*0.6; c.lerp(new THREE.Color(0.93, 0.95, 0.98), Math.min(1, snow)); }
       col[i*3] = c.r; col[i*3+1] = c.g; col[i*3+2] = c.b; }
@@ -190,7 +193,7 @@ export function showcase(o, P, ctx){
 
   // ---- PBR grass colour: dark olive roots to warm sunlit tips
   if (o.grassMesh){ const ca = o.grassMesh.geometry.attributes.color, pa = o.grassMesh.geometry.attributes.position;
-    for (let i = 0; i < ca.count; i++){ const t = Math.min(1, pa.getY(i)/0.42); ca.setXYZ(i, 0.14 + 0.36*t, 0.22 + 0.30*t, 0.07 + 0.10*t); } ca.needsUpdate = true; }
+    for (let i = 0; i < ca.count; i++){ const t = Math.min(1, pa.getY(i)/0.42); ca.setXYZ(i, 0.14 + 0.30*t, 0.19 + 0.24*t, 0.08 + 0.10*t); } ca.needsUpdate = true; }
   // ---- trail edges: break the dirt/grass boundary with texture noise (no ribbon edge)
   if (o.terrainMat){ const prev = o.terrainMat.onBeforeCompile; o.terrainMat.onBeforeCompile = sh => { prev(sh);
       sh.fragmentShader = sh.fragmentShader.replace('vec4 w = vSplat / max(1e-3, vSplat.x + vSplat.y + vSplat.z + vSplat.w); vec2 P = vTWP.xz;', `vec4 w = vSplat / max(1e-3, vSplat.x + vSplat.y + vSplat.z + vSplat.w); vec2 P = vTWP.xz;
@@ -207,7 +210,7 @@ export function showcase(o, P, ctx){
   out.csm = csm;
 
   // ---- god rays: screen-space radial blur of the bright sky around the sun
-  out.godrays = P.godrays ? {uniforms:{tDiffuse:{value:null}, uSun:{value:new THREE.Vector2(0.5, 0.5)}, uAmt:{value:0}, uCol:{value:new THREE.Color(T.col)}},
+  out.godraysOld = false ? {uniforms:{tDiffuse:{value:null}, uSun:{value:new THREE.Vector2(0.5, 0.5)}, uAmt:{value:0}, uCol:{value:new THREE.Color(T.col)}},
     vertexShader:'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
     fragmentShader:`uniform sampler2D tDiffuse; uniform vec2 uSun; uniform float uAmt; uniform vec3 uCol; varying vec2 vUv;
       void main(){ vec4 base = texture2D(tDiffuse, vUv); if (uAmt < 0.002){ gl_FragColor = base; return; }
@@ -217,13 +220,13 @@ export function showcase(o, P, ctx){
 
   const v3 = new THREE.Vector3();
   out.update = (dt, grPass) => { windU.value += dt; sunV.value.copy(o.SUN_DIR).transformDirection(camera.matrixWorldInverse);
-    if (imp) imp.step(3);
+    if (imp) imp.step(1.5);
     if (out.silhouettes) out.silhouettes.position.set(camera.position.x, 0, camera.position.z);
     if (out.haze){ const cx = camera.position.x, cz = camera.position.z, gy = o.groundH ? o.groundH(cx, cz) : 0; for (const s of out.haze.sheets){ const u = s.userData; u.a += u.sp*dt; s.position.set(cx + Math.cos(u.a)*u.r, gy + u.y, cz + Math.sin(u.a)*u.r); } }
     if (csm){ csm.lightDirection.copy(o.SUN_DIR).negate(); csm.update(); }
     else { const S = o.S; sun.position.set(S.x + o.SUN_DIR.x*120, S.y + o.SUN_DIR.y*120, S.z + o.SUN_DIR.z*120); sun.target.position.set(S.x, S.y, S.z); }
-    if (grPass){ v3.copy(camera.position).addScaledVector(o.SUN_DIR, 5000).project(camera); const front = v3.z < 1, on = Math.max(Math.abs(v3.x), Math.abs(v3.y));
-      grPass.uniforms.uSun.value.set(v3.x*0.5 + 0.5, v3.y*0.5 + 0.5); grPass.uniforms.uAmt.value = front ? (RAMP ? 1.4 : 1.2)*(1 - sm(1.0, 1.8, on)) : 0; } };
-  out.resize = () => {};
+    if (grPass && grPass.uniforms.uSun){ v3.copy(camera.position).addScaledVector(o.SUN_DIR, 5000).project(camera); const front = v3.z < 1, on = Math.max(Math.abs(v3.x), Math.abs(v3.y));
+      grPass.uniforms.uSun.value.set(v3.x*0.5 + 0.5, v3.y*0.5 + 0.5); grPass.uniforms.uAmt.value = !P.godrays ? 0 : front ? (RAMP ? 1.4 : 1.2)*(1 - sm(1.0, 1.8, on)) : 0; } };
+  out.godrayCol = new THREE.Color(T.col); out.resize = () => {};
   return out;
 }

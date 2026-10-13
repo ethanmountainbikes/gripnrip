@@ -9,17 +9,29 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { Sky } from 'three/addons/objects/Sky.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { Lensflare, LensflareElement } from 'three/addons/objects/Lensflare.js';
 import { showcase } from './gfx2.js';
 
+// adaptive quality governor ladder: render scale (x CSS px, capped by devicePixelRatio and the preset's pr) + effect toggles
+const GOV = [
+  {rs:1.5,  bloom:1, gr:1, mb:1, smaa:1, shEvery:1},
+  {rs:1.25, bloom:1, gr:1, mb:1, smaa:1, shEvery:1},
+  {rs:1.1,  bloom:1, gr:1, mb:1, smaa:1, shEvery:1},
+  {rs:1.0,  bloom:1, gr:1, mb:1, smaa:1, shEvery:1},
+  {rs:0.9,  bloom:1, gr:1, mb:0, smaa:1, shEvery:2},
+  {rs:0.85, bloom:1, gr:0, mb:0, smaa:1, shEvery:2},
+  {rs:0.75, bloom:0, gr:0, mb:0, smaa:1, shEvery:2},
+  {rs:0.65, bloom:0, gr:0, mb:0, smaa:1, shEvery:3},
+];
 export const GFX_LEVELS = ['low', 'medium', 'high', 'max'];
 const PRESETS = {
-  medium: {pr:1.0, shadow:2048, shadowR:50, ao:null,   bloom:0.10, smaa:true,  dof:false, mblur:false, flare:false, grassR:40, grassCell:0.9,  dust:500,  envI:0.4, farStep:50, csm:false, godrays:false},
-  high:   {pr:1.5, shadow:4096, shadowR:60, ao:'ssao', bloom:0.14, smaa:true,  dof:true,  mblur:false, flare:true,  grassR:55, grassCell:0.7,  dust:1000, envI:0.45, farStep:35, csm:false, godrays:true},
-  max:    {pr:2.0, shadow:4096, shadowR:55, ao:'gtao', bloom:0.16, smaa:true,  dof:true,  mblur:true,  flare:true,  grassR:70, grassCell:0.55, dust:2400, envI:0.5, farStep:25, csm:false, godrays:true},
+  // pr = render-scale ceiling (x CSS px); gov = governor start step (GOV below). AO passes re-render the whole scene, so they are
+  // off by default; the shadow frustum hugs the rider.
+  medium: {pr:1.0,  gov:3, shadow:2048, shadowR:40, ao:null, bloom:0.10, smaa:true, dof:false, mblur:false, flare:false, grassR:38, grassCell:0.9,  dust:500,  envI:0.4,  farStep:60, csm:false, godrays:false},
+  high:   {pr:1.25, gov:2, shadow:2048, shadowR:40, ao:null, bloom:0.14, smaa:true, dof:true,  mblur:false, flare:true,  grassR:45, grassCell:0.75, dust:900,  envI:0.45, farStep:50, csm:false, godrays:true},
+  max:    {pr:1.5,  gov:1, shadow:2048, shadowR:40, ao:null, bloom:0.16, smaa:true, dof:true,  mblur:true,  flare:true,  grassR:52, grassCell:0.65, dust:1400, envI:0.5,  farStep:40, csm:false, godrays:true},
 };
 // CC0 textures and HDRIs from Poly Haven (polyhaven.com), credited in the Credits menu
 export const GFX_CREDITS = ['Poly Haven (CC0): textures sparse_grass, brown_mud_leaves_01, aerial_rocks_02, bark_brown_02, gravel, aerial_sand, red_dirt_mud_01, dry_riverbed_rock; HDRIs pizzo_pernice_puresky (Mountain), quarry_01_puresky (Rampage)'];
@@ -42,18 +54,18 @@ function upgradeTerrain(mat){ const orig = mat.onBeforeCompile;
       .replace('normal = normalize(normal + (viewMatrix*vec4(tn.x, 0.0, tn.y, 0.0)).xyz*0.7); }', 'vec2 tn2 = texture2D(nD, vTWP.xz*1.7).xy*2.0 - 1.0; tn += tn2*0.5*w2.y; normal = normalize(normal + (viewMatrix*vec4(tn.x, 0.0, tn.y, 0.0)).xyz*0.8); }'); };
   mat.needsUpdate = true; }
 // swap an image into an existing texture, colour-normalised to the procedural one's mean (keeps the world's palette, adds real detail)
-async function swapImage(tex, url, matchColor){
+async function swapImage(tex, url, matchColor, desat = 0){
   const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
   const cv = document.createElement('canvas'); cv.width = img.width; cv.height = img.height; const c = cv.getContext('2d'); c.drawImage(img, 0, 0);
   if (matchColor){ const mean = cv2 => { const g = cv2.getContext ? cv2.getContext('2d') : null; if (!g) return null; const d = g.getImageData(0, 0, cv2.width, cv2.height).data; const m = [0,0,0]; for (let i = 0; i < d.length; i += 4*16){ m[0] += d[i]; m[1] += d[i+1]; m[2] += d[i+2]; } const n = d.length/(4*16); return m.map(v => v/n); };
     const a = mean(cv), b = tex.image && tex.image.getContext ? mean(tex.image) : null;
-    if (b){ const id = c.getImageData(0, 0, cv.width, cv.height), d = id.data, k = [0,1,2].map(j => b[j]/Math.max(1, a[j])); for (let i = 0; i < d.length; i += 4){ d[i] *= k[0]; d[i+1] *= k[1]; d[i+2] *= k[2]; } c.putImageData(id, 0, 0); } }
+    if (b){ const id = c.getImageData(0, 0, cv.width, cv.height), d = id.data, k = [0,1,2].map(j => b[j]/Math.max(1, a[j])); for (let i = 0; i < d.length; i += 4){ d[i] *= k[0]; d[i+1] *= k[1]; d[i+2] *= k[2]; if (desat){ const l = 0.3*d[i] + 0.59*d[i+1] + 0.11*d[i+2]; d[i] += (l - d[i])*desat; d[i+1] += (l - d[i+1])*desat*1.1; d[i+2] += (l - d[i+2])*desat; } } c.putImageData(id, 0, 0); } }
   tex.image = cv; tex.needsUpdate = true; }
 
 export function initGfx(o){
   const P = PRESETS[o.level] || PRESETS.max, {renderer, scene, camera, sun, RAMP} = o;
   patchFog(RAMP);
-  renderer.setPixelRatio(Math.min(devicePixelRatio, P.pr)); renderer.setSize(innerWidth, innerHeight);
+  renderer.setPixelRatio(1); renderer.setSize(innerWidth, innerHeight);
   renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = RAMP ? 0.74 : 0.78; renderer.outputColorSpace = THREE.SRGBColorSpace;
   // ---- sky: physical Sky (Preetham) as the visible background; HDRI (PMREM) for image-based lighting
   const sky = new Sky(); sky.scale.setScalar(4500); const su = sky.material.uniforms;
@@ -85,7 +97,7 @@ export function initGfx(o){
   if (o.frameMat){ o.frameMat.roughness = 0.22; o.frameMat.metalness = 0.45; o.frameMat.envMapIntensity = 1.2; }
   // ---- CC0 PBR textures replace the procedural ones in place (same texture objects, so every shader picks them up)
   const T = o.TEX, set = RAMP ? {grass:'aerial_sand', dirt:'red_dirt_mud_01', rock:'dry_riverbed_rock', gravel:'gravel', bark:'bark_brown_02'} : {grass:'sparse_grass', dirt:'brown_mud_leaves_01', rock:'aerial_rocks_02', gravel:'gravel', bark:'bark_brown_02'};
-  for (const [k, n] of Object.entries(set)) if (T[k]){ swapImage(T[k].map, `tex/${n}_diff.jpg`, true).catch(() => {}); swapImage(T[k].normal, `tex/${n}_nor_gl.jpg`, false).catch(() => {}); }
+  for (const [k, n] of Object.entries(set)) if (T[k]){ swapImage(T[k].map, `tex/${n}_diff.jpg`, true, (k === 'grass' && !RAMP) ? 0.3 : 0).catch(() => {}); swapImage(T[k].normal, `tex/${n}_nor_gl.jpg`, false).catch(() => {}); }
   if (o.trunkMat) new THREE.TextureLoader().load('tex/bark_brown_02_rough.jpg', t => { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(2, 5); o.trunkMat.roughnessMap = t; o.trunkMat.needsUpdate = true; });
   if (o.terrainMat) upgradeTerrain(o.terrainMat);
   // ---- vegetation: denser grass near the rider
@@ -105,45 +117,77 @@ export function initGfx(o){
   const SC = showcase(o, P, {sky}); if (SC.csmSetup){ const f0 = fix; setInterval(SC.csmSetup, 1500); }
   o.flareOff = !!SC.godrays;
   scene.traverse(x => { if (x.material) [].concat(x.material).forEach(m => m.needsUpdate = true); });   // recompile with the new fog / lighting chunks
-  // ---- post-processing chain
+  // ---- post-processing chain (kept short: render → [DOF in cinematic cams] → bloom → ONE merged final pass → SMAA)
+  // The final pass does god rays (24 jittered taps), speed blur, ACES tone mapping, sRGB, vignette and the grade in a single
+  // full-screen draw, replacing three separate passes (god rays, OutputPass, vignette/grade).
   const composer = new EffectComposer(renderer); composer.addPass(new RenderPass(scene, camera));
   let ao = null;
-  if (P.ao === 'gtao'){ ao = new GTAOPass(scene, camera, innerWidth, innerHeight); ao.updateGtaoMaterial({radius:0.6, distanceExponent:1.5, thickness:1.2, scale:1.0}); ao.blendIntensity = 0.85; composer.addPass(ao); }
-  else if (P.ao === 'ssao'){ ao = new SSAOPass(scene, camera, innerWidth, innerHeight); ao.kernelRadius = 0.6; ao.minDistance = 0.0004; ao.maxDistance = 0.02; composer.addPass(ao); }
+  const addAO = kind => { if (ao) return ao; ao = kind === 'gtao' ? new GTAOPass(scene, camera, innerWidth, innerHeight) : new SSAOPass(scene, camera, innerWidth, innerHeight);
+    if (kind === 'gtao'){ ao.updateGtaoMaterial({radius:0.6, distanceExponent:1.5, thickness:1.2, scale:1.0}); ao.blendIntensity = 0.85; } else { ao.kernelRadius = 0.6; ao.minDistance = 0.0004; ao.maxDistance = 0.02; }
+    composer.insertPass(ao, 1); return ao; };
+  if (P.ao) addAO(P.ao);
   let bokeh = null; if (P.dof){ bokeh = new BokehPass(scene, camera, {focus:12, aperture:0.0012, maxblur:0.006}); bokeh.enabled = false; composer.addPass(bokeh); }
   const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), P.bloom, 0.45, 0.9); composer.addPass(bloom);
-  const grPass = SC.godrays ? new ShaderPass(SC.godrays) : null; if (grPass) composer.addPass(grPass);
-  composer.addPass(new OutputPass());
-  // vignette + speed-based radial motion blur (display-referred, after tone mapping)
-  const fin = new ShaderPass({uniforms:{tDiffuse:{value:null}, uBlur:{value:0}, uVig:{value:0.22}},
+  const fin = new ShaderPass({uniforms:{tDiffuse:{value:null}, uExp:{value:renderer.toneMappingExposure}, uBlur:{value:0}, uVig:{value:0.22}, uSun:{value:new THREE.Vector2(0.5, 0.5)}, uAmt:{value:0}, uCol:{value:SC.godrayCol || new THREE.Color(1, 0.95, 0.85)}},
     vertexShader:'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
-    fragmentShader:`uniform sampler2D tDiffuse; uniform float uBlur, uVig; varying vec2 vUv;
+    fragmentShader:`uniform sampler2D tDiffuse; uniform float uBlur, uVig, uExp, uAmt; uniform vec2 uSun; uniform vec3 uCol; varying vec2 vUv;
+      vec3 rrt(vec3 v){ vec3 a = v*(v + 0.0245786) - 0.000090537; vec3 b = v*(0.983729*v + 0.4329510) + 0.238081; return a/b; }
+      vec3 aces(vec3 c){ const mat3 I = mat3(vec3(0.59719, 0.07600, 0.02840), vec3(0.35458, 0.90834, 0.13383), vec3(0.04823, 0.01566, 0.83777));
+        const mat3 O = mat3(vec3(1.60475, -0.10208, -0.00327), vec3(-0.53108, 1.10813, -0.07276), vec3(-0.07367, -0.00605, 1.07602)); c *= uExp/0.6; return clamp(O*rrt(I*c), 0.0, 1.0); }
+      vec3 srgb(vec3 c){ return mix(pow(c, vec3(1.0/2.4))*1.055 - 0.055, c*12.92, vec3(lessThanEqual(c, vec3(0.0031308)))); }
       void main(){ vec2 d = vUv - 0.5; vec3 c = texture2D(tDiffuse, vUv).rgb;
-        if (uBlur > 0.001){ vec3 a = c; float w = 1.0; for (int i = 1; i < 8; i++){ float k = float(i)/8.0; vec2 uv = vUv - d*uBlur*k*smoothstep(0.08, 0.5, length(d)); a += texture2D(tDiffuse, uv).rgb; w += 1.0; } c = a/w; }
+        if (uBlur > 0.001){ vec3 a = c; for (int i = 1; i < 5; i++){ float k = float(i)/5.0; a += texture2D(tDiffuse, vUv - d*uBlur*k*smoothstep(0.08, 0.5, length(d))).rgb; } c = a/5.0; }
+        if (uAmt > 0.002){ float j = fract(52.9829189*fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+          vec2 dl = (vUv - uSun)/24.0*0.9; vec2 uv = vUv - dl*j; float acc = 0.0, dec = 1.0;
+          for (int i = 0; i < 24; i++){ uv -= dl; vec3 s = texture2D(tDiffuse, clamp(uv, 0.0, 1.0)).rgb; acc += smoothstep(0.85, 2.2, dot(s, vec3(0.3, 0.59, 0.11)))*dec; dec *= 0.93; }
+          c += uCol*acc/24.0*uAmt*1.6; }
+        c = srgb(aces(c));
         float v = smoothstep(0.85, 0.25, length(d*vec2(1.1, 1.0))); c *= mix(1.0 - uVig, 1.0, v);
-        float l = dot(c, vec3(0.2126, 0.7152, 0.0722)); c = mix(vec3(l), c, 1.15); c = clamp((c - 0.5)*1.07 + 0.5, 0.0, 1.0); gl_FragColor = vec4(c, 1.0); }`});
+        float l = dot(c, vec3(0.2126, 0.7152, 0.0722)); c = mix(vec3(l), c, 1.08); c = clamp((c - 0.5)*1.07 + 0.5, 0.0, 1.0); gl_FragColor = vec4(c, 1.0); }`});
   composer.addPass(fin);
-  let smaa = null; if (P.smaa){ smaa = new SMAAPass(innerWidth*renderer.getPixelRatio(), innerHeight*renderer.getPixelRatio()); composer.addPass(smaa); }
-  // ---- per frame
-  let acc = 0, frames = 0, lowFor = 0, warned = false; const v = new THREE.Vector3();
-  const fps = {value:0};
+  let smaa = null; if (P.smaa){ smaa = new SMAAPass(innerWidth, innerHeight); composer.addPass(smaa); }
+  // ---- adaptive quality governor: measures frame time, steps render scale + effects down fast and up slowly
+  const DPR = window.devicePixelRatio || 1, feat = {bloom:true, gr:true, mb:true, smaa:true, shadows:true, grass:true, impostors:true, far:true, dof:true};
+  const gov = {step:Math.min(GOV.length - 1, P.gov), locked:false, rs:1, avg:16.7, upOk:0, cool:0, backoff:8, lastUp:-1, t:0};
+  const applyGov = () => { const g = GOV[gov.step]; gov.rs = Math.max(0.5, Math.min(g.rs, P.pr, Math.max(1, DPR)));
+    if (Math.abs(renderer.getPixelRatio() - gov.rs) > 0.01){ renderer.setPixelRatio(gov.rs); composer.setPixelRatio(gov.rs); composer.setSize(innerWidth, innerHeight); }
+    bloom.enabled = !!g.bloom && feat.bloom; if (smaa) smaa.enabled = !!g.smaa && feat.smaa; };
+  applyGov();
+  gov.set = i => { gov.step = Math.max(0, Math.min(GOV.length - 1, i)); applyGov(); };
+  sun.shadow.autoUpdate = false; sun.shadow.needsUpdate = true;
+  // ---- per frame (no allocations)
+  let acc = 0, frames = 0, lowFor = 0, warned = false, fno = 0; const v = new THREE.Vector3();
+  const fps = {value:0, ms:0};
+  const proxy = {uniforms:{uSun:fin.uniforms.uSun, uAmt:fin.uniforms.uAmt}};
   function render(dt){
-    const S = o.S;
+    const S = o.S, g = GOV[gov.step]; fno++;
     if (dust){ const {R, pos, N} = dust.userData, cx = camera.position.x, cz = camera.position.z, gy = o.groundH ? o.groundH(cx, cz) : camera.position.y - 2, t = performance.now()/1000;
       for (let i = 0; i < N; i++){ let x = pos[i*3] + (0.9 + 0.3*Math.sin(i))*dt*1.4, z = pos[i*3+2] + Math.sin(t*0.3 + i)*dt*0.4, y = pos[i*3+1] + Math.sin(t*0.7 + i*1.3)*dt*0.15;
         if (x > R) x -= 2*R; if (z > R) z -= 2*R; if (z < -R) z += 2*R; pos[i*3] = x; pos[i*3+1] = y; pos[i*3+2] = z; }
-      dust.position.set(Math.floor(cx/(2*R))*2*R + R*0, gy - 2, Math.floor(cz/(2*R))*2*R); dust.position.set(cx - ((cx % (2*R)) + 2*R) % (2*R) + R, gy - 2, cz - ((cz % (2*R)) + 2*R) % (2*R) + R);
+      dust.position.set(cx - ((cx % (2*R)) + 2*R) % (2*R) + R, gy - 2, cz - ((cz % (2*R)) + 2*R) % (2*R) + R);
       dust.geometry.attributes.position.needsUpdate = true; }
     if (o.flare){ o.flare.position.copy(camera.position).addScaledVector(o.SUN_DIR, 3000); }
     sky.position.copy(camera.position);
-    if (bokeh){ const cm = o.getCam(), cine = cm >= 5 && S.state === 'riding' && !S.lift; bokeh.enabled = cine; if (cine){ v.set(S.x, S.y + 0.9, S.z); bokeh.uniforms.focus.value = camera.position.distanceTo(v); } }
-    fin.uniforms.uBlur.value = P.mblur ? Math.max(0, Math.min(0.05, ((S.speed || 0)*3.6 - 35)/1400)) : 0;
-    SC.update(dt, grPass);
+    if (bokeh){ const cm = o.getCam(), cine = feat.dof && cm >= 5 && S.state === 'riding' && !S.lift; bokeh.enabled = cine; if (cine){ v.set(S.x, S.y + 0.9, S.z); bokeh.uniforms.focus.value = camera.position.distanceTo(v); } }
+    fin.uniforms.uBlur.value = (P.mblur && g.mb && feat.mb) ? Math.max(0, Math.min(0.05, ((S.speed || 0)*3.6 - 35)/1400)) : 0;
+    fin.uniforms.uExp.value = renderer.toneMappingExposure;
+    SC.update(dt, proxy); if (!(P.godrays && g.gr && feat.gr)) fin.uniforms.uAmt.value = 0;
+    if (feat.shadows && fno % g.shEvery === 0) sun.shadow.needsUpdate = true;
+    if (o.grassMesh) o.grassMesh.visible = feat.grass;
+    if (SC.impMesh) SC.impMesh.visible = feat.impostors; if (SC.farTerrain) SC.farTerrain.visible = feat.far;
     composer.render(dt);
-    // FPS watch on Max: suggest (never force) a lower setting
-    acc += dt; frames++; if (acc >= 1){ fps.value = frames/acc; if (o.level === 'max' && fps.value < 40 && document.visibilityState === 'visible') lowFor += acc; else lowFor = 0; acc = 0; frames = 0;
+    // governor: 1 s windows of real frame time (tab switches / hitches ignored)
+    if (dt < 0.25){ acc += dt; frames++; }
+    if (acc >= 1){ fps.value = frames/acc; fps.ms = acc/frames*1000; gov.t += acc; acc = 0; frames = 0;
+      if (!gov.locked && document.visibilityState === 'visible'){
+        if (fps.ms > 22.2 && gov.step < GOV.length - 1){   // under 45 fps: step down now (two steps if far off)
+          if (gov.lastUp >= 0 && gov.t - gov.lastUp < 6) gov.backoff = Math.min(120, gov.backoff*2);   // the last step up did not hold
+          gov.set(gov.step + (fps.ms > 30 ? 2 : 1)); gov.upOk = 0; gov.cool = gov.t + gov.backoff; gov.lastUp = -1; }
+        else if (fps.ms < 17.8 && gov.step > 0){ if (++gov.upOk >= 4 && gov.t >= gov.cool){ gov.set(gov.step - 1); gov.upOk = 0; gov.lastUp = gov.t; } }
+        else gov.upOk = 0; }
+      if (o.level === 'max' && gov.step === GOV.length - 1 && fps.value < 40 && document.visibilityState === 'visible') lowFor += 1; else lowFor = 0;
       if (lowFor >= 4 && !warned){ warned = true; o.toast && o.toast(`🐢 ${fps.value.toFixed(0)} FPS on MAX graphics — try HIGH or MEDIUM in Settings → Graphics`); } }
   }
-  function resize(){ composer.setSize(innerWidth, innerHeight); if (ao && ao.setSize) ao.setSize(innerWidth, innerHeight); }
-  return {render, resize, fps, level:o.level, composer, onChunk: grp => { SC.onChunk(grp); fix(); if (SC.csmSetup) SC.csmSetup(); }};
+  function resize(){ composer.setPixelRatio(renderer.getPixelRatio()); composer.setSize(innerWidth, innerHeight); if (ao && ao.setSize) ao.setSize(innerWidth, innerHeight); }
+  return {render, resize, fps, gov, feat, addAO, level:o.level, composer, impRT:SC.impRT, onChunk: grp => { SC.onChunk(grp); fix(); if (SC.csmSetup) SC.csmSetup(); }};
 }
