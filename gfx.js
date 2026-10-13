@@ -13,12 +13,13 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { Sky } from 'three/addons/objects/Sky.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { Lensflare, LensflareElement } from 'three/addons/objects/Lensflare.js';
+import { showcase } from './gfx2.js';
 
 export const GFX_LEVELS = ['low', 'medium', 'high', 'max'];
 const PRESETS = {
-  medium: {pr:1.0, shadow:2048, shadowR:50, ao:null,   bloom:0.10, smaa:true,  dof:false, mblur:false, flare:false, grassR:40, grassCell:0.9,  dust:500,  envI:0.4},
-  high:   {pr:1.5, shadow:4096, shadowR:60, ao:'ssao', bloom:0.14, smaa:true,  dof:true,  mblur:false, flare:true,  grassR:55, grassCell:0.7,  dust:1000, envI:0.45},
-  max:    {pr:2.0, shadow:4096, shadowR:55, ao:'gtao', bloom:0.16, smaa:true,  dof:true,  mblur:true,  flare:true,  grassR:70, grassCell:0.55, dust:1600, envI:0.5},
+  medium: {pr:1.0, shadow:2048, shadowR:50, ao:null,   bloom:0.10, smaa:true,  dof:false, mblur:false, flare:false, grassR:40, grassCell:0.9,  dust:500,  envI:0.4, farStep:50, csm:false, godrays:false},
+  high:   {pr:1.5, shadow:4096, shadowR:60, ao:'ssao', bloom:0.14, smaa:true,  dof:true,  mblur:false, flare:true,  grassR:55, grassCell:0.7,  dust:1000, envI:0.45, farStep:35, csm:false, godrays:true},
+  max:    {pr:2.0, shadow:4096, shadowR:55, ao:'gtao', bloom:0.16, smaa:true,  dof:true,  mblur:true,  flare:true,  grassR:70, grassCell:0.55, dust:2400, envI:0.5, farStep:25, csm:false, godrays:true},
 };
 // CC0 textures and HDRIs from Poly Haven (polyhaven.com), credited in the Credits menu
 export const GFX_CREDITS = ['Poly Haven (CC0): textures sparse_grass, brown_mud_leaves_01, aerial_rocks_02, bark_brown_02, gravel, aerial_sand, red_dirt_mud_01, dry_riverbed_rock; HDRIs pizzo_pernice_puresky (Mountain), quarry_01_puresky (Rampage)'];
@@ -94,12 +95,16 @@ export function initGfx(o){
   if (RAMP && P.dust){ const N = P.dust, pos = new Float32Array(N*3), R = 70; for (let i = 0; i < N; i++){ pos[i*3] = (Math.random()-0.5)*2*R; pos[i*3+1] = Math.random()*25; pos[i*3+2] = (Math.random()-0.5)*2*R; }
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     const cv = document.createElement('canvas'); cv.width = cv.height = 64; const c = cv.getContext('2d'), gr = c.createRadialGradient(32,32,0,32,32,32); gr.addColorStop(0, 'rgba(255,236,205,0.9)'); gr.addColorStop(1, 'rgba(255,236,205,0)'); c.fillStyle = gr; c.fillRect(0,0,64,64);
-    const m = new THREE.PointsMaterial({size:0.35, map:new THREE.CanvasTexture(cv), transparent:true, opacity:0.55, depthWrite:false, color:0xf3d9b8});
+    const m = new THREE.PointsMaterial({size:0.55, map:new THREE.CanvasTexture(cv), transparent:true, opacity:0.75, depthWrite:false, color:0xf3d9b8});
     dust = new THREE.Points(g, m); dust.frustumCulled = false; scene.add(dust); dust.userData = {R, pos, N}; }
   // ---- sun glare (lens flare: cheap god-ray look)
   if (P.flare){ const flTex = (r, a) => { const cv = document.createElement('canvas'); cv.width = cv.height = 128; const c = cv.getContext('2d'), gr = c.createRadialGradient(64,64,0,64,64,64); gr.addColorStop(0, `rgba(255,248,230,${a})`); gr.addColorStop(r, `rgba(255,220,170,${a*0.25})`); gr.addColorStop(1, 'rgba(255,200,150,0)'); c.fillStyle = gr; c.fillRect(0,0,128,128); return new THREE.CanvasTexture(cv); };
     const fl = new Lensflare(); fl.addElement(new LensflareElement(flTex(0.2, 0.9), 520, 0, new THREE.Color(0xfff2dd))); fl.addElement(new LensflareElement(flTex(0.5, 0.25), 70, 0.6)); fl.addElement(new LensflareElement(flTex(0.5, 0.2), 120, 0.75)); fl.addElement(new LensflareElement(flTex(0.5, 0.15), 60, 1.0));
     const flL = new THREE.PointLight(0xffffff, 0, 0); flL.add(fl); scene.add(flL); o.flare = flL; }
+  // ---- showcase layer (trees, ranges, height fog, time of day, CSM, god rays...)
+  const SC = showcase(o, P, {sky}); if (SC.csmSetup){ const f0 = fix; setInterval(SC.csmSetup, 1500); }
+  o.flareOff = !!SC.godrays;
+  scene.traverse(x => { if (x.material) [].concat(x.material).forEach(m => m.needsUpdate = true); });   // recompile with the new fog / lighting chunks
   // ---- post-processing chain
   const composer = new EffectComposer(renderer); composer.addPass(new RenderPass(scene, camera));
   let ao = null;
@@ -107,6 +112,7 @@ export function initGfx(o){
   else if (P.ao === 'ssao'){ ao = new SSAOPass(scene, camera, innerWidth, innerHeight); ao.kernelRadius = 0.6; ao.minDistance = 0.0004; ao.maxDistance = 0.02; composer.addPass(ao); }
   let bokeh = null; if (P.dof){ bokeh = new BokehPass(scene, camera, {focus:12, aperture:0.0012, maxblur:0.006}); bokeh.enabled = false; composer.addPass(bokeh); }
   const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), P.bloom, 0.45, 0.9); composer.addPass(bloom);
+  const grPass = SC.godrays ? new ShaderPass(SC.godrays) : null; if (grPass) composer.addPass(grPass);
   composer.addPass(new OutputPass());
   // vignette + speed-based radial motion blur (display-referred, after tone mapping)
   const fin = new ShaderPass({uniforms:{tDiffuse:{value:null}, uBlur:{value:0}, uVig:{value:0.22}},
@@ -132,11 +138,12 @@ export function initGfx(o){
     sky.position.copy(camera.position);
     if (bokeh){ const cm = o.getCam(), cine = cm >= 5 && S.state === 'riding' && !S.lift; bokeh.enabled = cine; if (cine){ v.set(S.x, S.y + 0.9, S.z); bokeh.uniforms.focus.value = camera.position.distanceTo(v); } }
     fin.uniforms.uBlur.value = P.mblur ? Math.max(0, Math.min(0.05, ((S.speed || 0)*3.6 - 35)/1400)) : 0;
+    SC.update(dt, grPass);
     composer.render(dt);
     // FPS watch on Max: suggest (never force) a lower setting
     acc += dt; frames++; if (acc >= 1){ fps.value = frames/acc; if (o.level === 'max' && fps.value < 40 && document.visibilityState === 'visible') lowFor += acc; else lowFor = 0; acc = 0; frames = 0;
       if (lowFor >= 4 && !warned){ warned = true; o.toast && o.toast(`🐢 ${fps.value.toFixed(0)} FPS on MAX graphics — try HIGH or MEDIUM in Settings → Graphics`); } }
   }
   function resize(){ composer.setSize(innerWidth, innerHeight); if (ao && ao.setSize) ao.setSize(innerWidth, innerHeight); }
-  return {render, resize, fps, level:o.level, composer};
+  return {render, resize, fps, level:o.level, composer, onChunk: grp => { SC.onChunk(grp); fix(); if (SC.csmSetup) SC.csmSetup(); }};
 }

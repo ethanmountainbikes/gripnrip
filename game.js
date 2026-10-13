@@ -29,7 +29,7 @@ const G_AIR = 9.81*1.35;   // heavier feel in the air: realistic MTB airtime (~0
 let seed = 7; const rnd = () => (seed = (seed*16807) % 2147483647) / 2147483647;
 
 // ---------- settings (quality, inverts, volume) ----------
-const SETTINGS = Object.assign({gfx:'low', quality:'med', invertY:false, invertX:false, volume:0.8, musicOn:true, musicVol:0.5}, LS.get('trailDescent.settings', {}));
+const SETTINGS = Object.assign({gfx:'low', tod:'noon', quality:'med', invertY:false, invertX:false, volume:0.8, musicOn:true, musicVol:0.5}, LS.get('trailDescent.settings', {}));
 const saveSettings = () => LS.set('trailDescent.settings', SETTINGS);
 const QUALITY = { low:{pr:0.75, shadow:0, tex:256, grassR:0, grassCell:2, post:false, rocks:10, bushes:10},
                   med:{pr:1.0, shadow:1024, tex:256, grassR:38, grassCell:1.0, post:false, rocks:22, bushes:26},
@@ -67,6 +67,8 @@ addEventListener('resize', () => { camera.aspect = innerWidth/innerHeight; camer
 const GFX_L = ['low', 'medium', 'high', 'max'];
 function setGfx(d, wrap){ const i = GFX_L.indexOf(SETTINGS.gfx || 'low'); let k = i + d; if (wrap) k = (k + 4) % 4; k = Math.max(0, Math.min(3, k)); if (k === i) return;
   SETTINGS.gfx = GFX_L[k]; saveSettings(); toast(`Graphics: ${GFX_L[k].toUpperCase()} — reloading…`); setTimeout(() => location.reload(), 700); }
+const TODS = ['morning', 'noon', 'golden'];
+function setTod(d){ const i = TODS.indexOf(SETTINGS.tod || 'noon'), k = (i + d + 3) % 3; SETTINGS.tod = TODS[k]; saveSettings(); if ((SETTINGS.gfx || 'low') === 'low'){ toast('Time of day applies on Graphics Medium and up'); return; } toast(`Time of day: ${TODS[k]} — reloading…`); setTimeout(() => location.reload(), 700); }
 function applyQuality(name){ SETTINGS.quality = name; saveSettings(); Q = QUALITY[name];
   renderer.setPixelRatio(Math.min(devicePixelRatio, Q.pr)); renderer.setSize(innerWidth, innerHeight);
   renderer.shadowMap.enabled = sun.castShadow = Q.shadow > 0; if (Q.shadow){ sun.shadow.mapSize.set(Q.shadow, Q.shadow); if (sun.shadow.map){ sun.shadow.map.dispose(); sun.shadow.map = null; } }
@@ -176,7 +178,7 @@ const grassField = (() => {
       const fade = Math.min(1, (R - d)/8); q.setFromAxisAngle(UPV, e.rot); M.compose(pv.set(e.x, e.h - 0.02, e.z), q, sv.set(e.s, e.s*fade, e.s)); mesh.setMatrixAt(n, M); col.setHSL(0.22 + e.t*0.07, 0.5, 0.42 + e.t*0.2); mesh.setColorAt(n++, col); }
     mesh.count = n; mesh.instanceMatrix.needsUpdate = true; if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true; cx = S.x; cz = S.z; }
   window.__dbgGrass = () => ({count: mesh.count, vis: mesh.visible, cache: cache.size});
-  return { rebuild, update(){ if (Math.hypot(S.x - cx, S.z - cz) > 4) rebuild(); } };
+  return { rebuild, mesh, update(){ if (Math.hypot(S.x - cx, S.z - cz) > 4) rebuild(); } };
 })();
 const chunks = new Map();
 const ckey = (i,j) => i+','+j;
@@ -219,7 +221,7 @@ function buildChunk(ci, cj){
       if (i < Q.rocks){ if (h > 330 && rough < 0.5) continue; const s0 = 0.3 + sc*sc*1.6; q.setFromEuler(new THREE.Euler(rough*0.5, rot, sc*0.4)); M.compose(p.set(x, h - s0*0.25, z), q, sv.set(s0*(0.8+rough*0.6), s0, s0)); rk.setMatrixAt(nr++, M); }
       else { if (h > 300) continue; const s0 = 0.5 + sc*0.9; q.setFromAxisAngle(up, rot); M.compose(p.set(x, h - 0.1, z), q, sv.set(s0, s0*(0.7+rough*0.5), s0)); bu.setMatrixAt(nb, M); c.setHSL(0.24 + rough*0.08, 0.45, 0.55 + sc*0.25); bu.setColorAt(nb++, c); } }
     rk.count = nr; bu.count = nb; for (const im of [rk, bu]) if (im.count){ im.castShadow = true; im.receiveShadow = true; im.computeBoundingSphere(); grp.add(im); } }
-  scene.add(grp); chunks.set(ckey(ci,cj), {grp, ci, cj});
+  scene.add(grp); chunks.set(ckey(ci,cj), {grp, ci, cj}); if (GFX && GFX.onChunk) GFX.onChunk(grp);
 }
 function disposeChunk(k){ const ch = chunks.get(k); scene.remove(ch.grp);
   ch.grp.traverse(o => { if (o.isInstancedMesh) o.dispose(); else if (o.isMesh) o.geometry.dispose(); }); chunks.delete(k); }
@@ -238,7 +240,7 @@ function updateChunks(px, pz, budgetMs = 6, maxR = LOAD_R){
   for (const [k,ch] of chunks){ const dx = Math.max(ch.ci*CH-px, 0, px-(ch.ci+1)*CH), dz = Math.max(ch.cj*CH-pz, 0, pz-(ch.cj+1)*CH); if (Math.hypot(dx,dz) > UNLOAD_R) disposeChunk(k); }
 }
 // low-detail terrain for the whole map, hidden wherever detailed chunks are loaded
-const farU = { value: new THREE.Vector3(0,0,0) };
+const farU = { value: new THREE.Vector3(0,0,0) }; let FARMESH = null;
 { const FAR = 4200, S = 40, N = Math.round(2*FAR/S)+1, pos = new Float32Array(N*N*3), col = new Float32Array(N*N*3), c = new THREE.Color(), idx = [];
   for (let r=0;r<N;r++) for (let k=0;k<N;k++){ const x = -FAR+k*S, z = -FAR+r*S, h = terrainH(x,z), i = (r*N+k)*3;
     const dx = terrainH(x+S,z)-terrainH(x-S,z), dz = terrainH(x,z+S)-terrainH(x,z-S), ny = 2*S/Math.hypot(dx,2*S,dz);
@@ -249,7 +251,7 @@ const farU = { value: new THREE.Vector3(0,0,0) };
   mat.onBeforeCompile = sh => { sh.uniforms.uFar = farU;
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vWXZ;').replace('#include <project_vertex>', '#include <project_vertex>\nvWXZ = (modelMatrix*vec4(transformed,1.0)).xz;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec2 vWXZ; uniform vec3 uFar;').replace('void main() {', 'void main() {\nif (distance(vWXZ, uFar.xy) < uFar.z) discard;'); };
-  const far = new THREE.Mesh(g, mat); far.frustumCulled = false; scene.add(far); }
+  const far = new THREE.Mesh(g, mat); far.frustumCulled = false; scene.add(far); FARMESH = far; }
 
 // ---------- features: wooden kickers/drops and dirt jumps (merged meshes) ----------
 { const plankTex = (() => { const cv = document.createElement('canvas'); cv.width=64; cv.height=64; const x = cv.getContext('2d');
@@ -1047,6 +1049,7 @@ const PAGES = {
   trails: () => ({title:RAMP ? 'RAMPAGE LINES' : 'TRAILS', items:[...trailItems(), ...(RAMP ? [] : [{label:'Dirt Jump Park', sub:'Pro line · always open', act:() => { spotI = spots.findIndex(s => s.name === 'Dirt Jump Park'); startRide(); }}]), {label:'‹ Back', act:back}]}),
   settings: () => ({title:'SETTINGS', items:[
     {label:'Graphics', value:(SETTINGS.gfx||'low').toUpperCase(), sub:'Low = classic look · Medium / High / Max = HDR sky, PBR textures, shadows, post FX (reloads)', adj:d => setGfx(d), act:() => setGfx(1, true)},
+    {label:'Time of day', value:({morning:'MORNING', noon:'NOON', golden:'GOLDEN HOUR'})[SETTINGS.tod || 'noon'], sub:'Graphics Medium and up (reloads)', adj:d => setTod(d), act:() => setTod(1)},
     {label:'Quality', value:SETTINGS.quality.toUpperCase(), adj:d => { const q = ['low','med','high'], k = Math.max(0, Math.min(2, q.indexOf(SETTINGS.quality) + d)); if (q[k] !== SETTINGS.quality) applyQuality(q[k]); }, act:() => { const q = ['low','med','high']; applyQuality(q[(q.indexOf(SETTINGS.quality)+1)%3]); }},
     {label:'Music', value:ON(SETTINGS.musicOn), adj:() => setMusicOn(!SETTINGS.musicOn), act:() => setMusicOn(!SETTINGS.musicOn)},
     {label:'Music volume', value:PCT(SETTINGS.musicVol), adj:d => { SETTINGS.musicVol = Math.max(0, Math.min(1, Math.round((SETTINGS.musicVol + d*0.1)*10)/10)); saveSettings(); musicVol(); }},
@@ -1378,7 +1381,7 @@ teleport(spotI, true);
 window.__features = features; window.__respawn = () => respawnSafe(); window.__game = S; window.__readInput = readInput; window.__groundH = groundH; window.__lift = i => startLift(i); window.__world = { LIFTS, connectors, trails, features, spots, PARK, SHOP, terrainH, featH, isDirt, nearTrails, base, inPark };
 window.__BR = BR; window.__teleport = i => teleport(i); window.__unlocked = unlocked; window.__isOpen = isOpen; window.__chunks = () => chunks.size; window.__renderer = renderer; window.__place = (x, z, yaw) => { placeAt(x, z, yaw); S.air = false; };
 window.__sim = (secs, inp) => { const h=1/120; const base={steer:0,pedal:0,brake:0,jump:false,tx:0,ty:0}; for(let t=0;t<secs;t+=h){ step(h, Object.assign({}, base, typeof inp==='function'?inp(t):inp)); trackWorld(h); } return {x:S.x, z:S.z, kmh:S.speed*3.6, air:S.air, lives:S.lives, clean:S.clean, score:S.score}; };
-if (SETTINGS.gfx && SETTINGS.gfx !== 'low') import('./gfx.js').then(m => { GFX = m.initGfx({level:SETTINGS.gfx, renderer, scene, camera, sun, SUN_DIR, skyDome, TEX, terrainMat, trunkMat, frameMat, RAMP, S, groundH, getCam:() => camMode, toast,
+if (SETTINGS.gfx && SETTINGS.gfx !== 'low') import('./gfx.js').then(m => { GFX = m.initGfx({level:SETTINGS.gfx, renderer, scene, camera, sun, SUN_DIR, skyDome, TEX, terrainMat, trunkMat, frameMat, RAMP, S, groundH, terrainH, getCam:() => camMode, toast, tod:SETTINGS.tod, coneG, trunkG, bushG, rockG, folMat, bushMat, rockMat, farU, farMesh:FARMESH, grassMesh:grassField.mesh, chunks, treesInCell, TCELL, HALF, LOAD_R, isDirt, featH, trailDist,
     setGrass:(r, c) => { Q = {...Q, grassR:r, grassCell:c}; grassField.rebuild(true); }}); composer = null; window.__gfx = GFX; }).catch(e => { console.warn('graphics upgrade failed, using Low', e); });
 window.__gfxLevel = SETTINGS.gfx;
 frame();window.__shop = { open: openShop, key: shopKey, close: closeShop };

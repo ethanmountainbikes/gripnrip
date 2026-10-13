@@ -198,5 +198,7 @@ Settings → **Graphics**: Low / Medium / High / Max. The setting is saved, and 
   - a glossy frame
   - drifting dust in Rampage
   - post effects: bloom, vignette, a light colour grade and SMAA. High adds SSAO, sun glare and depth of field on the cinematic cameras. Max adds GTAO and speed-based motion blur.
+- `gfx2.js` (Medium and up) adds the showcase layer: alpha-tested card conifers with normal maps, wind sway and back-light translucency; billboard impostors for distant trees on Mountain; clump-card bushes and desert junipers on Rampage; smooth PBR rocks; ridged far ranges out to 7 km with snow caps (Mountain) or sandstone banding (Rampage), rim light and three silhouette layers; valley height fog with tinted aerial perspective; Rampage dust haze; trail edges blended with noise. High and Max add screen-space god rays.
+- Settings → **Time of day**: Morning / Noon / Golden Hour (Medium and up; reloads the page).
 - On Max, if the game runs under 40 FPS for about 4 seconds, a toast suggests a lower setting. It never switches by itself.
 - Physics and gameplay are identical on every setting.
