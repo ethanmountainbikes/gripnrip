@@ -507,7 +507,7 @@ function onPress(code){
   if (S.state==='riding' && !S.paused){
     if (code==='DL'||code==='BracketLeft'||code==='Comma') teleport(nextOpen(spotI,-1));
     if (code==='DR'||code==='BracketRight'||code==='Period') teleport(nextOpen(spotI,1));
-    const m = /^Digit([0-9])$/.exec(code), num = m ? (+m[1]||10) + (keys.ShiftLeft||keys.ShiftRight ? 10 : 0) : 0; if (m && num <= spots.length){ const j = num-1; /* 1-9,0 = spots 1-10; Shift+1-5 = spots 11-15 */ if (isOpen(j)) teleport(j); else toast(`🔒 ${spots[j].name} is locked — finish ${spotTrail(j).name} once to unlock it`); }
+    const m = /^Digit([0-9])$/.exec(code), num = m ? (+m[1]||10) + (keys.ShiftLeft||keys.ShiftRight ? 10 : 0) : 0; if (m && num <= spots.length){ const j = num-1; /* 1-9,0 = spots 1-10; Shift+1-5 = spots 11-15 */ if (isOpen(j)) teleport(j); else toast(`🔒 ${spots[j].name} is locked — ${lockMsg(spotTrail(j))}`); }
   } else if (S.state==='menu' && (code==='DL'||code==='DR'||code==='BracketLeft'||code==='BracketRight')){
     spotI = nextOpen(spotI, code==='DL'||code==='BracketLeft' ? -1 : 1); $('overlayMsg').innerHTML = menuMsg(); }
 }
@@ -520,7 +520,9 @@ const unlocked = new Set((() => { try { return JSON.parse(localStorage.getItem(U
 function saveUnlocks(){ try { localStorage.setItem(UKEY, JSON.stringify([...unlocked])); } catch(e){} }
 const spotTrail = i => i < trails.length ? trails[i] : null;
 const ALWAYS = new Set(['Flow Line', 'Formation Ridge']);
-const isOpen = i => { const tr = spotTrail(i); return !tr || ALWAYS.has(tr.name) || unlocked.has(tr.name); };
+const anyOtherDone = tr => trails.some(o => o !== tr && o.kind === tr.kind && !o.pro && unlocked.has(o.name));   // BONE CRUSHER: opens once any other Rampage line is done
+const isOpen = i => { const tr = spotTrail(i); return !tr || ALWAYS.has(tr.name) || unlocked.has(tr.name) || (tr.unlockAny && anyOtherDone(tr)); };
+const lockMsg = tr => tr.unlockAny ? `finish any other Rampage line to unlock ${tr.name}` : `finish ${tr.name} once to unlock it`;
 const nextOpen = (from, dir) => { for (let k=1;k<=spots.length;k++){ const j = ((from + dir*k) % spots.length + spots.length) % spots.length; if (isOpen(j)) return j; } return from; };
 let spotI = 1;   // spawn at Flow Line
 const spotTag = i => { const tr = spots[i].trail !== undefined ? trails[spots[i].trail] : (spots[i].name.startsWith('Dirt') ? PARK : null); return tr ? ` ${DIFF[tr.diff].icon} ${DIFF[tr.diff].label} ${tr.type}` : ' free roam'; };
@@ -567,7 +569,8 @@ function trackWorld(dt){
       if (cur.s > tr.len - 8){ const time = S.time - S.run.start, bonus = Math.round((1000 + tr.len/2)*EARN);
         S.finishes++; S.score += bonus; flash('FINISH!', 2.5); trickEl.textContent = `${tr.name} in ${fmtTime(time)}  +$${bonus}`; S.trickMsgT = 3.5;
         S.best ||= {}; if (!S.best[tr.name] || time < S.best[tr.name]){ S.best[tr.name] = time; toast(`🏁 New best on ${tr.name}: ${fmtTime(time)}`); }
-        if (!unlocked.has(tr.name)){ unlocked.add(tr.name); saveUnlocks(); setTimeout(()=>toast(`🔓 Unlocked: ${tr.name} — teleport there any time`), 1200); }
+        if (!unlocked.has(tr.name)){ const pro = trails.find(o => o.unlockAny && o !== tr), wasPro = pro && anyOtherDone(pro); unlocked.add(tr.name); saveUnlocks(); setTimeout(()=>toast(`🔓 Unlocked: ${tr.name} — teleport there any time`), 1200);
+          if (pro && !wasPro && anyOtherDone(pro)) setTimeout(()=>toast(`☠ ${pro.name} UNLOCKED — the hardest line on the mountain. PRO only.`), 4200); }
         S.run = null; } } }
   // map boundary: warning as you approach, then a bail + respawn at your last safe spot inside (counts as a crash only during a trail run)
   const edge = Math.max(Math.abs(S.x), Math.abs(S.z));
@@ -949,7 +952,7 @@ function openMap(){ bigMap.open = true; bigMap.wasPaused = S.paused; S.paused = 
 function closeMap(){ bigMap.open = false; S.paused = bigMap.wasPaused; $('bigmapWrap').classList.add('hidden'); }
 function mapTeleport(){ const {s} = mapScale(); let best = -1, bd = 1e9; spots.forEach((p, i) => { const d = Math.hypot(p.x-bigMap.cx, p.z-bigMap.cz)*s; if (d < 22 && d < bd){ bd = d; best = i; } });
   if (best < 0){ toast('Move the cursor onto a spot to teleport'); return; }
-  if (!isOpen(best)){ toast(`🔒 ${spots[best].name} is locked — finish ${spotTrail(best).name} once to unlock it`); return; }
+  if (!isOpen(best)){ toast(`🔒 ${spots[best].name} is locked — ${lockMsg(spotTrail(best))}`); return; }
   closeMap(); teleport(best); }
 function mapKey(code){
   if (code==='B'||code==='KeyM'||code==='Back'||code==='Escape') closeMap();
@@ -1002,7 +1005,7 @@ function mapFrame(dt, inp){
   c.fillStyle = 'rgba(26,22,15,.88)'; c.fillRect(lx-12, 20, 262, 46 + rows.length*20 + 140); c.textAlign = 'left'; c.font = '28px "Bebas Neue", sans-serif'; c.fillStyle = '#d9772b'; c.fillText('MAP', lx, 44);
   c.font = '13px "Barlow Condensed", sans-serif'; rows.forEach(([ic, col, label], k) => { c.fillStyle = col; c.fillText(ic, lx, 70 + k*20); c.fillStyle = '#ddd'; c.fillText(label, lx + 26, 70 + k*20); });
   let y = 80 + rows.length*20; c.fillStyle = '#fff'; c.font = 'bold 13px "Barlow Condensed", sans-serif'; c.fillText('Difficulty', lx, y); c.font = '13px "Barlow Condensed", sans-serif';
-  for (const k of ['green','blue','black','dblack']){ y += 18; c.fillStyle = /^#(000|111|222)/.test(DIFF[k].color) || DIFF[k].color==='black' ? '#eee' : DIFF[k].color; c.fillText(`${DIFF[k].icon} ${DIFF[k].label}`, lx, y); }
+  for (const k of ['green','blue','black','dblack', ...(trails.some(t => t.diff === 'pro3') ? ['pro3'] : [])]){ y += 18; c.fillStyle = /^#(000|111|222)/.test(DIFF[k].color) || DIFF[k].color==='black' ? '#eee' : DIFF[k].color; c.fillText(`${DIFF[k].icon} ${DIFF[k].label}`, lx, y); }
   y += 26; c.fillStyle = '#bbb'; c.font = '12px "Barlow Condensed", sans-serif';
   for (const l of ['Stick / D-pad / arrows / mouse: move cursor', 'A / Enter / double-click: teleport', 'X / W / click: set or remove waypoint', 'B / M / View: close']){ c.fillText(l, lx, y); y += 16; }
 }
@@ -1029,7 +1032,7 @@ function setMusicOn(on){ SETTINGS.musicOn = on; saveSettings(); if (on){ if (!mu
 const menu = { open:false, page:'main', sel:0, stack:[], repeatT:0, fly:0 };
 const ON = v => v ? 'ON' : 'OFF', PCT = v => Math.round(v*100) + '%';
 function trailItems(){ return trails.map((tr, i) => { const d = DIFF[tr.diff], open = isOpen(i);
-  return {label:`<span class="dIcon" style="color:${d.color === '#111' ? '#e8e2d0' : d.color}">${d.icon}</span> ${open ? '' : '🔒 '}${tr.name}`, sub:`${d.label} · ${tr.type}${open ? '' : ' · finish it once to unlock'}`, disabled:!open, act:() => { spotI = i; startRide(); }}; }); }
+  return {label:`<span class="dIcon" style="color:${d.color === '#111' ? '#e8e2d0' : d.color}">${d.icon}</span> ${open ? '' : '🔒 '}${tr.name}`, sub:`${d.label} · ${tr.type}${open ? '' : tr.unlockAny ? ' · finish any other Rampage line to unlock' : ' · finish it once to unlock'}`, disabled:!open, act:() => { spotI = i; startRide(); }}; }); }
 const PAGES = {
   main: () => ({title:null, items:[
     {label:'Ride', sub:RAMP ? 'Free roam from the Valley Overlook' : 'Free roam from the base plaza', act:() => { spotI = spots.findIndex(s => s.name.startsWith(RAMP ? 'Valley Overlook' : 'Valley Base')); startRide(); }},
@@ -1309,8 +1312,8 @@ window.__signs = [];
     if (tr.diff === 'green'){ c.fillStyle = d.color; c.beginPath(); c.arc(x0+30, 48, 26, 0, 7); c.fill(); }
     else if (tr.diff === 'blue'){ c.fillStyle = d.color; c.fillRect(x0+6, 22, 52, 52); }
     else { c.fillStyle = '#111'; const dia = (cx) => { c.beginPath(); c.moveTo(cx, 18); c.lineTo(cx+22, 48); c.lineTo(cx, 78); c.lineTo(cx-22, 48); c.closePath(); c.fill(); };
-      if (tr.diff === 'dblack'){ dia(x0+18); dia(x0+48); } else dia(x0+30); }
-    c.fillStyle = '#1d150c'; c.font = 'bold 46px "Barlow Condensed", Arial, sans-serif'; c.textBaseline = 'middle'; c.fillText(tr.name.toUpperCase(), x0 + (tr.diff === 'dblack' ? 80 : 70), 50, 400 - (tr.diff === 'dblack' ? 10 : 0));
+      if (tr.diff === 'pro3'){ c.fillStyle = '#ff5a1f'; dia(x0+14); dia(x0+40); dia(x0+66); } else if (tr.diff === 'dblack'){ dia(x0+18); dia(x0+48); } else dia(x0+30); }
+    c.fillStyle = '#1d150c'; c.font = 'bold 46px "Barlow Condensed", Arial, sans-serif'; c.textBaseline = 'middle'; c.fillText(tr.name.toUpperCase(), x0 + (tr.diff === 'pro3' ? 100 : tr.diff === 'dblack' ? 80 : 70), 50, 400 - (tr.diff === 'pro3' ? 30 : tr.diff === 'dblack' ? 10 : 0));
     const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t; };
   for (const L of LIFTS){ const ux = L.tx + L.dx*7, uz = L.tz + L.dz*7;
     const outs = L.serves.map(n => trails.find(t => t.name === n)).filter(Boolean).map(tr => {
@@ -1345,7 +1348,10 @@ function animateLifts(dt){ for (const o of liftObjs){ o.phase = (o.phase + dt*LI
       _q.setFromEuler(_e.set(0, o.L.yaw + (up ? 0 : Math.PI), 0)); _m4.compose(_v.set(x, y-2.3, z), _q, _s); o.chairs.setMatrixAt(i, _m4);
       _m4.compose(_v.set(x, y-1.15, z), _q, _s); o.hangers.setMatrixAt(i, _m4); }
     o.chairs.instanceMatrix.needsUpdate = true; o.hangers.instanceMatrix.needsUpdate = true; } }
-{ const el = document.getElementById('liftLegend'); el.innerHTML = LIFTS.map(L => `<div><b style="background:${L.color}"></b>Lift ${L.short}: ${L.serves.join(', ')}</div>`).join(''); }
+{ const el = document.getElementById('liftLegend'); el.innerHTML = LIFTS.map(L => `<div><b style="background:${L.color}"></b>Lift ${L.short}: ${L.serves.join(', ')}</div>`).join('');
+  // short screens: if the legend can't fit under the minimap (above the speedometer), it moves beside the map instead of being cut off
+  const fit = () => { if (!el.offsetParent) return; el.classList.remove('side'); const room = innerHeight - 220 - el.getBoundingClientRect().top; if (el.scrollHeight > room) el.classList.add('side'); };
+  fit(); addEventListener('resize', fit); setInterval(fit, 1000); if (document.fonts) document.fonts.ready.then(fit); window.__legendFit = fit; }
 function liftProximity(dt){ S.liftCool = Math.max(0, (S.liftCool||0) - dt); if (S.lift || S.liftCool > 0 || S.air || S.crashT > 0) return;
   for (let i=0;i<LIFTS.length;i++){ const L = LIFTS[i]; if (Math.hypot(S.x-L.bx, S.z-L.bz) < 4.5){ startLift(i); return; } } }
 function startLift(i){ sfxLiftStart(); const L = LIFTS[i]; S.lift = {i, d:0}; S.run = null; S.speed = 0; S.vy = 0; S.air = false; S.crumbs = []; S.liftWas = S.yaw;

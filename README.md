@@ -170,6 +170,7 @@ Pick **World: Rampage** in the main menu (the page reloads into the new world). 
   - **Canyon Gap Line** has a real canyon carved into the terrain.
   - **Stratos Drop** nods to the "44-footer".
   - **Formation Ridge** is a roomier line in the style of the women's venue.
+  - **BONE CRUSHER** (◆◆◆ PRO, triple black) is the hardest line in the game. It unlocks once you finish any other Rampage line. Expect a knife-edge ridge roll-in, rock gardens with big crash rocks either side of a narrow clean lane, two cut 35–45° chutes, three tight exposed switchbacks, 2.2 / 3.4 / 4.8 m ledges, a mandatory rock-roll, an off-camber traverse, a step-down into the second chute and a 7.5 m cliff drop just above the finish corral.
 - **Features:** big dirt drops with long steep landings, wooden deck drops, step-downs, gaps and canyon gaps. They're sized for the 45–65 km/h riders carry down the face, giving about 1.5 s of air.
 - Same physics as the mountain, plus its own spawn, checkpoints, minimap, full map, Summit Shuttle lift and Bike Shop. Trail unlocks are saved separately.
 

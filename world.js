@@ -77,6 +77,19 @@ const RAMP_DEFS = [
   {name:'Canyon Gap Line',  color:'#7a2cff', start:[-140,-410], via:[[-110,262]], goal:[-11,300], grade:0.42, startYaw:0.1, kind:'rampage', type:'Freeride', diff:'dblack', feats:['bigdrop','canyon','stepdown','wooddrop','gap','bigdrop']},
   {name:'Stratos Drop',     color:'#111111', start:[220,-400],  via:[[190,262]], goal:[19,300], grade:0.40, startYaw:-0.2, kind:'rampage', type:'Big drops', diff:'dblack', feats:['stratos','stepdown','gap','wooddrop','bigdrop','stepdown']},
   {name:'Formation Ridge',  color:'#2f8cff', start:[-290,-380], via:[[-250,262]], goal:[-25,300], grade:0.34, startYaw:0.1, kind:'rampage', type:'Freeride (women\'s venue style)', diff:'black', feats:['wooddrop','stepdown','gap','bigdrop','stepdown','gap']},
+  // BONE CRUSHER: the hardest line in the game. A hand-built line (explicit waypoints, no walker) down the knife-edge ridges
+  // between Canyon Gap and Zink: ridgeline roll-in, rock gardens with crash rocks either side of a narrow clean lane,
+  // a cut 40 deg chute, tight exposed switchbacks across the ridge, 2-5 m ledges, a mandatory rock-roll, an off-camber
+  // traverse, a step-down into a second chute and a huge cliff drop near the bottom. Unlocks after any other Rampage line.
+  {name:'BONE CRUSHER', color:'#f2ead8', kind:'rampage', pro:true, unlockAny:true, type:'PRO big-mountain line', diff:'pro3', feats:[],
+   line:[[-100,-452],[-100,-425],[-104,-395],[-112,-365],[-115,-335],[-115,-305],[-115,-275],[-115,-245],[-115,-217],   // 0-8: ridge, crash rocks, ledge, chute 1
+         [-128,-206],[-160,-199],[-166,-193],[-160,-187],[-128,-179],[-122,-173],[-128,-167],[-160,-159],[-166,-153],[-160,-147],[-132,-138],   // 9-19: switchbacks
+         [-118,-122],[-115,-104],[-113,-88],[-110,-72],[-102,-55],[-94,-38],[-82,-14],                            // 20-26: rock-roll, off-camber traverse
+         [-77,5],[-75,25],[-75,70],[-75,95],[-75,125],[-75,145],[-74,175],[-68,205],[-50,240],[-32,268],[-22,292]],   // 27-37
+   // shaped sections: extra slope on top of the ridge's own grade (cut into the ridge, so the chute has walls)
+   shape:[{a:5, b:8, e:0.1, R:24, tag:'chute'}, {a:21, b:22, e:0.42, R:14, tag:'rockroll'}, {a:28, b:29, e:0.38, R:22, tag:'chute'}],
+   pfeat:[{at:3, kind:'crashrocks', L:22}, {at:5, kind:'ledge', H:2.2}, {at:23, kind:'camber', L:34}, {at:27, kind:'stepdown'},
+          {at:30, kind:'crashrocks', L:22}, {at:31, kind:'ledge', H:3.4, off:6}, {at:32, kind:'ledge', H:4.8, off:6}, {at:33, kind:'cliff', H:7.5}]},
 ];
 // bike-park routing: every trail starts near a lift top and finishes just above a lift bottom station (its own lift or a shared base).
 // Nominal bottom stations (the final spot is searched nearby, >= 15 m clear of every trail and jump):
@@ -132,6 +145,17 @@ export const trails = TRAIL_DEFS.map((def, id) => {
     pts = pts.slice(0, lo+1); raw = raw.slice(0, lo+1); }
   const n = pts.length, h = new Float32Array(n), K = 6;   // smooth heights along the line (±12 m)
   for (let i=0;i<n;i++){ let s=0,c=0; for (let j=Math.max(0,i-K); j<=Math.min(n-1,i+K); j++){ const w = K+1-Math.abs(i-j); s+=raw[j]*w; c+=w; } h[i]=s/c; }
+  if (def.shape){ const wi = def.line.map(w => { let bd = 1e9, bi = 0; pts.forEach((p, j) => { const d = Math.hypot(p[0]-w[0], p[1]-w[1]); if (d < bd){ bd = d; bi = j; } }); return bi; }); def._wi = wi;
+    const dev = new Float32Array(n);
+    for (const sh of def.shape){ const i0 = wi[sh.a], i1 = wi[sh.b], L = (i1-i0)*2, A = sh.e*L/2, R = sh.R/2;
+      for (let i = 0; i < n; i++){ let v = 0;
+        if (i >= i0 - R && i < i0) v = A*smooth(i0 - R, i0, i);                    // build up (flatter run-in on the ridge)
+        else if (i >= i0 && i <= i1) v = A*(1 - 2*(i - i0)/(i1 - i0));              // the steep section itself
+        else if (i > i1 && i <= i1 + R) v = -A*(1 - smooth(i1, i1 + R, i));         // cut back into the ridge (run-out)
+        dev[i] += v; } }
+    for (let i = 0; i < n; i++){ let a = 0, c = 0; for (let j = Math.max(0, i-3); j <= Math.min(n-1, i+3); j++){ const w = 4 - Math.abs(i-j); a += dev[j]*w; c += w; } h[i] += a/c; }   // soften the kinks (no crest launches)
+    for (let i = 1; i < n; i++) h[i] = Math.min(h[i], h[i-1] - 0.04);   // never climbs
+  }
   const yaw = pts.map((p,i) => { const a = pts[Math.max(0,i-1)], b = pts[Math.min(n-1,i+1)]; return Math.atan2(-(b[0]-a[0]), -(b[1]-a[1])); });
   return {...def, id, pts, h, yaw, len:(n-1)*2};
 });
@@ -181,14 +205,14 @@ const scaleProf = (pr, g) => g === 1 ? pr : {...pr, L: pr.L*g, p: (t, us) => g*p
 for (const tr of trails){
   const n = tr.pts.length;
   // features match the trail type (spacing = run-out after each feature)
-  if (tr.kind === 'mega') continue;
+  if (tr.kind === 'mega' || tr.pro) continue;
   const spacing = {rampage:62, dh:55, enduro:50, flow:40, flowg:45, xc:60, tech:28, freeride:60, drops:60, pump:6, jumps:24}[tr.kind];
   let i = 40, k = 0;
   const sp = (JUMP_SPEEDS[tr.name] || []).filter(Boolean).sort((a,b)=>a-b), vRef = sp.length ? sp[sp.length>>1] : 30;   // the trail's typical speed = current jump size
   while (i < n-(tr.kind==='rampage' ? 45 : 30)){
     const turn = Math.abs(Math.atan2(Math.sin(tr.yaw[i+12]-tr.yaw[i]), Math.cos(tr.yaw[i+12]-tr.yaw[i])));
     const sl = (tr.h[i]-tr.h[i+10])/20;
-    const crowded = tr.kind === 'rampage' && trails.some(o => o !== tr && o.pts.some(p => Math.hypot(p[0]-tr.pts[i][0], p[1]-tr.pts[i][1]) < 34 || Math.hypot(p[0]-tr.pts[Math.min(n-1,i+14)][0], p[1]-tr.pts[Math.min(n-1,i+14)][1]) < 34));
+    const crowded = tr.kind === 'rampage' && trails.some(o => o !== tr && !o.pro && o.pts.some(p => Math.hypot(p[0]-tr.pts[i][0], p[1]-tr.pts[i][1]) < 34 || Math.hypot(p[0]-tr.pts[Math.min(n-1,i+14)][0], p[1]-tr.pts[Math.min(n-1,i+14)][1]) < 34));
     if (!crowded && turn < 0.18 && sl > 0.04 || (tr.kind==='pump' || tr.kind==='xc' || tr.kind==='tech') && turn < 0.3){
       const v = (JUMP_SPEEDS[tr.name] || [])[k], g = v ? Math.max(0.7, Math.min(GMAX[tr.diff], (v/vRef)**2)) : 1;
       const S_ = (kind, pr) => JUMPY.has(kind) ? scaleProf(pr, g) : pr;
@@ -243,6 +267,19 @@ for (const tr of trails){ if (tr.kind !== 'mega') continue;
     const [x, z] = tr.pts[i], yaw = tr.yaw[i+2], f = addFeature('gap', x, z, yaw, 3.2, megaP(J.H, L1, J.gap, J.HL, L3), tr.id);
     f.k = k; f.mega = true; f.lipRel = rel; f.finale = !!J.finale; MEGA.push({k, H:J.H, gap:J.gap, HL:J.HL, L1:+L1.toFixed(1), lipDeg:+(Math.atan(rel)*180/Math.PI).toFixed(1), vLip:+(v*3.6).toFixed(0), x, z});
     k++; i += Math.round((f.L + 24)/2); } }
+// ---------- BONE CRUSHER hand-placed features ----------
+const ledgeP = (H, run, deck) => ({L: run + deck, p: t => t < 0 ? 0 : t <= run ? H*smooth(0, run, t) : t <= run + deck ? H : 0});   // rock ledge: a built-up shelf that ends in a sheer face
+for (const tr of trails){ if (!tr.pro) continue; const wi = tr._wi || TRAIL_DEFS[tr.id]._wi, n = tr.pts.length;
+  for (const pf of tr.pfeat){ const i = Math.max(2, Math.min(n - 10, wi[pf.at] + Math.round((pf.off || 0)/2))), [x, z] = tr.pts[i], yaw = tr.yaw[Math.min(n-1, i+2)];
+    let f;
+    if (pf.kind === 'ledge'){ f = addFeature('rockdrop', x, z, yaw, 2.6, {...ledgeP(pf.H, 2.5*pf.H, 3), rock:true}, tr.id); f.ledge = pf.H; }
+    else if (pf.kind === 'crashrocks'){ f = addFeature('rocks', x, z, yaw, 2.8, {...PROF.rocks(0.3, pf.L, 6), rock:true}, tr.id); f.crash = true; }
+    else if (pf.kind === 'stepdown') f = addFeature('stepdown', x, z, yaw, 2.6, PROF.stepdown(2.4, 6, 5, 1.2, 10), tr.id);
+    else if (pf.kind === 'cliff'){ f = addFeature('drop', x, z, yaw, 3.2, bigDropP(pf.H), tr.id); f.cliff = true; f.stratos = true; }
+    else if (pf.kind === 'camber'){   // off-camber: the uphill edge of the bench is left high, so the tread leans out over the drop
+      const nx = Math.cos(yaw), nz = -Math.sin(yaw), side = base(x + nx*8, z + nz*8) > base(x - nx*8, z - nz*8) ? 1 : -1, hw = 3.4, L = pf.L, c = 0.13;
+      f = addFeature('roller', x, z, yaw, hw, {L, p: (t, us) => t < 0 || t > L ? 0 : c*Math.max(0, hw + side*us)*Math.min(1, t/6, (L - t)/6)}, tr.id); f.camber = true; }
+    f.k = pf.at; f.pro = pf.kind; } }
 // berms on the outside of corners
 for (const tr of trails){ if (!['flow','flowg','dh','enduro','jumps','pump','xc'].includes(tr.kind)) continue;
   const n = tr.pts.length; let i = 30;
@@ -307,13 +344,13 @@ for (const f of features){ if (!f.rock || f.kind !== 'rocks') continue;
     const h = 0.12 + rnd()*0.33, r = h*2.4 + 0.25, t = 0.6 + rnd()*(f.L-1.2), us = (rnd()*2-1)*(f.hw-0.2);
     if (f.boulders.some(b => Math.hypot(b.t-t, b.us-us) < (b.r + r)*0.75)) continue;
     const [x, z] = at(t, us); const b = {x, z, t, us, h, r, big:false, rot:rnd()*6.28, f}; f.boulders.push(b); }
-  for (let k = 0, side = rnd() < 0.5 ? -1 : 1; k < 3; k++, side = -side){
-    const h = 0.65 + rnd()*0.4, r = 0.55 + rnd()*0.35, t = (k+0.5)/3*f.L + (rnd()-0.5)*1.5, us = side*(1.0 + r + rnd()*0.6);
+  for (let k = 0, side = rnd() < 0.5 ? -1 : 1, NB = f.crash ? 6 : 3; k < NB; k++, side = -side){
+    const h = f.crash ? 1.1 + rnd()*0.7 : 0.65 + rnd()*0.4, r = f.crash ? 0.8 + rnd()*0.4 : 0.55 + rnd()*0.35, t = (k+0.5)/NB*f.L + (rnd()-0.5)*1.5, us = side*(1.0 + r + rnd()*0.6);
     const [x, z] = at(t, us); f.boulders = f.boulders.filter(b => Math.hypot(b.t-t, b.us-us) > r + b.r*0.6);
     f.boulders.push({x, z, t, us, h, r, big:true, rot:rnd()*6.28, f}); }
   f.hw += 1.0; BOULDERS.push(...f.boulders); }
 features.forEach(f => { if (f.wood === undefined) f.wood = false; });
-export const DIFF = {green:{icon:'●', label:'Green', color:'#2fae4a'}, blue:{icon:'■', label:'Blue', color:'#2f6fff'}, black:{icon:'◆', label:'Black', color:'#111'}, dblack:{icon:'◆◆', label:'Double black', color:'#111'}, pro:{icon:'PRO', label:'Pro line', color:'#ff7a00'}};
+export const DIFF = {green:{icon:'●', label:'Green', color:'#2fae4a'}, blue:{icon:'■', label:'Blue', color:'#2f6fff'}, black:{icon:'◆', label:'Black', color:'#111'}, dblack:{icon:'◆◆', label:'Double black', color:'#111'}, pro3:{icon:'◆◆◆', label:'PRO · Triple black', color:'#ff5a1f'}, pro:{icon:'PRO', label:'Pro line', color:'#ff7a00'}};
 PARK.type = 'Dirt jump'; PARK.diff = 'pro';
 
 // ---------- spatial grids ----------
@@ -479,7 +516,11 @@ spots.push({name:'Bike Shop', shop:true, x: SHOP.x - Math.sin(SHOP.yaw)*20, z: S
 // waypoints on a ring 105 m from the park centre so paths go around the pad and its jump lines, never through them
 const ring = (...degs) => degs.map(a => [PARK.x + 150*Math.cos(a*Math.PI/180), PARK.z + 105*Math.sin(a*Math.PI/180)]);
 const CONN_DEFS = RAMP ? [
-  [valley, J, L_(0)], [J, shopDoor], ...RAMP_DEFS.map(d => d.name === 'Goblin Ridge' ? [T_(0), [250, -485], [45, -485], [45, -430], tBeg(d.name)] : [T_(0), [250, -470], [d.start[0], -470], tBeg(d.name)])   // Goblin's line hooks round behind its start platform: come in round its west side, ...RAMP_DEFS.map(d => { const e = tEnd(d.name), C = RAMPAGE.corral; return [e, [C.x + (e[0] - C.x)*0.3, C.z + 8], [C.x + C.r*0.7, C.z + C.r*0.75], L_(0)]; }),   // every line finishes in the corral; the shuttle pickup is just outside its south-east gate
+  [valley, J, L_(0)], [J, shopDoor],
+  // Goblin's line hooks round behind its start platform: come in round its west side
+  ...RAMP_DEFS.map(d => { const s0 = tBeg(d.name); return d.name === 'Goblin Ridge' ? [T_(0), [250, -485], [45, -485], [45, -430], s0] : [T_(0), [250, -470], [s0[0], -470], s0]; }),
+  // every line finishes in the corral; the shuttle pickup is just outside its south-east gate
+  ...RAMP_DEFS.map(d => { const e = tEnd(d.name), C = RAMPAGE.corral; return [e, [C.x + (e[0] - C.x)*0.3, C.z + 8], [C.x + C.r*0.7, C.z + C.r*0.75], L_(0)]; }),
 ] : [
   // base plaza: Summit Express (A), Send Tower (G) and West Ridge (B) bottoms, the shop and the park are all a short roll apart
   [valley, J, L_(0)], [J, shopDoor], [L_(0), [-125, 552], L_(6)], [L_(0), [-250, 435], L_(1)], [L_(1), [PARK.x + 92*Math.cos(-2.1), PARK.z + 92*Math.sin(-2.1)]],
