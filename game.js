@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { buildBikeRider } from './rider.js';
 import { createDrone, stepDrone } from './drone.js';
+import { spawnRagdoll, stepRagdoll, ragdollReport } from './ragdoll.js';
 import { longAccel, pumpAccel, gripRate, landingCall, wheelieStep, axleXZ, supportPitch, bodyPoint, BODY_POINTS, fakieAim, WHEEL_R } from './ridephys.js';
 import { initNet, NAME_A, NAME_B, EMOTES, cleanCode } from './net.js';
 import { initCloud, CATS as LB_CATS, fmtCode, cleanSaveCode } from './cloud.js';
@@ -503,7 +504,50 @@ const S = { x:0,y:0,z:0, yaw:0, speed:0, vy:0, vx:0, vz:0, air:false, airT:0, pi
 const $ = id => document.getElementById(id);
 const trickEl = $('trick'), centerEl = $('center');
 function flash(msg, t=1.2){ centerEl.textContent = msg; centerEl.style.opacity = 1; S.flashT = t; }
+const rag = { on:false };
+let ragDetached = false;
+const _up = new THREE.Vector3(0, 1, 0), _fwd = new THREE.Vector3(0, 0, -1), _dir = new THREE.Vector3();
+const bailW = { ground: groundH, half: HALF, solids(x, z, out){
+  out.length = 0;
+  for (const t of nearTrees(x, z)){ out.push({ k:'cap', x:t.x, z:t.z, r:0.4, y0:t.y, y1:t.y + (t.h || 4) * 0.8 }); if (out.length >= 6) break; }
+  for (const b of bigBouldersNear(x, z)){ out.push({ k:'sph', x:b.x, y:terrainH(b.x, b.z) + b.h * 0.45, z:b.z, r:Math.min(b.r, b.h) * 0.6 }); if (out.length >= 8) break; }
+}};
+function eachPart(fn){ for (const k in BR.parts) fn(BR.parts[k]); }
+function detachParts(){ if (ragDetached) return; bike.updateWorldMatrix(true, true); eachPart(o => scene.attach(o)); ragDetached = true; }
+function attachParts(){ if (!ragDetached) return; eachPart(o => BR.root.attach(o)); ragDetached = false; }
+function beginRagdoll(){ if (rag.on) return; Object.assign(rag, spawnRagdoll(S)); rag.on = true; detachParts(); }
+function endRagdoll(){ if (!rag.on && !ragDetached) return; rag.on = false; attachParts(); }
+function segBetween(mesh, a, b){ mesh.position.set((a.x + b.x) * 0.5, (a.y + b.y) * 0.5, (a.z + b.z) * 0.5); _dir.set(b.x - a.x, b.y - a.y, b.z - a.z); if (_dir.lengthSq() < 1e-8) return; mesh.quaternion.setFromUnitVectors(_up, _dir.normalize()); }
+function segEnd(mesh, a, b){ mesh.position.set(b.x, b.y, b.z); _dir.set(b.x - a.x, b.y - a.y, b.z - a.z); if (_dir.lengthSq() < 1e-8) return; mesh.quaternion.setFromUnitVectors(_fwd, _dir.normalize()); }
+function applyBailPose(){
+  const P = rag.parts, M = BR.parts; if (!P || !M) return;
+  const b = rag.bike;
+  bike.position.set(b.x, b.y, b.z); bike.quaternion.set(b.q[0], b.q[1], b.q[2], b.q[3]);
+  pitchG.rotation.set(0, 0, 0); leanG.rotation.set(0, 0, 0);
+  M.torso.position.set(P.pelvis.x, P.pelvis.y, P.pelvis.z);
+  _dir.set(P.chest.x - P.pelvis.x, P.chest.y - P.pelvis.y, P.chest.z - P.pelvis.z);
+  if (_dir.lengthSq() > 1e-8) M.torso.quaternion.setFromUnitVectors(_up, _dir.normalize());
+  M.head.position.set(P.head.x, P.head.y, P.head.z);
+  _dir.set(P.head.x - P.chest.x, P.head.y - P.chest.y, P.head.z - P.chest.z);
+  if (_dir.lengthSq() > 1e-8) M.head.quaternion.setFromUnitVectors(_up, _dir.normalize());
+  segBetween(M.upperL, P.shL, P.elL); segBetween(M.foreL, P.elL, P.haL);
+  segBetween(M.upperR, P.shR, P.elR); segBetween(M.foreR, P.elR, P.haR);
+  segEnd(M.handL, P.elL, P.haL); segEnd(M.handR, P.elR, P.haR);
+  segBetween(M.thighL, P.hpL, P.knL); segBetween(M.shinL, P.knL, P.ftL);
+  segBetween(M.thighR, P.hpR, P.knR); segBetween(M.shinR, P.knR, P.ftR);
+  M.kneeL.position.set(P.knL.x, P.knL.y, P.knL.z); M.kneeL.quaternion.copy(M.shinL.quaternion);
+  M.kneeR.position.set(P.knR.x, P.knR.y, P.knR.z); M.kneeR.quaternion.copy(M.shinR.quaternion);
+  segEnd(M.footL, P.knL, P.ftL); segEnd(M.footR, P.knR, P.ftR);
+  M.head.visible = M.torso.visible = M.upperL.visible = M.upperR.visible = M.foreL.visible = M.foreR.visible = true;
+}
+function bailCamera(){
+  const p = rag.parts.pelvis, yaw = S.yaw || 0, hx = -Math.sin(yaw), hz = -Math.cos(yaw);
+  camera.position.set(p.x - hx * 4.4, Math.max(p.y, groundH(p.x, p.z)) + 2.1, p.z - hz * 4.4);
+  camera.up.set(0, 1, 0); camera.lookAt(p.x, p.y + 0.35, p.z);
+  if (Math.abs(camera.fov - 66) > 0.2){ camera.fov = 66; camera.updateProjectionMatrix(); }
+}
 function placeAt(x, z, yaw){
+  endRagdoll();
   S.x = x; S.z = z; S.y = groundH(S.x,S.z); S.yaw = yaw;
   S.speed = 0; S.vy = 0; S.air = false; S.travel = S.yaw; S.wYaw = S.wPitch = 0; S.nose = 0; S.susp = S.suspV = 0; S.pitch = 0; S.spin = 0; S.lean = 0; S.preload = 0; S.crashT = 0; S.tweak = 0; S.trick = null; S.landCool = 0.3; S.fakie = false; S.wheelie = false; S.wheelieArm = 0; S.lipHop = null; S.hopWin = 0; S.jolt = 0;
 }
@@ -513,7 +557,7 @@ function resetGame(){
 }
 function crash(reason){ S.lastCrash = reason; sfxCrash(); endParkLine();
   if (S.crashT>0) return;
-  S.crashT = 2.0; S.air = false; trickEl.textContent = reason;
+  S.crashT = 2.6; S.air = false; beginRagdoll(); trickEl.textContent = reason;
   // health only counts during a trail run; in free roam a crash just respawns you
   if (S.run){ S.lives--;
     if (S.lives <= 0){ const tr = trails[S.run.t]; S.failedRun = S.run.t; S.run = null; flash('RUN OVER', 2); toast(`💀 Out of health — ${tr.name} run ended. Back to the start.`); }
@@ -692,6 +736,7 @@ function respawnSafe(){
   S.crumbs = []; S.crumbT = 0;
 }
 function trackWorld(dt){
+  if (S.crashT > 0) return;
   // breadcrumbs for respawn (only while rolling cleanly on the ground)
   S.crumbT = (S.crumbT||0) + dt;
   if (!S.air && S.crashT <= 0 && S.crumbT > 0.25){ S.crumbT = 0; (S.crumbs ||= []).unshift({x:S.x, z:S.z, yaw:S.travel ?? S.yaw, t:S.time}); if (S.crumbs.length > 16) S.crumbs.pop(); }
@@ -759,8 +804,10 @@ function bodyHazards(){
 function step(dt, inp){
   inp = Object.assign({}, INP0, inp);
   if (S.crashT > 0){ S.crashT -= dt;
-    S.speed *= Math.pow(0.2,dt); S.x += -Math.sin(S.yaw)*S.speed*dt; S.z += -Math.cos(S.yaw)*S.speed*dt; S.y = groundH(S.x,S.z);
-    S.lean = THREE.MathUtils.lerp(S.lean, 1.4, dt*4);
+    if (rag.on){ stepRagdoll(rag, dt, bailW);
+      const p = rag.parts.pelvis, h = Math.max(dt, 1e-4);
+      S.x = p.x; S.y = p.y; S.z = p.z; S.vx = (p.x - p.px) / h; S.vy = (p.y - p.py) / h; S.vz = (p.z - p.pz) / h;
+      S.speed = Math.hypot(S.vx, S.vz); S.air = false; S.lean = 0; }
     if (S.crashT <= 0 && S.state==='riding') respawnSafe();
     return; }
   const onTrail = isDirt(S.x, S.z);
@@ -1043,7 +1090,10 @@ function frame(){
   if (menu.open) menuFrame(dt, inp);
   const flyF = S.state === 'menu' ? flyover(dt) : null, fX = flyF ? flyF[0] : S.x, fZ = flyF ? flyF[1] : S.z;
   animateLifts(dt); updateChunks(fX, fZ); farU.value.set(fX, fZ, coveredR);
-  // pose bike
+  // pose bike. A bail poses the loose rider and the tumbling bike instead of the riding IK.
+  DRV.update(S, inp, dt); inp.cadence = DRV.cadence; inp.standing = DRV.standing;
+  if (rag.on) applyBailPose();
+  else {
   bike.position.set(S.x, S.y, S.z);
   // whole-bike orientation as one quaternion (yaw * pitch * lean/tweak); after a landing it slerps to the target over ~0.15 s instead of snapping
   _eY.set(0, S.yaw + S.spin, 0); _qT.setFromEuler(_eY); _eY.set(S.pitch + (S.nose||0)*0.5, 0, 0); _qT.multiply(_q2.setFromEuler(_eY));
@@ -1051,19 +1101,19 @@ function frame(){
   if (S.air) S.landBlend = 0.15; else if (S.landBlend > 0) S.landBlend -= dt;
   if (!S.air && S.landBlend > 0) bike.quaternion.slerp(_qT, 1 - Math.exp(-dt/0.04)); else bike.quaternion.copy(_qT);
   pitchG.rotation.set(0,0,0); leanG.rotation.set(0,0,0);   // whip/scrub: stick right = bike whips right
-  DRV.update(S, inp, dt); inp.cadence = DRV.cadence; inp.standing = DRV.standing;
   BR.update(S, inp, dt);                                       // rider pose: IK on grips/pedals, blended trick keyframes, barspin/tailwhip bike parts
   rig.position.z = (S.weight||0)*0.12;                         // visible fore/aft weight transfer
   { // sag 25% at rest; susp (-0.05..0.3) maps onto the rest of the travel; bottom-out at full travel
     const tr_ = THREE.MathUtils.clamp(0.25 + (S.susp||0)/0.3*0.75, 0, 1), [df, dr] = BR.setSusp(tr_, tr_*0.97);
     rig.position.y = -(df + dr)/2 + 0.04; rig.scale.y = 1;
     if (tr_ >= 0.995 && !S.bottomed){ S.bottomed = true; sfxLand(18); } else if (tr_ < 0.8) S.bottomed = false; }
+  }
   spawnDust(dt);
   for (const w of wheels) w.rotation.x -= S.speed*dt/0.36;
   // camera
   const ch = S.travel ?? S.yaw; const fx = -Math.sin(ch), fz = -Math.cos(ch);
   const cm = camMode < 3 ? camMode : 0, back = [5.2,8,3.4][cm];
-  const fpRide = camMode === 3 && !S.lift && S.state === 'riding';
+  const fpRide = camMode === 3 && !S.lift && S.state === 'riding' && !rag.on;
   // Speed used to widen the lens (up to +14°) and pull the chase cam back. That shifted every POV as you went faster.
   const fov = fpRide ? 78 : 66;
   if (Math.abs(camera.fov - fov) > 0.2){ camera.fov = fov; camera.updateProjectionMatrix(); }
@@ -1081,12 +1131,13 @@ function frame(){
   camera.position.copy(camPos);
   camRoll = THREE.MathUtils.lerp(camRoll, -S.lean*0.08 + (S.sliding ? S.slip*0.04 : 0), Math.min(1, dt*3));
   camera.up.set(Math.sin(camRoll)*Math.cos(ch), Math.cos(camRoll), -Math.sin(camRoll)*Math.sin(ch)); camera.lookAt(camLook);
-  const fpOn = camMode === 3 && !S.lift && S.state === 'riding';
+  const fpOn = camMode === 3 && !S.lift && S.state === 'riding' && !rag.on;
   BR.head.visible = !fpOn;
   const torso = BR.root.getObjectByName('riderTorso'); if (torso) torso.visible = !fpOn;
   // Arms are siblings of the hands on the rider root, not parents of them. Helmet cam hides the sleeves only.
   for (const n of ['armUpperL','armUpperR','armForeL','armForeR']){ const o = BR.root.getObjectByName(n); if (o) o.visible = !fpOn; }
-  if (camMode >= 3 && !S.lift && S.state === 'riding'){ const sx = -fz, sz = fx, up = 1;
+  if (rag.on && (camMode === 3 || camMode === 4) && !S.lift && S.state === 'riding') bailCamera();
+  else if (camMode >= 3 && !S.lift && S.state === 'riding'){ const sx = -fz, sz = fx, up = 1;
     if (camMode === 3 || camMode === 4){   // helmet: just behind the grips so hands and bars stay in frame. Chest mount is lower.
       if (camMode === 3){
         // Head lags the chassis: bars keep the full bump pitch, the view only takes a fraction of it.
@@ -1783,7 +1834,7 @@ try { NET = initNet({THREE, scene, camera, S, bike, buildBikeRider: makeRider, s
 openMenu('main'); setTimeout(() => $('loading').classList.add('done'), 300);
 teleport(spotI, true);
 window.__features = features; window.__respawn = () => respawnSafe(); window.__game = S; window.__readInput = readInput; window.__emoteFrame = emoteFrame;
-window.__drone = FPV.state; window.__droneToggle = toggleDrone; window.__droneFly = (dt, inp) => flyDrone(dt, inp || {steer:0, lyRaw:0, bankRaw:0, rsy:0}); window.__saveSettings = saveSettings; window.__settings = SETTINGS; window.__groundH = groundH; window.__lift = i => startLift(i); window.__world = { LIFTS, connectors, trails, features, spots, PARK, SHOP, terrainH, featH, isDirt, nearTrails, base, inPark, treesInCell, trailDist };
+window.__drone = FPV.state; window.__droneToggle = toggleDrone; window.__droneFly = (dt, inp) => flyDrone(dt, inp || {steer:0, lyRaw:0, bankRaw:0, rsy:0}); window.__saveSettings = saveSettings; window.__settings = SETTINGS; window.__bail = () => crash('Bail!'); window.__ragdoll = rag; window.__ragdollReport = () => rag.on ? ragdollReport(rag, groundH) : null; window.__groundH = groundH; window.__lift = i => startLift(i); window.__world = { LIFTS, connectors, trails, features, spots, PARK, SHOP, terrainH, featH, isDirt, nearTrails, base, inPark, treesInCell, trailDist };
 window.__setCam = m => { camMode = ((m % CAM_NAMES.length) + CAM_NAMES.length) % CAM_NAMES.length; camInit = false; camHead = S.travel ?? S.yaw; };
 window.__BR = BR; window.__teleport = i => teleport(i); window.__unlocked = unlocked; window.__isOpen = isOpen; window.__chunks = () => chunks.size; window.__renderer = renderer; window.__place = (x, z, yaw) => { placeAt(x, z, yaw); S.air = false; };
 window.__sim = (secs, inp) => { const h=1/120; const base={steer:0,pedal:0,brake:0,jump:false,tx:0,ty:0}; for(let t=0;t<secs;t+=h){ step(h, Object.assign({}, base, typeof inp==='function'?inp(t):inp)); trackWorld(h); } return {x:S.x, z:S.z, kmh:S.speed*3.6, air:S.air, lives:S.lives, clean:S.clean, score:S.score}; };

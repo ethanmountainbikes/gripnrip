@@ -321,5 +321,6 @@ export function buildBikeRider(frameMat, opts = {}){
     const g = o.geometry; triangles += g.index ? g.index.count / 3 : g.attributes.position.count / 3;
     [].concat(o.material).forEach(m => m && matSet.add(m)); });
   const stats = { triangles: Math.round(triangles), riderTriangles: Math.round(triangles - bikeTris), bikeTriangles: Math.round(bikeTris), materials: matSet.size, legacy };
-  return { root, wheels, update, setSusp, head, POSES, TRICK_OF, M, bean, stats, crank: () => crankA, steer: () => steerSm, grips: GRIP, steerG, frameG };
+  const parts = { torso, head, upperL: seg.upperL, upperR: seg.upperR, foreL: seg.foreL, foreR: seg.foreR, thighL: seg.thighL, thighR: seg.thighR, shinL: seg.shinL, shinR: seg.shinR, handL: hand[0], handR: hand[1], footL: foot[0], footR: foot[1], kneeL: kneePad[0], kneeR: kneePad[1] };
+  return { root, wheels, update, setSusp, head, parts, POSES, TRICK_OF, M, bean, stats, crank: () => crankA, steer: () => steerSm, grips: GRIP, steerG, frameG };
 }
