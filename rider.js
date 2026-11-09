@@ -70,7 +70,7 @@ export function buildBikeRider(frameMat, opts = {}){
   fb.add(new THREE.CylinderGeometry(0.042, 0.042, 0.11, 16), M.frame, at(0, 0.32, 0.04, 0, 0, Math.PI/2));           // BB shell / main pivot
   tube(fb, SHOCK0, ROCK, 0.022, M.black); tube(fb, SHOCK0.clone().lerp(ROCK, 0.45), ROCK, 0.03, M.steel);
   { const pts = []; for (let i = 0; i <= 64; i++){ const t = i/64, a = t*Math.PI*2*7; pts.push(V(Math.cos(a)*0.032, t*0.16 - 0.08, Math.sin(a)*0.032)); }
-    const coil = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 120, 0.0045, 5); const c = SHOCK0.clone().lerp(ROCK, 0.4);
+    const coil = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 36, 0.0045, 4); const c = SHOCK0.clone().lerp(ROCK, 0.4);
     fb.add(coil, M.spring, new THREE.Matrix4().compose(c, new THREE.Quaternion().setFromUnitVectors(UP, ROCK.clone().sub(SHOCK0).normalize()), V(1,1,1))); }
   // saddle + dropper
   fb.add(new THREE.SphereGeometry(0.075, 16, 12).scale(0.9, 0.42, 1.7), M.saddle, at(SADDLE.x, SADDLE.y, SADDLE.z, -0.08));
@@ -99,12 +99,12 @@ export function buildBikeRider(frameMat, opts = {}){
   const wheels = [];
   const makeWheel = (center, parent, rear) => { const w = new THREE.Group(); w.position.copy(center); parent.add(w); const wb = new Bucket();
     const ry = at(0,0,0,0,Math.PI/2,0);
-    wb.add(new THREE.TorusGeometry(R - 0.032, 0.042, 12, 40), M.rubber, ry); wb.add(new THREE.TorusGeometry(R - 0.07, 0.014, 8, 32), M.black, ry);
-    const knob = new THREE.SphereGeometry(0.011, 6, 5);
-    for (let i = 0; i < 28; i++){ const a = i/28*Math.PI*2;
+    wb.add(new THREE.TorusGeometry(R - 0.032, 0.042, 8, 28), M.rubber, ry); wb.add(new THREE.TorusGeometry(R - 0.07, 0.014, 6, 24), M.black, ry);
+    const knob = new THREE.SphereGeometry(0.012, 5, 4);
+    for (let i = 0; i < 16; i++){ const a = i/16*Math.PI*2;
       for (const sx of i%2 ? [-0.028, 0.028] : [0]) { const r = R - 0.03 + (sx ? 0.03 : 0.04); wb.add(knob, M.rubber, new THREE.Matrix4().compose(V(sx, Math.cos(a)*r, Math.sin(a)*r), new THREE.Quaternion(), V(1, sx ? 0.7 : 1.15, 1.3))); } }
     wb.add(new THREE.CylinderGeometry(0.028, 0.028, 0.12, 12), M.black, at(0,0,0,0,0,Math.PI/2));
-    for (let i = 0; i < 28; i++){ const a = i/28*Math.PI*2, side = i%2 ? 0.03 : -0.03, a0 = a + (i%4<2 ? 0.25 : -0.25);
+    for (let i = 0; i < 16; i++){ const a = i/16*Math.PI*2, side = i%2 ? 0.03 : -0.03, a0 = a + (i%4<2 ? 0.25 : -0.25);
       const p0 = V(side, Math.cos(a0)*0.03, Math.sin(a0)*0.03), p1 = V(0, Math.cos(a)*(R-0.08), Math.sin(a)*(R-0.08)); wb.add(new THREE.CylinderGeometry(0.0022, 0.0022, p0.distanceTo(p1), 4), M.steel, between(p0, p1)); }
     const rr = rear ? 0.09 : 0.1; wb.add(new THREE.CylinderGeometry(rr, rr, 0.003, 32), M.steel, at(-0.072, 0, 0, 0, 0, Math.PI/2)); wb.add(new THREE.CylinderGeometry(0.045, 0.045, 0.005, 6), M.black, at(-0.072, 0, 0, 0, 0, Math.PI/2));
     if (rear) for (let k = 0; k < 9; k++) wb.add(new THREE.CylinderGeometry(0.02 + k*0.0048, 0.02 + k*0.0048, 0.003, 20), M.steel, at(0.04 + k*0.004, 0, 0, 0, 0, Math.PI/2));
@@ -238,7 +238,7 @@ export function buildBikeRider(frameMat, opts = {}){
   };
   const TRICK_OF = { up:'nohander', ul:'tuck', down:'nofooter', left:'superman', right:'cancan', dl:'nacnac', ur:'xup', dr:'tailwhip', bar:'barspin' };
   const W = Object.fromEntries(Object.keys(POSES).map(k => [k, 0]));
-  let barA = 0, tailA = 0, crankA = 0, flipW = 0, spinW = 0, pw = 0, give = 0;
+  let barA = 0, tailA = 0, crankA = 0, flipW = 0, spinW = 0, pw = 0, give = 0, steerSm = 0;
   const tmp = { grip: [V(), V()], pedal: [V(), V()] };
   const axisRot = (ang) => { const m = new THREE.Matrix4().makeTranslation(FA.x, FA.y, FA.z).multiply(new THREE.Matrix4().makeRotationAxis(AX, ang)).multiply(new THREE.Matrix4().makeTranslation(-FA.x, -FA.y, -FA.z)); return m; };
   const ik = (A, T, l1, l2, pole, outMid, outEnd) => { const d0 = T.clone().sub(A); let d = d0.length(); const dir = d0.normalize(); d = Math.min(l1 + l2 - 1e-3, Math.max(Math.abs(l1 - l2) + 1e-3, d));
@@ -257,8 +257,11 @@ export function buildBikeRider(frameMat, opts = {}){
     if (name === 'barspin') barA += rate*(0.5 + 0.5*amt)*dt; else barA = toFull(barA, rate, dt);
     if (name === 'tailwhip') tailA += rate*0.8*(0.5 + 0.5*amt)*dt; else tailA = toFull(tailA, rate*0.8, dt);
     if (!air){ barA = Math.round(barA/(Math.PI*2))*Math.PI*2; tailA = Math.round(tailA/(Math.PI*2))*Math.PI*2; }
-    const steerVis = (S.air ? 0 : -(inp?.steer || 0)*0.25*Math.max(0.2, 1 - S.speed/14)) + W.xup*POSES.xup.steer + W.nacnac*POSES.nacnac.steer;
-    frameG.matrix.copy(axisRot(-tailA)); steerG.matrix.copy(axisRot(barA + steerVis)); frameG.matrixWorldNeedsUpdate = steerG.matrixWorldNeedsUpdate = true;
+    // Head-tube steer: about 28° at a standstill, about 9° once you are up to speed. Critically damped, so it does not snap.
+    const speedF = Math.max(0.34, 1 - Math.min(1, (S.speed || 0) / 22));
+    const steerT = (S.air ? 0 : -(inp?.steer || 0) * 0.50 * speedF) + W.xup*POSES.xup.steer + W.nacnac*POSES.nacnac.steer;
+    steerSm += (steerT - steerSm) * (1 - Math.exp(-dt / 0.055));
+    frameG.matrix.copy(axisRot(-tailA)); steerG.matrix.copy(axisRot(barA + steerSm)); frameG.matrixWorldNeedsUpdate = steerG.matrixWorldNeedsUpdate = true;
     // crank turns while pedalling on the ground; pedals stay level
     // crank driven by drivetrain cadence (rpm); freewheel: cranks stop and settle to level pedals (attack stance)
     const cad = inp?.cadence || 0;
@@ -317,5 +320,5 @@ export function buildBikeRider(frameMat, opts = {}){
     const g = o.geometry; triangles += g.index ? g.index.count / 3 : g.attributes.position.count / 3;
     [].concat(o.material).forEach(m => m && matSet.add(m)); });
   const stats = { triangles: Math.round(triangles), riderTriangles: Math.round(triangles - bikeTris), bikeTriangles: Math.round(bikeTris), materials: matSet.size, legacy };
-  return { root, wheels, update, setSusp, head, POSES, TRICK_OF, M, bean, stats, crank: () => crankA };
+  return { root, wheels, update, setSusp, head, POSES, TRICK_OF, M, bean, stats, crank: () => crankA, steer: () => steerSm, grips: GRIP, steerG, frameG };
 }
