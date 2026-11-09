@@ -113,7 +113,7 @@ const ride = await evalJs(`(() => {
 await evalJs(`window.__teleport(${ride.rockSpot}); window.__game.state='riding';`);
 await sleep(400);
 await shot('03-rock-garden');
-await evalJs(`document.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyV'})); document.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyV'})); document.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyV'}));`);
+await evalJs(`window.__setCam(3)`);
 await sleep(250);
 await shot('04-helmet-cam');
 

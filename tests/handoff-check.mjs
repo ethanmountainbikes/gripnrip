@@ -94,12 +94,8 @@ try {
     return {errs:window.__errs, stats:window.__riderStats, flat:+flat.kmh.toFixed(2), pumped:+pumped.kmh.toFixed(2), fakie:{...fakie, still:!!S.fakie, roll:roll?+roll.kmh.toFixed(2):null}, wheelie, loop, one, body:S.lastCrash||null};
   })()`);
   await ev(`window.__game.state='riding'; window.__game.paused=false; window.__game.crashT=0; window.__game.lift=null;`);
-  let toast = '';
-  for (let i = 0; i < 8 && !/Helmet/.test(toast); i++) {
-    await key(send, 'KeyV');
-    await sleep(120);
-    toast = await ev(`document.getElementById('toast').textContent`);
-  }
+  await ev(`window.__setCam(3)`);
+  await sleep(120);
   await ev(`window.__place(window.__world.PARK.x, window.__world.PARK.z, 0); window.__game.speed=6; window.__game.state='riding'; window.__game.paused=false;`);
   await sleep(800);
   const fp = await ev(`({fp:window.__fp, toast:document.getElementById('toast').textContent})`);

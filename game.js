@@ -577,7 +577,15 @@ function onPress(code){
     spotI = nextOpen(spotI, code==='DL'||code==='BracketLeft' ? -1 : 1); $('overlayMsg').innerHTML = menuMsg(); }
 }
 const CAM_NAMES = ['Chase', 'Far chase', 'Low chase', 'Helmet cam', 'GoPro chest', 'Side tracking', 'Trackside drone'];
-let camMode = Math.min(CAM_NAMES.length-1, LS.get('trailDescent.cam', 0) | 0); const drone = {t: 0, p: new THREE.Vector3()};
+const CAM_HELMET = 3;
+// No saved choice means helmet. A stored 0 is an explicit chase pick and stays chase.
+function savedCam(){
+  const v = LS.get('trailDescent.cam', null);
+  if (v === null || v === undefined || v === '') return CAM_HELMET;
+  const n = v | 0;
+  return Number.isFinite(n) ? Math.max(0, Math.min(CAM_NAMES.length - 1, n)) : CAM_HELMET;
+}
+let camMode = savedCam(); const drone = {t: 0, p: new THREE.Vector3()};
 // ---------- open world: spots, safe respawn, trail runs ----------
 // teleport unlocks: a trail's spot unlocks after you finish that trail once. Flow Line, the park and the meadow are always open.
 const UKEY = RAMP ? 'trailDescent.unlocked.rampage' : 'trailDescent.unlocked';
@@ -601,6 +609,7 @@ function teleport(i, quiet){
 }
 const OOB = HALF - 60, inside = (x,z) => Math.max(Math.abs(x), Math.abs(z)) < OOB - 90;
 function respawnSafe(){
+  const prefer = savedCam(); if (prefer !== camMode){ camMode = prefer; camInit = false; }
   if (S.failedRun !== undefined && S.failedRun !== null){ const tr = trails[S.failedRun]; S.failedRun = null;   // failed run: back to just above that trail's START arch
     placeAt(tr.pts[0][0], tr.pts[0][1], tr.yaw[0]); S.crumbs = []; S.crumbT = 0; camInit = false; return; }
   if (S.run){ const tr = trails[S.run.t], cp = S.run.cp != null ? tr.cps[S.run.cp] : {x:tr.pts[3][0], z:tr.pts[3][1], yaw:tr.yaw[3]};   // run: last checkpoint (or the start), timer keeps going
