@@ -448,20 +448,47 @@ export const groundH = (x,z) => terrainH(x,z) + featH(x,z);
 // ---------- trees (deterministic per 100 m cell, cached) ----------
 export const TCELL = 100;
 const treeCache = new Map();
+function treeBlocked(x, z){
+  // Off the tread, and at least 2.5 m from a trail centre, a landing, a path, a lift, a gate, the shop or a spawn.
+  if (trailDist(x, z) < Math.max(2.5, W + 0.6)) return true;
+  if (featH(x, z) > 0.02 || featClear(x, z) < 2.5) return true;
+  if (connDist(x, z) < CW + 2.2) return true;
+  if (nearLiftStation(x, z, 16) || liftLineDist(x, z) < 8) return true;
+  if (Math.hypot(x - SHOP.x, z - SHOP.z) < 26 || Math.hypot(x + 150, z - 380) < 18) return true;
+  if (inPark(x, z) || Math.hypot(x - PARK.x, z - PARK.z) < PARK.r + 18) return true;
+  for (const s of spots) if (Math.hypot(x - s.x, z - s.z) < 14) return true;
+  return false;
+}
 export function treesInCell(ci, cj){
   const k = key(ci, cj); let a = treeCache.get(k); if (a) return a; a = [];
-  if (RAMP){ treeCache.set(k, a); return a; }   // desert: no trees (sparse scrub is drawn as bushes)
   const r = mulberry(ci*7919 + cj*104729 + 17);
-  for (let n=0;n<70;n++){
-    const x = (ci + r())*TCELL, z = (cj + r())*TCELL, hgt = 9 + r()*13, rot = r()*6, hue = r();
-    const forest = noise(x/260+40, z/260-12) + 0.25 + (Math.max(Math.abs(x), Math.abs(z)) > CORE-90 ? 0.3 : 0);   // denser forest in the new outer band
-    if (r() > forest*1.6) continue;
-    const b = base(x,z); if (b > PEAK.h*0.75 + 40) continue;                  // tree line
-    if (inPark(x,z) || Math.hypot(x-PARK.x, z-PARK.z) < PARK.r+38) continue;
-    if (Math.hypot(x-SHOP.x, z-SHOP.z) < 24 || Math.hypot(x+150, z-380) < 22) continue;   // bike shop clearing (+ base plaza clearing)
-    if (trailDist(x,z) < W+2.5 || featH(x,z) > 0) continue;
-    if (connDist(x,z) < CW+2 || nearLiftStation(x,z,16) || liftLineDist(x,z) < 16) continue;   // keep paths, stations and lift lines clear
-    a.push({x, z, y:terrainH(x,z)-0.2, h:hgt, rot, hue});
+  const x0 = ci*TCELL, z0 = cj*TCELL;
+  if (!RAMP){
+    for (let n=0;n<130;n++){
+      const x = (ci + r())*TCELL, z = (cj + r())*TCELL, hgt = 8 + r()*14, rot = r()*6, hue = r();
+      const forest = noise(x/220+40, z/220-12) + 0.45 + (Math.max(Math.abs(x), Math.abs(z)) > CORE-90 ? 0.25 : 0);
+      if (r() > forest*1.35) continue;
+      const b = base(x,z); if (b > PEAK.h*0.75 + 40) continue;
+      if (treeBlocked(x, z)) continue;
+      a.push({x, z, y:terrainH(x,z)-0.2, h:hgt, rot, hue, near: r() < 0.55});
+    }
+  }
+  // A corridor of trunks just outside the riding line, in both worlds. Desert lines are shorter scrub-trees.
+  for (const tr of trails){
+    for (let i = 4; i < tr.pts.length; i += 7){
+      const [x, z] = tr.pts[i];
+      if (x < x0 - 14 || x > x0 + TCELL + 14 || z < z0 - 14 || z > z0 + TCELL + 14) continue;
+      const yaw = tr.yaw[i], nx = Math.cos(yaw), nz = -Math.sin(yaw);
+      for (const side of [-1, 1]){
+        const d = 5.4 + ((i + side) % 3) * 1.3;
+        const tx = x + nx*side*d, tz = z + nz*side*d;
+        if (tx < x0 || tx >= x0 + TCELL || tz < z0 || tz >= z0 + TCELL) continue;
+        if (treeBlocked(tx, tz)) continue;
+        if (a.some(t => (t.x-tx)**2 + (t.z-tz)**2 < 20)) continue;
+        const hgt = RAMP ? 4.5 + (i%5) : 10 + (i%8);
+        a.push({x:tx, z:tz, y:terrainH(tx,tz)-0.2, h:hgt, rot:(i%6)*0.4, hue:(i%7)/7, near:true});
+      }
+    }
   }
   treeCache.set(k, a); return a;
 }

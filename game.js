@@ -136,7 +136,7 @@ const mergeGeos = gs => { let n = 0; const ps = gs.map(g => g.index ? g.toNonInd
   const P = new Float32Array(n*3), N = new Float32Array(n*3), U = new Float32Array(n*2); let o = 0;
   for (const g of ps){ if (!g.attributes.normal) g.computeVertexNormals(); P.set(g.attributes.position.array, o*3); N.set(g.attributes.normal.array, o*3); if (g.attributes.uv) U.set(g.attributes.uv.array, o*2); o += g.attributes.position.count; }
   const r = new THREE.BufferGeometry(); r.setAttribute('position', new THREE.BufferAttribute(P,3)); r.setAttribute('normal', new THREE.BufferAttribute(N,3)); r.setAttribute('uv', new THREE.BufferAttribute(U,2)); return r; };
-const trunkG = new THREE.CylinderGeometry(0.16,0.34,1,8,1); trunkG.translate(0,0.5,0);
+const trunkG = new THREE.CylinderGeometry(0.07,0.42,1,7,3); trunkG.translate(0,0.5,0);
 // conifer: 5 layered, drooping tiers with ragged needle edges (spans y 0..1, radius 1)
 const coneG = (() => { const tiers = []; for (let k = 0; k < 5; k++){ const r = 1 - k*0.18, hgt = 0.34 - k*0.03, y0 = k*0.17;
     const g = new THREE.ConeGeometry(r, hgt, 14, 2, true); const p = g.attributes.position;
@@ -146,6 +146,18 @@ const coneG = (() => { const tiers = []; for (let k = 0; k < 5; k++){ const r = 
 const trunkMat = new THREE.MeshStandardMaterial({map:TEX.bark.map, normalMap:TEX.bark.normal, roughness:0.95});
 TEX.bark.map.repeat.set(2, 5); TEX.bark.normal.repeat.set(2, 5);
 const folMat = new THREE.MeshStandardMaterial({map:TEX.needles.map, normalMap:TEX.needles.normal, color:0x8fce55, roughness:0.85, side:THREE.DoubleSide});
+function windSway(mat, amp){
+  mat.onBeforeCompile = sh => { sh.uniforms.uTime = windU;
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime;\n').replace('#include <begin_vertex>', `#include <begin_vertex>
+      float swayH = max(0.0, position.y);
+      vec4 sw = modelMatrix * instanceMatrix * vec4(0.0, swayH, 0.0, 1.0);
+      float gust = sin(uTime*1.15 + sw.x*0.05 + sw.z*0.04);
+      transformed.x += gust * swayH * swayH * ${amp};
+      transformed.z += cos(uTime*0.85 + sw.z*0.06) * swayH * swayH * ${(amp * 0.65).toFixed(3)};`); };
+  mat.customProgramCacheKey = () => 'wind' + amp;
+}
+windSway(trunkMat, 0.025);
+windSway(folMat, 0.11);
 TEX.needles.map.repeat.set(6, 2); TEX.needles.normal.repeat.set(6, 2);
 const rockG = (() => { const g = new THREE.IcosahedronGeometry(1, 1), p = g.attributes.position;
   for (let i = 0; i < p.count; i++){ const v = new THREE.Vector3().fromBufferAttribute(p, i), n = 1 + 0.18*Math.sin(v.x*3.1 + v.y*2.3) + 0.12*Math.sin(v.z*5.3 - v.x*1.7) + 0.07*Math.sin(v.y*9.1); v.multiplyScalar(n); v.y *= 0.7; p.setXYZ(i, v.x, v.y, v.z); }
