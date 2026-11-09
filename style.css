@@ -31,7 +31,8 @@ canvas{display:block}
 #shop{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:20;background:rgba(15,20,25,.92);padding:16px 22px;border-radius:12px;width:min(760px,94vw);box-shadow:0 8px 30px rgba(0,0,0,.6)}
 #shop.hidden{display:none}#shop h2{margin:0 0 10px;color:#ffd84d}#shopBal{float:right;color:#7CFC8A;font-size:18px}
 .bike{display:flex;align-items:center;gap:12px;padding:8px;border-radius:8px;margin:4px 0;background:rgba(255,255,255,.05)}.bike.sel{outline:2px solid #ffd84d;background:rgba(255,216,77,.12)}
-.sw{width:34px;height:34px;border-radius:6px;flex:none;border:2px solid #fff}.bn{flex:1.2}.bn small{display:block;opacity:.75}.st{flex:1.6;font-size:12px}.pr{flex:none;width:120px;text-align:right;font-weight:800}
+.sw{width:34px;height:34px;border-radius:6px;flex:none;border:2px solid #fff}.bn{flex:1.2;min-width:0}.bn small{display:block;opacity:.75}.st{flex:1.6;font-size:12px}.pr{flex:none;width:120px;text-align:right;font-weight:800}
+.bikeThumb{width:96px;height:60px;object-fit:cover;border-radius:6px;flex:none;background:#243028;border:1px solid rgba(255,255,255,.4);pointer-events:none}
 .sbar{display:inline-block;width:52px;height:6px;background:#333;border-radius:3px;margin:0 6px 0 3px;vertical-align:middle}.sbar i{display:block;height:100%;background:#ffb020;border-radius:3px}
 #overlay{z-index:10}
 #liftLegend{position:absolute;top:calc(84px + var(--mm) + 10px);right:20px;width:calc(var(--mm) + 4px);max-height:calc(100vh - 84px - var(--mm) - 220px);overflow:hidden;font:11px/1.35 Arial,sans-serif;color:#fff;text-shadow:0 1px 2px #000;pointer-events:none}
@@ -143,3 +144,15 @@ body.inshop #shop{left:auto;right:3vw;transform:translateY(-50%);width:min(500px
   #liftLegend,#liftLegend.side{display:none}
 }
 @media (orientation:portrait) and (pointer:coarse) and (max-width:600px){ #rotateHint{top:max(52px,env(safe-area-inset-top));bottom:auto;left:12px;transform:none;font-size:13px} body:not(.inmenu) #rotateHint{display:none} }
+@media (max-width:600px),(max-height:500px){
+  body.inshop #shop{left:0;right:0;top:auto;bottom:0;transform:none;width:100%;max-height:min(78vh,560px);border-radius:12px 12px 0 0;padding:10px 12px max(10px,env(safe-area-inset-bottom))}
+  body.inshop #shopList{max-height:52vh}
+  #shop h2{font-size:28px}
+  .bike{flex-wrap:wrap;gap:8px;align-items:flex-start}
+  .bikeThumb{width:84px;height:52px}
+  .st{flex:1 1 140px;font-size:11px}
+  .pr{width:auto;margin-left:auto}
+}
+#emoteWheel{position:fixed;left:50%;bottom:max(18px,env(safe-area-inset-bottom));transform:translateX(-50%);z-index:56;max-width:min(640px,92vw);padding:8px 12px;background:rgba(12,16,12,.82);color:#f3e9d2;border:2px solid #d9772b;border-radius:8px;font:600 15px/1.35 "Barlow Condensed",sans-serif;text-align:center;pointer-events:none}
+#emoteWheel[hidden]{display:none}
+@media (max-height:500px),(max-width:600px){ #emoteWheel{font-size:13px;bottom:max(8px,env(safe-area-inset-bottom));max-width:94vw} }

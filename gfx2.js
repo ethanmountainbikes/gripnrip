@@ -13,7 +13,7 @@ const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x-a)/(b-a))); retur
 
 export const TOD = {
   morning: {dir:[-0.62, 0.30, 0.48], col:0xffe0c4, I:3.0, turb:[3.6, 7.5], ray:[2.0, 2.0], exp:[0.80, 0.78], fog:[0xc9d3dc, 0xead2bc], warm:0.25},
-  noon:    {dir:[0.45, 0.62, 0.30], col:0xfff4e2, I:3.3, turb:[2.6, 6.5], ray:[1.6, 1.4], exp:[0.78, 0.74], fog:[0xbfd3e3, 0xe9d4b8], warm:0.0},
+  noon:    {dir:[0.45, 0.62, 0.30], col:0xffe2c0, I:3.1, turb:[3.4, 6.5], ray:[1.15, 1.3], exp:[0.78, 0.74], fog:[0xf0b48c, 0xe9d4b8], warm:0.2},
   golden:  {dir:[0.70, 0.15, -0.50], col:0xffb36b, I:3.4, turb:[5.5, 9.0], ray:[2.8, 2.6], exp:[0.92, 0.88], fog:[0xe6c8a8, 0xf0c49a], warm:0.6},
 };
 
@@ -90,7 +90,7 @@ export function showcase(o, P, ctx){
   renderer.toneMappingExposure = T.exp[wi]; sun.color.set(T.col); sun.intensity = T.I; sunCol.value.set(T.col);
   scene.fog.color.set(T.fog[wi]);
   // ---- height fog (valley haze) + tinted aerial perspective (replaces the distance-only chunk)
-  const HB = RAMP ? 2.0 : 25.0, HH = RAMP ? 22.0 : 45.0, HM = RAMP ? 0.55 : 0.45, far = RAMP ? 'vec3(0.86, 0.70, 0.58)' : 'vec3(0.50, 0.62, 0.80)';
+  const HB = RAMP ? 2.0 : 25.0, HH = RAMP ? 22.0 : 45.0, HM = RAMP ? 0.55 : 0.45, far = RAMP ? 'vec3(0.86, 0.62, 0.48)' : 'vec3(0.62, 0.38, 0.55)';
   THREE.ShaderChunk.fog_pars_vertex = '#ifdef USE_FOG\n varying float vFogDepth; varying float vFogWY;\n#endif';
   THREE.ShaderChunk.fog_vertex = '#ifdef USE_FOG\n vFogDepth = - mvPosition.z; vFogWY = (inverse(viewMatrix)*vec4(mvPosition.xyz, 1.0)).y;\n#endif';
   THREE.ShaderChunk.fog_pars_fragment = '#ifdef USE_FOG\n uniform vec3 fogColor; varying float vFogDepth; varying float vFogWY;\n #ifdef FOG_EXP2\n uniform float fogDensity;\n #else\n uniform float fogNear; uniform float fogFar;\n #endif\n#endif';

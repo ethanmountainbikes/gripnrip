@@ -24,6 +24,8 @@ A low-poly open-world mountain-bike game in the browser, inspired by Descenders 
 | Reset camera | X | Square | X |
 | Pause | Menu | Options | P / Esc |
 | Help panel | View | Share | H |
+| Wheelie | Left stick ↓ while rolling | Left stick ↓ | K while rolling |
+| Fakie (land a level 180, roll backward) | Left stick ← → in the air | Left stick ← → | A / D in the air |
 | Teleport to previous / next spot | D-pad ← / → | D-pad ← / → | [ / ] (or , / .), 1–9 and 0 jump straight to spots 1–10 |
 | Start / restart (menus) | A | Cross | Enter / Space |
 
@@ -206,7 +208,7 @@ Settings → **Graphics**: Low / Medium / High / Max. The setting is saved, and 
 
 ## Multiplayer (private rooms)
 Main menu (or pause menu) → **Multiplayer** → *Create room* gives a 6-character code; friends choose *Join with code* and type it.
-Up to 8 riders see each other ride (smoothed), with their bikes/skins and preset name tags. 4 emotes (👍 🔥 ⏳ 🏁) while stopped or on a lift: keyboard **T + 1–4**, controller **D-pad** (up/right/down/left); 1–6 stay teleports.
+Up to 8 riders see each other ride (smoothed), with their bikes/skins and preset name tags. 4 emotes (👍 🔥 ⏳ 🏁) while stopped or on a lift: hold **T** or **D-pad Up**, then **1–4** or the right stick. A short D-pad Up tap still shifts up a gear. Number keys stay teleports while the wheel is closed. The rider name in Settings is the same two preset words (no typing).
 There is no chat: names and emotes are presets, rooms are private by code, the host can lock the room or remove riders, and
 nothing is stored. If the server can't be reached the game just stays single-player. The server lives in `server/` (see its README).
 

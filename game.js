@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { buildBikeRider } from './rider.js';
+import { longAccel, pumpAccel, gripRate, landingCall, wheelieStep, axleXZ, supportPitch, bodyPoint, BODY_POINTS, fakieAim, WHEEL_R } from './ridephys.js';
 import { initNet, NAME_A, NAME_B, EMOTES, cleanCode } from './net.js';
 import { initCloud, CATS as LB_CATS, fmtCode, cleanSaveCode } from './cloud.js';
 import { makeTextures, triplanar } from './textures.js';
@@ -9,7 +10,7 @@ import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featBase, featAxis, BOULDERS, boulderH, bigBouldersNear, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL, LIFTS, connectors, CW, SHOP, WORLD, RAMPAGE, trailDist } from './world.js';
+import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featBase, featAxis, BOULDERS, boulderH, rockTop, rockContact, bigBouldersNear, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL, LIFTS, connectors, CW, SHOP, WORLD, RAMPAGE, trailDist } from './world.js';
 import { initSfx, setSfxVolume, updateSfx, sfxLand, sfxCrash, sfxLiftStart } from './sfx.js';
 const RAMP = WORLD === 'rampage';   // Red Bull Rampage-inspired desert world
 
@@ -52,12 +53,12 @@ document.body.prepend(renderer.domElement);
 const scene = new THREE.Scene();
 const SKY = RAMP ? 0x9cc4e4 : 0xa9cfe6;
 scene.background = new THREE.Color(SKY);
-scene.fog = new THREE.Fog(RAMP ? 0xe6d2b4 : 0xc4d7e0, RAMP ? 220 : 180, RAMP ? 3200 : 3800);   // fog fades into the sky's horizon colour (atmospheric haze)
+scene.fog = new THREE.Fog(RAMP ? 0xe7b48a : 0xf0b48c, RAMP ? 220 : 160, RAMP ? 3200 : 3400);   // warm horizon haze; Low has no post stack
 const camera = new THREE.PerspectiveCamera(68, innerWidth/innerHeight, 0.1, 6000);
 const TEX = makeTextures(Q.tex, RAMP);
-scene.add(new THREE.HemisphereLight(0xdff0ff, RAMP ? 0x9a5534 : 0x4a6030, 0.9));
+scene.add(new THREE.HemisphereLight(RAMP ? 0xf0c8a4 : 0xf0c4d4, RAMP ? 0x9a5534 : 0x3e5a32, 0.72));
 const SUN_DIR = new THREE.Vector3(0.45, 0.62, 0.3).normalize();
-const sun = new THREE.DirectionalLight(0xfff1d6, 2.6);
+const sun = new THREE.DirectionalLight(0xffe4b8, 2.85);
 sun.castShadow = Q.shadow > 0; sun.shadow.mapSize.set(Math.max(512, Q.shadow), Math.max(512, Q.shadow)); sun.shadow.radius = 3;
 Object.assign(sun.shadow.camera, {left:-40,right:40,top:40,bottom:-40,near:1,far:160});
 sun.shadow.bias = -0.0005; sun.shadow.normalBias = 0.06;   // no shadow acne / striping on the dirt
@@ -80,7 +81,7 @@ function setTod(d){ const i = TODS.indexOf(SETTINGS.tod || 'noon'), k = (i + d +
   const m = new THREE.ShaderMaterial({side:THREE.BackSide, depthWrite:false, fog:false, uniforms:{uSun:{value:SUN_DIR}},
     vertexShader:`varying vec3 p; void main(){p=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
     fragmentShader:`varying vec3 p; uniform vec3 uSun; void main(){ vec3 d=normalize(p); float h=d.y;
-      vec3 zen=vec3(.22,.45,.82), hor=vec3(.77,.84,.88); vec3 c=mix(hor,zen,pow(clamp(h*1.4,0.,1.),0.6));
+      vec3 zen=vec3(.52,.30,.62), hor=vec3(.98,.62,.28); vec3 c=mix(hor,zen,pow(clamp(h*1.15,0.,1.),0.55));
       float s=max(dot(d,uSun),0.); c+=vec3(1.,.85,.6)*(pow(s,8.)*0.25+pow(s,64.)*0.5) + vec3(1.,.97,.9)*smoothstep(.9994,.9997,s)*2.;
       c=mix(c,hor,smoothstep(0.08,-0.02,h)*0.9); gl_FragColor=vec4(c,1.);
       #include <tonemapping_fragment>
@@ -110,12 +111,13 @@ terrainMat.onBeforeCompile = sh => {
     .replace('#include <map_fragment>', `#include <map_fragment>
       vec4 w = vSplat / max(1e-3, vSplat.x + vSplat.y + vSplat.z + vSplat.w); vec2 P = vTWP.xz;
       vec3 alb = tex2(tG, P)*w.x + tex2(tD, P*1.3)*w.y + tex2(tR, P*0.6)*w.z + tex2(tS, P*0.5)*w.w;
-      diffuseColor.rgb *= alb*1.7;`)
+      diffuseColor.rgb *= alb*1.82;
+      diffuseColor.rgb *= mix(vec3(1.0), vec3(1.07, 0.98, 0.90), w.y);`)
     .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
       { vec4 w2 = vSplat / max(1e-3, vSplat.x + vSplat.y + vSplat.z + vSplat.w); vec2 P2 = vTWP.xz*0.33;
         vec2 tn = (texture2D(nG, P2).xy*w2.x + texture2D(nD, P2*1.3).xy*w2.y + texture2D(nR, P2*0.6).xy*w2.z + texture2D(nS, P2*0.5).xy*w2.w)*2.0 - 1.0;
         normal = normalize(normal + (viewMatrix*vec4(tn.x, 0.0, tn.y, 0.0)).xyz*0.7); }`)
-    .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(0.95, 0.55, vSplat.w);'); };
+    .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(0.94, 0.72, w.y);\nroughnessFactor = mix(roughnessFactor, 0.55, vSplat.w);'); };
 const chunkIndex = (() => { const idx = []; for (let r=0;r<NV-1;r++) for (let k=0;k<NV-1;k++){ const a=r*NV+k, b=a+1, e=a+NV, f=e+1; idx.push(a,e,b, b,e,f); } return new THREE.BufferAttribute(new Uint32Array(idx),1); })();
 const C_DIRT = new THREE.Color(RAMP ? 0xb07a52 : 0x8a6640), C_DIRT2 = new THREE.Color(RAMP ? 0x93603e : 0x6e4f30), C_GRASS = new THREE.Color(RAMP ? 0xb5603a : 0x5d8a32), C_GRASS2 = new THREE.Color(RAMP ? 0xc98552 : 0x7aa040),
       C_ROCK = new THREE.Color(RAMP ? 0x9c5136 : 0x857d72), C_SNOW = new THREE.Color(0xe9eef2), C_ALP = new THREE.Color(0x8c9a5a);
@@ -143,9 +145,9 @@ const coneG = (() => { const tiers = []; for (let k = 0; k < 5; k++){ const r = 
   tiers.push(new THREE.ConeGeometry(0.2, 0.25, 8).translate(0, 0.9, 0)); return mergeGeos(tiers); })();
 const trunkMat = new THREE.MeshStandardMaterial({map:TEX.bark.map, normalMap:TEX.bark.normal, roughness:0.95});
 TEX.bark.map.repeat.set(2, 5); TEX.bark.normal.repeat.set(2, 5);
-const folMat = new THREE.MeshStandardMaterial({map:TEX.needles.map, normalMap:TEX.needles.normal, roughness:0.85, side:THREE.DoubleSide});
+const folMat = new THREE.MeshStandardMaterial({map:TEX.needles.map, normalMap:TEX.needles.normal, color:0x8fce55, roughness:0.85, side:THREE.DoubleSide});
 TEX.needles.map.repeat.set(6, 2); TEX.needles.normal.repeat.set(6, 2);
-const rockG = (() => { const g = new THREE.IcosahedronGeometry(1, 2), p = g.attributes.position;
+const rockG = (() => { const g = new THREE.IcosahedronGeometry(1, 1), p = g.attributes.position;
   for (let i = 0; i < p.count; i++){ const v = new THREE.Vector3().fromBufferAttribute(p, i), n = 1 + 0.18*Math.sin(v.x*3.1 + v.y*2.3) + 0.12*Math.sin(v.z*5.3 - v.x*1.7) + 0.07*Math.sin(v.y*9.1); v.multiplyScalar(n); v.y *= 0.7; p.setXYZ(i, v.x, v.y, v.z); }
   g.computeVertexNormals(); return g; })();
 const rockMat = triplanar(new THREE.MeshStandardMaterial({color:RAMP ? 0xd09070 : 0xb8b2a8, roughness:0.9, flatShading:true}), TEX.rock, 0.45, 0.9);
@@ -290,17 +292,21 @@ const farU = { value: new THREE.Vector3(0,0,0) }; let FARMESH = null;
   const dg = new THREE.BufferGeometry(); dg.setAttribute('position', new THREE.Float32BufferAttribute(dv,3)); dg.setAttribute('color', new THREE.Float32BufferAttribute(dc,3)); dg.setIndex(di); dg.computeVertexNormals();
   const dm = new THREE.Mesh(dg, dirtMat); dm.castShadow = dm.receiveShadow = true; scene.add(dm); }
 
-// ---------- 3D boulders (rock gardens): each mesh is the exact collider shape (lathe of its height profile) + small surface detail
+// ---------- 3D boulders. Smooth rocks are a lathe of boulderH. Angular rocks are the same square pyramid rockContact uses.
 { const mk = big => { const pts = []; const b = {h:1, r:1, big}; for (let i = 0; i <= 10; i++){ const d = 1 - i/10; pts.push(new THREE.Vector2(d, boulderH(b, Math.min(d, 0.999)))); }
     pts[0].y = 0; const g = new THREE.LatheGeometry(pts, 11); g.translate(0, -0.02, 0); const p = g.attributes.position;
     for (let i = 0; i < p.count; i++){ const x = p.getX(i), z = p.getZ(i), y = p.getY(i), n = 1 + 0.06*Math.sin(x*7.1 + z*3.3) + 0.05*Math.sin(z*9.7 - x*4.1 + y*5);
       p.setXYZ(i, x*n, y > 0.05 ? y*(1 + 0.04*Math.sin(x*11 + z*6)) : y, z*n); }
     g.computeVertexNormals(); return g; };
+  const pyramid = () => { const p = [-1,0,-1, 1,0,-1, 0,1,0,  1,0,-1, 1,0,1, 0,1,0,  1,0,1, -1,0,1, 0,1,0,  -1,0,1, -1,0,-1, 0,1,0];
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(p, 3)); g.computeVertexNormals(); return g; };
   const bmat = triplanar(new THREE.MeshStandardMaterial({color:0xa9a39a, roughness:0.85, flatShading:true}), TEX.rock, 0.6, 1.0);
-  for (const big of [false, true]){ const list = BOULDERS.filter(b => b.big === big); if (!list.length) continue;
-    const im = new THREE.InstancedMesh(mk(big), bmat, list.length), M = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+  const place = (geo, list) => { if (!list.length) return; const im = new THREE.InstancedMesh(geo, bmat, list.length), M = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
     list.forEach((b, i) => { M.compose(new THREE.Vector3(b.x, terrainH(b.x, b.z) + 0.015, b.z), q.setFromEuler(e.set(0, b.rot, 0)), new THREE.Vector3(b.r, b.h, b.r)); im.setMatrixAt(i, M); });
-    im.castShadow = im.receiveShadow = true; im.computeBoundingSphere(); scene.add(im); } }
+    im.castShadow = im.receiveShadow = true; im.computeBoundingSphere(); scene.add(im); };
+  place(mk(false), BOULDERS.filter(b => !b.ang && !b.big));
+  place(mk(true), BOULDERS.filter(b => !b.ang && b.big));
+  place(pyramid(), BOULDERS.filter(b => b.ang)); }
 // ---------- Rampage: finish corral fence + flags, wooden start platforms with scaffold towers ----------
 if (RAMP){ const C0 = RAMPAGE.corral, wood = new THREE.MeshStandardMaterial({color:0x9a7048, roughness:0.85}), steel = new THREE.MeshStandardMaterial({color:0x8d939a, roughness:0.4, metalness:0.7});
   const post = new THREE.CylinderGeometry(0.07, 0.07, 1.2, 6), rail = new THREE.BoxGeometry(0.06, 0.1, 1), flagG = new THREE.PlaneGeometry(0.9, 2.6);
@@ -354,7 +360,10 @@ const bike = new THREE.Group();          // position + heading yaw (+ spin)
 const pitchG = new THREE.Group(); bike.add(pitchG);
 const leanG = new THREE.Group(); pitchG.add(leanG);
 const rig = new THREE.Group(); leanG.add(rig);        // preload compression
-const BR = buildBikeRider(frameMat); rig.add(BR.root); const wheels = BR.wheels;   // detailed procedural bike + skeletal rider (rider.js)
+const legacyRider = LS.get('trailDescent.legacyRider', false) === true;
+function makeRider(mat){ try { return buildBikeRider(mat, { legacy: legacyRider }); } catch (e){ console.warn('rider fallback', e); return buildBikeRider(mat, { legacy: true }); } }
+const BR = makeRider(frameMat); rig.add(BR.root); const wheels = BR.wheels;   // athletic rider, or the original when the classic flag is on
+window.__riderStats = BR.stats;
 scene.add(bike);
 bike.traverse(o=>{ if(o.isMesh) o.castShadow=true; });
 
@@ -433,7 +442,7 @@ const DRV = (() => { const COGS = [51,45,39,33,28,24,21,18,16,14,12,10], RING = 
   return D; })();
 window.__drv = DRV;
 function readInput(){
-  const inp = {rsy:0, counter:false, steer:0, lean:0, pedal:0, brake:0, pumpHold:false, pop:false, tweak:0, trick:null, kbFlip:0, pressed:{}};
+  const inp = {rsy:0, counter:false, steer:0, lean:0, pedal:0, brake:0, pumpHold:false, pop:false, tweak:0, trick:null, kbFlip:0, pressed:{}, hold:{DU:false, DD:false, DL:false, DR:false, T:!!keys.KeyT}};
   const pads = navigator.getGamepads ? navigator.getGamepads() : [];
   for (const gp of pads){ if (!gp || !gp.connected) continue;
     if (!knownPads[gp.index]){ knownPads[gp.index]=true; toast('🎮 Controller connected: ' + gp.id.slice(0,40)); }
@@ -445,6 +454,7 @@ function readInput(){
       else if (mag > 0.35){ const sec = Math.round(Math.atan2(ry, rx)/(Math.PI/4)); inp.trick = {0:'right', 1:'dr', 2:'down', 3:'dl', 4:'left', '-4':'left', '-3':'ul', '-2':'up', '-1':'ur'}[sec]; inp.trickAmt = Math.min(1, (mag-0.35)/0.6); } }
     else { if (ry > 0.5) inp.pumpHold = true; if (ry < -0.5){ inp.pop = true; inp.counter = true; } inp.tweak = rx; inp.rsy = ry; }
     inp.dpx = (m.btn.DR?1:0) - (m.btn.DL?1:0); inp.dpy = (m.btn.DD?1:0) - (m.btn.DU?1:0); inp.lsx = dz(m.lx); inp.lsy = dz(m.ly);
+    inp.hold.DU = !!m.btn.DU; inp.hold.DD = !!m.btn.DD; inp.hold.DL = !!m.btn.DL; inp.hold.DR = !!m.btn.DR;
     for (const name of ['A','B','X','Y','Start','Back','DL','DR','DU','DD','LB','RB']){ const now=!!m.btn[name], key=gp.index+'_'+name; if(now && !prevBtn[key]) inp.pressed[name]=true; prevBtn[key]=now; }
     break; }
   if (keys.KeyA||keys.ArrowLeft) inp.steer -= 1; if (keys.KeyD||keys.ArrowRight) inp.steer += 1;
@@ -473,7 +483,7 @@ const trickEl = $('trick'), centerEl = $('center');
 function flash(msg, t=1.2){ centerEl.textContent = msg; centerEl.style.opacity = 1; S.flashT = t; }
 function placeAt(x, z, yaw){
   S.x = x; S.z = z; S.y = groundH(S.x,S.z); S.yaw = yaw;
-  S.speed = 0; S.vy = 0; S.air = false; S.travel = S.yaw; S.wYaw = S.wPitch = 0; S.nose = 0; S.susp = S.suspV = 0; S.pitch = 0; S.spin = 0; S.lean = 0; S.preload = 0; S.crashT = 0; S.tweak = 0; S.trick = null; S.landCool = 0.3;
+  S.speed = 0; S.vy = 0; S.air = false; S.travel = S.yaw; S.wYaw = S.wPitch = 0; S.nose = 0; S.susp = S.suspV = 0; S.pitch = 0; S.spin = 0; S.lean = 0; S.preload = 0; S.crashT = 0; S.tweak = 0; S.trick = null; S.landCool = 0.3; S.fakie = false; S.wheelie = false; S.jolt = 0;
 }
 function resetGame(){
   Object.assign(S,{lives:3,bestAir:0,totalAir:0,time:0,maxKmh:0,clean:0,spins:0,flips:0,finishes:0,parkClean:0,state:'riding',paused:false});
@@ -490,12 +500,36 @@ function crash(reason){ S.lastCrash = reason; sfxCrash(); endParkLine();
 }
 function showOverlay(title,msg){ $('overlay').classList.remove('hidden'); $('overlayBox').querySelector('h1').textContent=title; $('overlayMsg').innerHTML=msg; }
 function togglePause(){ if (S.state!=='riding' || shopOpen || bigMap.open) return; S.paused=!S.paused; if (S.paused) openMenu('pause'); else closeMenu(); }
-let emoteArm = 0;
+let emoteWheel = null, duHold = 0, tHold = 0, duGearSent = false;
+const emoteEl = document.createElement('div'); emoteEl.id = 'emoteWheel'; emoteEl.hidden = true; document.body.appendChild(emoteEl);
+function emoteChoices(){ return EMOTES.map((e, i) => `${i + 1} ${e}`).join('   ·   '); }
+function openEmote(which){ if (emoteWheel) return; emoteWheel = which; emoteEl.hidden = false; emoteEl.textContent = `EMOTE  ·  ${emoteChoices()}  ·  right stick or 1–4`; }
+function closeEmote(){ emoteWheel = null; emoteEl.hidden = true; }
+function sendEmote(i){ if (NET && i >= 0 && i < EMOTES.length) NET.emote(i); closeEmote(); duHold = 0; tHold = 0; }
+function emoteFrame(dt, inp){
+  const slow = !!(S.lift || (S.speed || 0) * 3.6 < 3);
+  const can = NET && NET.st.status === 'in' && !menu.open && !bigMap.open && !shopOpen && S.state === 'riding' && !S.paused && slow;
+  const riding = S.state === 'riding' && !S.paused && !menu.open;
+  if (inp.hold && inp.hold.DU){ duHold += dt;
+    if (!emoteWheel && duHold >= 0.35 && !duGearSent && riding && !can){ DRV.manual(+1); duGearSent = true; } }
+  else {
+    if (duHold > 0.04 && duHold < 0.35 && !emoteWheel && riding) DRV.manual(+1);
+    duHold = 0; duGearSent = false; if (emoteWheel === 'du') closeEmote(); }
+  if (inp.hold && inp.hold.T) tHold += dt; else { tHold = 0; if (emoteWheel === 't') closeEmote(); }
+  if (!emoteWheel && can && duHold >= 0.35) openEmote('du');
+  if (!emoteWheel && can && tHold >= 0.35) openEmote('t');
+  if (emoteWheel && !can) closeEmote();
+  if (emoteWheel){ inp.pumpHold = false; inp.pop = false; inp.counter = false;
+    const rx = inp.tweak || 0, ry = inp.rsy || 0;
+    if (ry < -0.55) sendEmote(0); else if (rx > 0.55) sendEmote(1); else if (ry > 0.55) sendEmote(2); else if (rx < -0.55) sendEmote(3);
+    inp.tweak = 0; inp.rsy = 0; }
+  window.__emote = { wheel: !!emoteWheel, tHold: +tHold.toFixed(2), can: !!can };
+}
 function onPress(code){
-  if (NET && NET.st.status === 'in' && !menu.open && !bigMap.open && !shopOpen && (S.lift || (S.speed||0)*3.6 < 3)){   // emotes: only when (nearly) stopped or on a lift
-    if (code === 'KeyT'){ emoteArm = performance.now() + 2500; toast('Emote: 1 👍  2 🔥  3 ⏳  4 🏁'); return; }
-    if (/^Digit[1-4]$/.test(code) && (keys.KeyT || performance.now() < emoteArm)){ emoteArm = 0; NET.emote(+code.slice(5) - 1); return; }
-    if (['DU','DR','DD','DL'].includes(code)){ NET.emote({DU:0, DR:1, DD:2, DL:3}[code]); return; } }
+  if (emoteWheel){
+    if (/^Digit[1-4]$/.test(code)){ sendEmote(+code.slice(5) - 1); return; }
+    if (code === 'DR' || code === 'DD' || code === 'DL'){ sendEmote({ DR: 1, DD: 2, DL: 3 }[code]); return; }
+    if (code === 'DU' || code === 'KeyT') return; }
   if (S.lift){ if (code==='A'||code==='Enter'||code==='Space') S.lift.d = 1e9; return; }   // skip the chairlift ride
   if (shopOpen){ shopKey(code); return; }
   if (bigMap.open){ mapKey(code); return; }
@@ -513,7 +547,7 @@ function onPress(code){
   if (code==='KeyH') $('help').classList.toggle('hidden');
   if ((code==='KeyR'||code==='B') && S.state==='riding' && !S.paused) { respawnSafe(); flash('RESPAWN',0.8); }
   // teleport between spots: D-pad ← → on the controller, [ ] / , . or 1-8 on the keyboard
-  if (S.state==='riding' && !S.paused && (code==='DU'||code==='KeyG')) DRV.manual(+1);
+  if (S.state==='riding' && !S.paused && code==='KeyG') DRV.manual(+1);
   if (S.state==='riding' && !S.paused && (code==='DD'||code==='KeyF')) DRV.manual(-1);
   if (S.state==='riding' && !S.paused){
     if (code==='DL'||code==='BracketLeft'||code==='Comma') teleport(nextOpen(spotI,-1));
@@ -597,18 +631,36 @@ function trackWorld(dt){
 const wrapA = a => Math.atan2(Math.sin(a), Math.cos(a));
 
 const INP0 = {steer:0, lean:0, pedal:0, brake:0, pumpHold:false, pop:false, counter:false, tweak:0, rsy:0, trick:null};
-// big boulders are solid: head-on = crash, glancing = deflect off with a speed loss; hop high enough and you clear them
-function hitBoulders(){ for (const b of bigBouldersNear(S.x, S.z)){
-    const dx = S.x - b.x, dz = S.z - b.z, d = Math.hypot(dx, dz), R = b.r*0.95 + 0.12;
-    if (d >= R) continue; const top = terrainH(b.x, b.z) + boulderH(b, Math.min(d, b.r*0.999));
-    if (S.y > top - 0.05) continue;                                             // above the rock (hopped / rolled onto it from the air)
-    const nxv = dx/(d||1), nzv = dz/(d||1), vx = -Math.sin(S.travel), vz = -Math.cos(S.travel), into = -(vx*nxv + vz*nzv);   // 1 = straight at it
-    if (into > 0.75 && S.speed > 3){ S.x = b.x + nxv*R; S.z = b.z + nzv*R; S.y = groundH(S.x, S.z); S.air = false; crash('Hit a boulder!'); return true; }
-    // glance: slide round the rock, lose some speed
-    const tx = -nzv, tz = nxv, s = Math.sign(vx*tx + vz*tz) || 1; S.travel = Math.atan2(-tx*s, -tz*s); S.yaw = S.travel + wrapA(S.yaw - S.travel)*0.3;
-    S.speed *= into > 0 ? 0.75 - 0.3*into : 0.95; S.x = b.x + nxv*R; S.z = b.z + nzv*R; if (!S.air) S.y = groundH(S.x, S.z);
+// big boulders are solid. The test uses the same shape as the mesh (dome or pyramid). Head-on crashes, a glance deflects.
+function hitBoulders(){
+  const ax = axleXZ(S.x, S.z, S.yaw);
+  const probes = [[S.x, S.z], [ax.fx, ax.fz], [ax.rx, ax.rz]];
+  for (const b of bigBouldersNear(S.x, S.z)){
+    let hit = null;
+    for (const [x, z] of probes){ const c = rockContact(b, x, z); if (!c) continue;
+      const top = terrainH(b.x, b.z) + rockTop(b, x, z); if (S.y > top - 0.05) continue; hit = c; break; }
+    if (!hit) continue;
+    const vx = -Math.sin(S.travel), vz = -Math.cos(S.travel), into = -(vx*hit.nx + vz*hit.nz);
+    if (into > 0.75 && S.speed > 3){ S.x = hit.x; S.z = hit.z; S.y = groundH(S.x, S.z); S.air = false; crash('Hit a boulder!'); return true; }
+    const tx = -hit.nz, tz = hit.nx, s = Math.sign(vx*tx + vz*tz) || 1; S.travel = Math.atan2(-tx*s, -tz*s); S.yaw = S.fakie ? wrapA(S.travel + Math.PI) : S.travel + wrapA(S.yaw - S.travel)*0.3;
+    S.speed *= into > 0 ? 0.75 - 0.3*into : 0.95; S.x = hit.x; S.z = hit.z; if (!S.air) S.y = groundH(S.x, S.z);
     S.vx = -Math.sin(S.travel)*S.speed; S.vz = -Math.cos(S.travel)*S.speed; S.boulderHits = (S.boulderHits||0) + 1; return false; }
-  return false; }
+  return false;
+}
+// Head and chest bail on a hard impact. Bars bail on a rock or a tree. A wheel in the air is not a bail.
+function bodyHazards(){
+  if (S.crashT > 0 || S.speed < 2.2) return false;
+  const pts = BODY_POINTS.map(p => bodyPoint(S.x, S.y, S.z, S.yaw, S.pitch || 0, p));
+  for (const p of pts){ const gnd = groundH(p.x, p.z); if (p.y > gnd - 0.08) continue;
+    const stuffed = (S.pitch || 0) < -0.7 && S.speed > 3;
+    if (p.fatal || stuffed){ crash(p.name === 'head' ? 'Head hit!' : p.fatal ? 'Body hit!' : 'Cased the front!'); return true; } }
+  for (const t of nearTrees(S.x, S.z)){ for (const p of pts){
+    if ((t.x - p.x)**2 + (t.z - p.z)**2 < 0.2 && p.y < t.y + t.h*0.72 && p.y > t.y){ crash(p.fatal ? 'Body hit a tree!' : 'Hit a tree!'); return true; } } }
+  for (const b of bigBouldersNear(S.x, S.z)){ for (const p of pts){ if (!rockContact(b, p.x, p.z)) continue;
+    const top = terrainH(b.x, b.z) + rockTop(b, p.x, p.z); if (p.y > top + 0.15 || p.y < terrainH(b.x, b.z) - 0.2) continue;
+    if (p.fatal || S.speed > 4){ crash(p.name === 'head' ? 'Head hit a rock!' : p.fatal ? 'Body hit a rock!' : 'Hit a boulder!'); return true; } } }
+  return false;
+}
 function step(dt, inp){
   inp = Object.assign({}, INP0, inp);
   if (S.crashT > 0){ S.crashT -= dt;
@@ -625,30 +677,25 @@ function step(dt, inp){
     const tx_ = -Math.sin(S.travel), tz_ = -Math.cos(S.travel);
     const h0 = groundH(S.x,S.z), h1 = groundH(S.x+tx_*0.5, S.z+tz_*0.5);
     const slope = (h1-h0)/0.5; S.slope = slope;
-    let a = -G*slope/Math.sqrt(1+slope*slope);
-    // pedalling: ~2.5 m/s² from a standstill, fading to zero at 55 km/h (65 uphill); above that speed only comes from gravity and pumping
-    { const up = Math.max(0, slope), cap = 15.28 + 2.78*Math.min(1, up/0.05);   // 55 km/h on the flat, 65 km/h uphill
-      a += inp.pedal * (2.5 + Math.min(3.5, up*12)) * Math.max(0, 1 - S.speed/cap); }   // stronger stroke uphill so typical grades are climbable
-    a -= inp.brake * 9 * Math.min(1,S.speed);
-    a -= 0.0038*BIKE.drag*S.speed*S.speed + 0.2;
-    // (grass rolls like dirt: no off-trail speed penalty; grip off-trail is still lower)
-    // pumping: compress into backsides (downslope) and extend over faces (upslope) to gain speed; wrong timing costs speed
+    // pumping: only the rider's preload change counts. A passive suspension return adds no speed.
     const prevPre = S.preload;
     if (inp.pumpHold) { S.preload = Math.min(1, S.preload + dt*2.2); S.hopWin = 0.35; }
     let pop = 0;
     if (!inp.pumpHold){ S.hopWin = (S.hopWin||0) - dt;
       if (inp.pop && S.preload > 0.05 && S.hopWin > 0){ pop = (1.2 + S.preload*2.0)*BIKE.pop; /* bunny hop ~0.3-0.5 m */ S.preload = 0; }
       else S.preload = Math.max(0, S.preload - dt*3); }
-    const cr = (S.preload - prevPre)/dt;           // >0 compressing, <0 extending
-    const pumpA = cr > 0 ? cr*(Math.max(0,-slope)*9 - Math.max(0,slope)*4) : -cr*(Math.max(0,slope)*3.5 - Math.max(0,-slope)*1.5);
-    a += THREE.MathUtils.clamp(pumpA, -4, 6); S.pumpGain = pumpA;
-    // slides: steering + braking breaks rear traction; the travel direction lags the bike heading
-    const sliding = inp.brake > 0.3 && Math.abs(inp.steer) > 0.35 && S.speed > 5;
-    const grip = sliding ? 1.4 + Math.abs(S.slip||0)*3 : (onTrail ? 11 : 5)*BIKE.grip;
+    const cr = (inp.pumpHold || inp.counter || S.preload > 0) ? (S.preload - prevPre)/dt : 0;
+    const pumpA = pumpAccel(cr, slope); S.pumpGain = pumpA;
+    let a = longAccel({ slope, speed: S.speed, pedal: inp.pedal, brake: inp.brake, drag: BIKE.drag, weight: S.weight || 0, pumpA, fakie: !!S.fakie });
+    const gInfo = gripRate({ brake: inp.brake, steer: inp.steer, speed: S.speed, onTrail, bikeGrip: BIKE.grip, slip: S.slip || 0, weight: S.weight || 0 });
+    const sliding = gInfo.sliding, grip = gInfo.grip;
     const turn = 1.9 * Math.min(1, 0.25 + S.speed/8) / (1 + S.speed*0.03) * (sliding ? 1.7 : 1) * (1 + 0.15*Math.max(0,-inp.lean));
-    S.yaw -= inp.steer * turn * dt;
-    const slipPrev = S.travel; S.travel += wrapA(S.yaw - S.travel) * Math.min(1, grip*dt);
-    const slip = wrapA(S.yaw - S.travel);
+    const steer = S.fakie ? -inp.steer : inp.steer;
+    S.yaw -= steer * turn * dt;
+    const aim = S.fakie ? fakieAim(S.yaw) : S.yaw;
+    const slipPrev = S.travel; S.travel += wrapA(aim - S.travel) * Math.min(1, grip*dt);
+    if (S.fakie && S.speed < 0.45){ S.fakie = false; S.travel = S.yaw; }
+    const slip = wrapA(aim - S.travel);
     a -= Math.abs(Math.sin(slip)) * S.speed * 2.2;
     S.slip = slip; S.sliding = Math.abs(slip) > 0.12;
     S.speed = Math.max(0, S.speed + a*dt);
@@ -668,7 +715,7 @@ function step(dt, inp){
         const latRise = f1 - fAlong, latLen = Math.hypot(mx - fa.dx*dA, mz - fa.dz*dA) + 1e-6;
         const rise = f1 - f0, moveLen = Math.hypot(mx, mz) + 1e-6;
         if (rise > 0.06 && rise/moveLen > 2.5){   // a vertical face (back of a wooden jump, front of a step-down deck): a wall, not a ramp
-          S.speed *= 0.3; S.travel += Math.PI*0.5*Math.sign(wrapA(S.travel - Math.atan2(-fa.dx,-fa.dz)) || 1); S.yaw = S.travel;
+          S.speed *= 0.3; S.travel += Math.PI*0.5*Math.sign(wrapA(S.travel - Math.atan2(-fa.dx,-fa.dz)) || 1); S.yaw = S.fakie ? wrapA(S.travel + Math.PI) : S.travel;
           S.vx = -Math.sin(S.travel)*S.speed; S.vz = -Math.cos(S.travel)*S.speed; nx = S.x; nz = S.z; ng = groundH(nx, nz); vyFeat = 0; S.sideHits = (S.sideHits||0) + 1;
         } else if (latRise > 0.06 && latRise/latLen > 1.2){
          // wall-steep side face: bounce off sideways, lose speed
@@ -691,7 +738,7 @@ function step(dt, inp){
     if (onRock){ const climb = Math.max(0, ng - S.y); S.speed = Math.max(0, S.speed - climb*(2.2 + S.speed*0.25)); S.suspV = (S.suspV||0) + climb*25; S.jolt = Math.min(1, (S.jolt||0) + climb*4);
       vyG = THREE.MathUtils.clamp(vyG, -2, 2); S.rockT = 0.25; }
     S.rockT = Math.max(0, (S.rockT||0) - dt);
-    let crest = S.gf > 3 && S.landCool <= 0 && (S.lastVyG - vyG)/dt > crestG && S.speed > 4 && S.rockT <= 0;
+    let crest = !S.wheelie && S.gf > 3 && S.landCool <= 0 && (S.lastVyG - vyG)/dt > crestG && S.speed > 4 && S.rockT <= 0;
     const edge = (ng - S.y) < -0.12 && (S.lastVyG - vyG)/dt > G_AIR*3 && S.speed > 1.5;   // rolling off a ledge/lip: the ground drops away faster than you can fall
     if (backFeat && !edge) crest = false;   // wrong-way over a jump: roll over it, never pop off its crest
     if (edge && !crest && S.rockT <= 0 && S.landCool <= 0) crest = true;   // never re-launch right after touching down (no landing bounce)
@@ -700,20 +747,32 @@ function step(dt, inp){
       if (clear < 0.4) crest = false; }
     if (pop > 0 || crest){
       S.air = true; S.airT = 0; S.vy = (backFeat ? Math.min(S.lastVyG, 0.1*S.speed) : S.lastVyG) + pop; S.takeoffPitch = S.pitch; S.spin = 0; S.popped = pop > 0;
-      S.toX = S.x; S.toZ = S.z; S.tweakT = 0; S.tricksDone = new Set(); S.wYaw = 0; S.wPitch = 0; S.yaw = S.travel + slip*0.5; S.travel = S.yaw; S.nose = 0;
+      S.toX = S.x; S.toZ = S.z; S.tweakT = 0; S.tricksDone = new Set(); S.wYaw = 0; S.wPitch = 0;
+      if (!S.fakie){ S.yaw = S.travel + slip*0.5; S.travel = S.yaw; } S.nose = 0;
       // scrub: laying the bike over (right stick sideways) at takeoff keeps you low and fast
       const lay = Math.abs(inp.tweak);
       S.scrub = S.vy > 2 ? lay : 0;
       if (S.scrub > 0.2){ S.vy *= 1 - 0.45*S.scrub; S.tweak = inp.tweak; S.speed *= 1.02; S.vx = -Math.sin(S.travel)*S.speed; S.vz = -Math.cos(S.travel)*S.speed; }
       S.x = nx; S.z = nz; S.y += S.vy*dt;
-    } else { S.x = nx; S.z = nz; S.y = ng; S.vy = vyG; S.lastVyG = vyG;
-      S.pitch = THREE.MathUtils.lerp(S.pitch, Math.atan(slope), Math.min(1,dt*12)); }
+    } else { S.x = nx; S.z = nz; S.vy = vyG; S.lastVyG = vyG;
+      const axw = axleXZ(nx, nz, S.yaw), hf = groundH(axw.fx, axw.fz), hr = groundH(axw.rx, axw.rz);
+      const rise = Math.max(0, hf - (S.prevHf ?? hf)) + Math.max(0, hr - (S.prevHr ?? hr));
+      if (rise > 0){ S.speed = Math.max(0, S.speed - rise * (1.6 + S.speed * 0.18)); S.jolt = Math.min(1, (S.jolt || 0) + rise * 3); S.suspV = (S.suspV || 0) + rise * 18; }
+      S.prevHf = hf; S.prevHr = hr;
+      const sup = supportPitch(hf, hr), drop = Math.min(hf, hr) < ng - 0.4;
+      const w = wheelieStep({ active: !!S.wheelie, pitch: S.pitch || 0, lean: inp.lean, brake: inp.brake, speed: S.speed, dt, rearOnGround: hr < ng + 0.8, fakie: !!S.fakie });
+      if (w.tip){ S.wheelie = false; crash('Looped out!'); return; }
+      S.wheelie = w.active;
+      if (w.active){ S.pitch = w.pitch; S.y = hr + Math.sin(S.pitch) * WHEEL_R; }
+      else if (!drop && Math.abs(sup.y - ng) < 0.45){ S.pitch = THREE.MathUtils.lerp(S.pitch, sup.pitch, Math.min(1, dt*10)); S.y = sup.y; }
+      else { S.y = ng; S.pitch = THREE.MathUtils.lerp(S.pitch, Math.atan(slope), Math.min(1, dt*12)); } }
     // came up short against a face too steep to roll up: that's a case, not a place to get stuck
     S.stuckT = (S.speed < 0.6 && slope > 0.25 && featH(S.x, S.z) > 0.05) ? (S.stuckT||0) + dt : 0;
     if (S.stuckT > 1.2 && S.crashT <= 0){ S.stuckT = 0; crash('Cased it!'); }
     S.spin *= Math.exp(-dt*12); S.tweak = (S.tweak||0)*Math.exp(-dt*10); S.nose = (S.nose||0)*Math.exp(-dt*10);
     S.dust = (S.sliding ? 1 : 0) + (inp.brake > 0.5 && S.speed > 6 ? 0.5 : 0) + (!onTrail && S.speed > 4 ? 0.6 : 0);
     if (hitBoulders()) return;
+    if (bodyHazards()) return;
     if (S.speed > 4) for (const t of nearTrees(S.x, S.z)) if ((t.x-S.x)**2 + (t.z-S.z)**2 < 0.55) { crash('Hit a tree!'); return; }
   } else {
     S.airT += dt; S.vy -= G_AIR*dt;
@@ -737,11 +796,13 @@ function step(dt, inp){
     S.dust = 0;
     const gvy = Math.min((groundH(S.x+S.vx*dt, S.z+S.vz*dt) - gh)/dt, 1.5*Math.hypot(S.vx,S.vz) + 0.3);
     if (S.y <= gh) land(gh, gp);
+    else if (bodyHazards()) return;
     else if (!S.popped && S.airT < 0.25 && S.y - gh < 0.3 && S.vy - gvy < 1.5){ S.y = gh; S.air = false; S.lastVyG = gvy; S.gf = 0; S.spin = 0; S.pitch = gp; S.tweak = 0; S.nose = 0; S.trick = null; S.wYaw = S.wPitch = 0; }
   }
   // failsafe: no NaN/Inf, bounded velocities, never stuck in the air or under the ground
   if (S.air && !S.popped) S.vy = Math.min(S.vy, 25);
   if (!S.air) S.lastVyG = Math.min(S.lastVyG||0, 1.5*S.speed + 0.3);
+  S.jolt = Math.max(0, (S.jolt || 0) - dt * 2.5);
   S.speed = Math.min(S.speed, 30); S.vy = Math.max(-40, Math.min(40, S.vy||0));
   if (S.air){ const hs = Math.hypot(S.vx,S.vz); if (hs > 30){ S.vx *= 30/hs; S.vz *= 30/hs; } }
   if (![S.x,S.y,S.z,S.vx,S.vy,S.vz,S.speed,S.pitch,S.yaw].every(Number.isFinite) || (S.air && S.airT > 4)){ respawnSafe(); S.vy = 0; S.air = false; S.airT = 0; }
@@ -751,29 +812,29 @@ function step(dt, inp){
 const _eY = new THREE.Euler(), _qT = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
 function land(gh, gp){
   S.y = gh; S.air = false;
-  S.air = false; const pe = wrapA(S.pitch + (S.nose||0)*0.5 - gp), se = wrapA(S.spin);
   S.wYaw = 0; S.wPitch = 0; S.travel = Math.atan2(-S.vx, -S.vz);
-  const flips = Math.round((S.pitch - S.takeoffPitch)/(Math.PI*2)), spins = Math.round(S.spin/(Math.PI*2));
+  const pe = wrapA(S.pitch + (S.nose||0)*0.5 - gp), se = wrapA(wrapA(S.yaw + S.spin) - S.travel);
+  const flips = Math.round((S.pitch - S.takeoffPitch)/(Math.PI*2)); let spins = Math.round(S.spin/(Math.PI*2));
   // project velocity onto the terrain tangent plane using the real terrain normal (works on and off trail)
   const e = 0.25, nx = -(groundH(S.x+e,S.z)-groundH(S.x-e,S.z))/(2*e), nz = -(groundH(S.x,S.z+e)-groundH(S.x,S.z-e))/(2*e);
   const nl = Math.hypot(nx,1,nz), n = [nx/nl, 1/nl, nz/nl];
   const vn = S.vx*n[0] + S.vy*n[1] + S.vz*n[2];
   const tvx = S.vx - vn*n[0], tvy = S.vy - vn*n[1], tvz = S.vz - vn*n[2];
-  const fwd = Math.hypot(tvx, tvz) * Math.max(0, Math.cos(wrapA(S.yaw - S.travel)));   // keep the along-heading part
-  S.speed = Math.max(0, fwd)*0.96;
-  { const gr = (groundH(S.x - Math.sin(S.yaw)*S.speed/120, S.z - Math.cos(S.yaw)*S.speed/120) - gh)*120; S.vy = Math.min(tvy, gr); S.lastVyG = S.vy; } S.gf = 0; S.landCool = 0.3;
-  const impact = -vn; S.suspV = (S.suspV||0) + Math.min(impact,15)*0.12; S.dustBurst = Math.min(1, impact/8); sfxLand(impact);
-  if (Math.abs(pe) > 0.75*BIKE.stab || Math.abs(se) > 0.85*BIKE.stab){ crash(Math.abs(se)>0.85*BIKE.stab ? 'Landed sideways!' : 'Over the bars!'); return; }
-  if (impact > 20){ crash('Too hard a landing!'); return; }
-  if (S.trick){ crash('Still mid-trick!'); return; }
-  if (Math.abs(S.tweak||0) > 0.6){ crash('Didn\'t straighten the tweak!'); return; }
-  // within tolerance: keep current orientation and let the ground solver damp it smoothly to the surface
-  S.spin = se; S.trick = null;
-  S.pitch = gp + wrapA(S.pitch - gp);   // drop whole flip turns so the bike settles by the shortest way (no unwinding a full loop)
+  const horiz = Math.hypot(tvx, tvz);
+  const impact = -vn; S.suspV = (S.suspV||0) + Math.min(Math.max(impact, 0),15)*0.12; S.dustBurst = Math.min(1, Math.max(impact,0)/8); sfxLand(Math.max(impact, 0));
+  const call = landingCall({ se, pe, stab: BIKE.stab, impact, trick: S.trick, tweak: S.tweak || 0 });
+  if (!call.ok){ crash(call.reason); return; }
+  if (call.fakie){ S.yaw = wrapA(S.yaw + S.spin); S.spin = 0; S.fakie = true; S.wheelie = false; S.speed = horiz * 0.96; }
+  else { S.fakie = false; S.wheelie = !!call.wheelie; S.spin = se; S.speed = horiz * Math.max(0, Math.cos(wrapA(S.yaw - S.travel))) * 0.96; }
+  { const gr = (groundH(S.x - Math.sin(S.travel)*S.speed/120, S.z - Math.cos(S.travel)*S.speed/120) - gh)*120; S.vy = Math.min(tvy, gr); S.lastVyG = S.vy; } S.gf = 0; S.landCool = 0.3;
+  S.trick = null;
+  S.pitch = gp + wrapA(S.pitch - gp);   // drop whole flip turns so the bike settles by the shortest way
+  if (call.fakie) spins = 0;
   if (S.airT > 0.35){
     const parts = []; let pts = Math.round(S.airT*120);
     if (flips){ parts.push((Math.abs(flips)>1? `${Math.abs(flips)}x `:'') + (flips<0?'Frontflip':'Backflip')); pts += 600*Math.abs(flips); S.flips += Math.abs(flips); }
     if (spins){ parts.push(`${Math.abs(spins)*360}`); pts += 350*Math.abs(spins); S.spins += Math.abs(spins); }
+    if (call.fakie){ parts.push('Fakie'); pts += 200; }
     const TN = {up:'No Hander', down:'No Footer', left:'Superman', right:'Can-Can', ul:'Tuck No Hander', ur:'X-Up', dl:'Nac-Nac', dr:'Tailwhip', bar:'Barspin'};
     for (const t of (S.tricksDone||[])){ parts.push(TN[t]); pts += 400; }
     if ((S.scrub||0) > 0.5){ parts.push('Scrub'); pts += 250; }
@@ -795,7 +856,8 @@ const fmtTime = t => `${Math.floor(t/60)}:${(t%60).toFixed(1).padStart(4,'0')}`;
 const camPos = new THREE.Vector3(), camLook = new THREE.Vector3(); let camInit = false;
 const clock = new THREE.Clock(); let acc = 0;
 const arc = $('speedArc'), arcLen = arc.getTotalLength();
-let fpsT=0, fpsN=0, camRoll = 0;
+let fpsT=0, fpsN=0, camRoll = 0, fpCam = { y: 0, pitch: 0, roll: 0, on: false };
+const fpV = new THREE.Vector3();
 // dust particles (slides, hard braking, off-trail, landings)
 const DN = 400, dustPos = new Float32Array(DN*3), dustVel = new Float32Array(DN*3), dustLife = new Float32Array(DN); let dustI = 0;
 const dustGeo = new THREE.BufferGeometry(); dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos,3));
@@ -816,6 +878,7 @@ function frame(){
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, clock.getDelta());
   const inp = readInput(); if (Object.keys(inp.pressed).length) startMusic();
+  emoteFrame(dt, inp);
   for (const k in inp.pressed) onPress(k);
   if (S.state==='riding' && !S.paused && S.lift){ liftRide(dt, inp); }
   else if (S.state==='riding' && !S.paused){
@@ -847,7 +910,10 @@ function frame(){
   // camera
   const ch = S.travel ?? S.yaw; const fx = -Math.sin(ch), fz = -Math.cos(ch);
   const cm = camMode < 3 ? camMode : 0, back = [5.2,8,3.4][cm] + S.speed*0.04;
-  const fov = 66 + Math.min(14, S.speed*0.45); if (Math.abs(camera.fov-fov) > 0.05){ camera.fov += (fov-camera.fov)*Math.min(1,dt*3); camera.updateProjectionMatrix(); }
+  const fpRide = camMode === 3 && !S.lift && S.state === 'riding';
+  const fov = fpRide ? 78 : 66 + Math.min(14, S.speed*0.45);
+  if (fpRide){ if (Math.abs(camera.fov - 78) > 0.2){ camera.fov = 78; camera.updateProjectionMatrix(); } }
+  else if (Math.abs(camera.fov-fov) > 0.4){ camera.fov += (fov-camera.fov)*Math.min(1,dt*4); camera.updateProjectionMatrix(); }
   const tp = new THREE.Vector3(S.x - fx*back, 0, S.z - fz*back);
   tp.y = Math.max(groundH(tp.x,tp.z), S.y) + [2.3,3.4,1.7][cm];
   const tl = new THREE.Vector3(S.x + fx*4, S.y + 1.0, S.z + fz*4);
@@ -855,14 +921,33 @@ function frame(){
   const k = 1 - Math.exp(-dt*6);
   camPos.lerp(tp, k); camLook.lerp(tl, 1 - Math.exp(-dt*10));
   camera.position.copy(camPos);
-  camRoll = THREE.MathUtils.lerp(camRoll, -S.lean*0.18 + (S.sliding ? S.slip*0.1 : 0), Math.min(1, dt*4));
+  camRoll = THREE.MathUtils.lerp(camRoll, -S.lean*0.08 + (S.sliding ? S.slip*0.04 : 0), Math.min(1, dt*3));
   camera.up.set(Math.sin(camRoll)*Math.cos(ch), Math.cos(camRoll), -Math.sin(camRoll)*Math.sin(ch)); camera.lookAt(camLook);
-  BR.head.visible = !(camMode === 3 && !S.lift && S.state === 'riding');
+  const fpOn = camMode === 3 && !S.lift && S.state === 'riding';
+  BR.head.visible = !fpOn;
+  const torso = BR.root.getObjectByName('riderTorso'); if (torso) torso.visible = !fpOn;
   if (camMode >= 3 && !S.lift && S.state === 'riding'){ const sx = -fz, sz = fx, up = 1;
-    if (camMode === 3 || camMode === 4){   // first person: helmet (bars in view) / chest mount
-      const hy = camMode === 3 ? 1.78 : 1.32, fw = camMode === 3 ? 0.32 : 0.36, pitchDn = camMode === 3 ? 0.55 : 0.35;
-      camera.position.set(S.x + fx*fw, S.y + hy, S.z + fz*fw); camera.up.set(0,1,0); camera.lookAt(S.x + fx*6, S.y + hy - 6*pitchDn*0.4 + (S.vy||0)*0.05, S.z + fz*6);
-      if (camera.near !== 0.05){ camera.near = 0.05; camera.updateProjectionMatrix(); } }
+    if (camMode === 3 || camMode === 4){   // helmet: just behind the grips so hands and bars stay in frame. Chest mount is lower.
+      if (camMode === 3){
+        // Head lags the chassis: bars keep the full bump pitch, the view only takes a fraction of it.
+        const eyeH = 1.28;
+        if (!fpCam.on){ fpCam.y = S.y + eyeH; fpCam.pitch = (S.pitch || 0) * 0.22; fpCam.roll = 0; fpCam.on = true; }
+        const ky = 1 - Math.exp(-dt / 0.16), kp = 1 - Math.exp(-dt / 0.13);
+        fpCam.y += (S.y + eyeH - fpCam.y) * ky;
+        fpCam.pitch += ((S.pitch || 0) * 0.22 - fpCam.pitch) * kp;
+        fpCam.roll += ((-S.lean || 0) * 0.04 - fpCam.roll) * (1 - Math.exp(-dt / 0.22));
+        const eye = bodyPoint(S.x, fpCam.y - eyeH, S.z, S.yaw, fpCam.pitch, { x: 0, y: eyeH, z: 0.02, name: 'eye', fatal: false });
+        const look = bodyPoint(S.x, fpCam.y - eyeH, S.z, S.yaw, fpCam.pitch * 0.35, { x: 0, y: eyeH - 0.22, z: -8, name: 'look', fatal: false });
+        camera.position.set(eye.x, eye.y, eye.z);
+        const fdx = look.x - eye.x, fdz = look.z - eye.z, fl = Math.hypot(fdx, fdz) || 1;
+        const rr = Math.sin(fpCam.roll); camera.up.set(fdz / fl * rr, Math.cos(fpCam.roll), -fdx / fl * rr);
+        camera.lookAt(look.x, look.y, look.z);
+        const bar = bodyPoint(S.x, S.y, S.z, S.yaw, S.pitch || 0, { x: 0, y: 0.98, z: -0.55, name: 'bar', fatal: false });
+        fpV.set(bar.x, bar.y, bar.z).project(camera); window.__fp = { fov: +camera.fov.toFixed(1), barNdcY: +fpV.y.toFixed(3), mode: camMode };
+      } else { fpCam.on = false; window.__fp = { fov: camera.fov, barNdcY: null, mode: camMode };
+        const hy = 1.32, fw = 0.36, pitchDn = 0.35;
+        camera.position.set(S.x + fx*fw, S.y + hy, S.z + fz*fw); camera.up.set(0,1,0); camera.lookAt(S.x + fx*6, S.y + hy - 6*pitchDn*0.4 + (S.vy||0)*0.05, S.z + fz*6); }
+      if (camera.near !== 0.08){ camera.near = 0.08; camera.updateProjectionMatrix(); } }
     else if (camMode === 5){ const t = new THREE.Vector3(S.x + sx*5 - fx*1, Math.max(groundH(S.x + sx*5, S.z + sz*5), S.y) + 1.2, S.z + sz*5 - fz*1);   // side tracking
       camPos.lerp(t, 1 - Math.exp(-dt*5)); camera.position.copy(camPos); camera.up.set(0,1,0); camera.lookAt(S.x, S.y + 0.9, S.z); }
     else { // drone: parks ahead beside the trail, pans as you pass, then leapfrogs ahead
@@ -1083,6 +1168,8 @@ const PAGES = {
     {label:'Sound volume', value:PCT(SETTINGS.volume), sub:'sound effects (0% = mute)', adj:d => { SETTINGS.volume = Math.max(0, Math.min(1, Math.round((SETTINGS.volume + d*0.1)*10)/10)); saveSettings(); setSfxVolume(SETTINGS.volume); }},
     {label:'Invert lean / flip (left stick ↕)', value:ON(SETTINGS.invertY), adj:() => { SETTINGS.invertY = !SETTINGS.invertY; saveSettings(); }, act:() => { SETTINGS.invertY = !SETTINGS.invertY; saveSettings(); }},
     {label:'Invert whip / tweak (right stick ↔)', value:ON(SETTINGS.invertX), adj:() => { SETTINGS.invertX = !SETTINGS.invertX; saveSettings(); }, act:() => { SETTINGS.invertX = !SETTINGS.invertX; saveSettings(); }},
+    {label:'Rider name', value:(() => { const n = mpName(); return `${NAME_A[n[0]]} ${NAME_B[n[1]]}`.toUpperCase(); })(), sub:'Preset words only. ← → changes it. No typing. Friends see it next time you join a room.', adj:d => { const n = mpName(), k = (n[0]*NAME_B.length + n[1] + d*7 + NAME_A.length*NAME_B.length) % (NAME_A.length*NAME_B.length); LS.set('trailDescent.mpName', [Math.floor(k/NAME_B.length), k % NAME_B.length]); }, act:() => { LS.set('trailDescent.mpName', [Math.floor(Math.random()*NAME_A.length), Math.floor(Math.random()*NAME_B.length)]); }},
+    {label:'Rider look', value:legacyRider ? 'CLASSIC' : 'ATHLETIC', sub:'Athletic is the lean rider. Classic is the original. Reloads.', act:() => { LS.set('trailDescent.legacyRider', !legacyRider); toast(legacyRider ? 'Athletic rider — reloading…' : 'Classic rider — reloading…'); setTimeout(() => location.reload(), 500); }},
     {label:'Controls / help', value:$('help').classList.contains('hidden') ? 'SHOW' : 'HIDE', act:() => $('help').classList.toggle('hidden')},
     {label:'‹ Back', act:back} ]}),
   multi: () => { const st = NET ? NET.st : {status:'off'}, inRoom = st.status === 'in', host = inRoom && st.id === st.host, nm = mpName();
@@ -1091,7 +1178,7 @@ const PAGES = {
       items.push({label:'Create room', sub:st.status === 'connecting' ? 'Connecting…' : 'Get a private 6-character code to share with friends', act:() => { NET.create().then(() => renderMenu()); renderMenu(); }});
       items.push({label:'Join with code', sub:'Type the code your friend gives you', act:() => askCode()}); }
     else {
-      items.push({label:'Room code', value:st.code, sub:`${st.peers.size + 1}/8 riders · share this code (in person / family chat). Emotes when stopped or on a lift: T + 1–4 (controller: D-pad).`, act:() => {}});
+      items.push({label:'Room code', value:st.code, sub:`${st.peers.size + 1}/8 riders · share this code (in person / family chat). Emotes when stopped or on a lift: hold T or D-pad Up, then 1–4 or the right stick.`, act:() => {}});
       if (host) items.push({label:'Lock room', value:ON(st.locked), sub:'When locked, nobody new can join', adj:() => NET.lock(!st.locked), act:() => NET.lock(!st.locked)});
       if (host) for (const p of st.peers.values()) items.push({label:`Remove ${p.label}`, sub:'Kick this rider from the room', act:() => NET.kick(p.id)});
       items.push({label:'Leave room', act:() => { NET.leave(); renderMenu(); }}); }
@@ -1227,13 +1314,55 @@ function bar(v){ const p = Math.round(50 + (v-1)*250); return `<span class="sbar
 const hex = c => '#' + C(c).getHexString();
 function swatch(it, cat){ if (cat === 'paint' && it.id === 'stock') return hex(BIKE.color);
   if (it.mode === 2) return `linear-gradient(90deg,${hex(it.a)},${hex(it.b)})`; if (it.b !== undefined) return `linear-gradient(135deg,${hex(it.a)} 50%,${hex(it.b)} 50%)`; return hex(it.a); }
+// One small offscreen pass of the real bike mesh. Pictures are cached per bike and equipped paint.
+const thumbCache = new Map();
+let thumbRig = null;
+function thumbSetup(){
+  if (thumbRig) return thumbRig;
+  const scene = new THREE.Scene();
+  scene.add(new THREE.HemisphereLight(0xfff6ea, 0x3d4634, 1.15));
+  const key = new THREE.DirectionalLight(0xffe6c4, 2.4); key.position.set(3, 5, 2); scene.add(key);
+  const frameMat = new THREE.MeshStandardMaterial({color:0xffffff, roughness:0.4, metalness:0.3});
+  const rider = makeRider(frameMat);
+  const g = new THREE.Group(); g.add(rider.root); scene.add(g);
+  const cam = new THREE.PerspectiveCamera(30, 256/160, 0.08, 30);
+  cam.position.set(1.85, 1.05, -2.15); cam.lookAt(0, 0.72, 0.05);
+  const rt = new THREE.WebGLRenderTarget(256, 160);
+  thumbRig = { scene, g, rider, cam, rt };
+  return thumbRig;
+}
+function bikeLookKey(bike){ return bike.id + ':' + SKIN_CATS.map(c => equippedSkin(bike, c).id).join('/'); }
+function bikeThumb(bike){
+  const key = bikeLookKey(bike);
+  const hit = thumbCache.get(key); if (hit) return hit;
+  const R = thumbSetup();
+  R.g.scale.set(bike.scale[0], bike.scale[1], bike.scale[2]);
+  skinRider(R.rider, bike, c => equippedSkin(bike, c));
+  R.rider.update({air:false, crashT:0, susp:0.04, speed:0, tweak:0, wPitch:0, wYaw:0, jolt:0}, {cadence:0, standing:0, steer:0}, 0.05);
+  const prev = renderer.getRenderTarget();
+  const fill = new THREE.DirectionalLight(0xffffff, 1.4); fill.position.set(-3, 2, -2); if (!R.fill){ R.scene.add(fill); R.fill = fill; }
+  renderer.setRenderTarget(R.rt); renderer.setClearColor(0x243028, 1); renderer.clear();
+  renderer.render(R.scene, R.cam);
+  const w = 256, h = 160, buf = new Uint8Array(w * h * 4);
+  renderer.readRenderTargetPixels(R.rt, 0, 0, w, h, buf);
+  renderer.setRenderTarget(prev);
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const ctx = cv.getContext('2d'), img = ctx.createImageData(w, h);
+  const srgb = c => { const x = c / 255; const s = x <= 0.0031308 ? x * 12.92 : 1.055 * Math.pow(x, 1 / 2.4) - 0.055; return Math.max(0, Math.min(255, Math.round(s * 255))); };
+  for (let y = 0; y < h; y++){ const row = (h - 1 - y) * w * 4, dst = y * w * 4; for (let i = 0; i < w * 4; i += 4){ img.data[dst+i] = srgb(buf[row+i]); img.data[dst+i+1] = srgb(buf[row+i+1]); img.data[dst+i+2] = srgb(buf[row+i+2]); img.data[dst+i+3] = 255; } }
+  ctx.putImageData(img, 0, 0);
+  const url = cv.toDataURL('image/jpeg', 0.8);
+  thumbCache.set(key, url);
+  if (thumbCache.size > 24) thumbCache.delete(thumbCache.keys().next().value);
+  return url;
+}
 function renderShop(){
   $('shopBal').textContent = '$' + S.score.toLocaleString() + ' DOLLAHS';
   const t = SHOP_TABS[shopTab];
   $('shopTabs').innerHTML = SHOP_TABS.map((k,i) => `<span class="tab${i===shopTab?' on':''}">${TAB_LABEL[k]}</span>`).join('');
   if (t === 'bikes'){ applySkins();
     $('shopList').innerHTML = BIKES.map((b,i) => { const own = owned.has(b.id), eq = BIKE === b;
-    return `<div class="bike${i===shopSel?' sel':''}"><div class="sw" style="background:#${b.color.toString(16).padStart(6,'0')}"></div><div class="bn"><b>${b.name}</b><small>${b.desc}</small></div>
+    return `<div class="bike${i===shopSel?' sel':''}"><img class="bikeThumb" alt="${b.name}" src="${bikeThumb(b)}"><div class="bn"><b>${b.name}</b><small>${b.desc}</small></div>
       <div class="st">Speed ${bar(2-b.drag)} Grip ${bar(b.grip)}<br>Pop ${bar(b.pop)} Stability ${bar(b.stab)}</div>
       <div class="pr">${eq ? 'EQUIPPED' : own ? 'OWNED · equip' : b.price ? '$'+b.price.toLocaleString() : 'FREE'}</div></div>`; }).join(''); }
   else { const items = SKINS[t], cur = equippedSkin(BIKE, t); applySkins([t, items[shopSel]]);   // live 3D preview of the highlighted item
@@ -1473,7 +1602,7 @@ function askCode(){ const ov = document.createElement('div'); ov.id = 'mpAsk';
   inp.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') done(true); if (e.key === 'Escape') done(false); });
   inp.addEventListener('keyup', e => e.stopPropagation()); inp.addEventListener('input', () => { inp.value = cleanCode(inp.value); });
   ov.querySelector('#mpGo').onclick = () => done(true); ov.querySelector('#mpNo').onclick = () => done(false); }
-try { NET = initNet({THREE, scene, camera, S, bike, buildBikeRider, skinTo:skinRemote, mySkin, myName:mpName, worldIdx:() => RAMP ? 1 : 0, toast, trickKeys:Object.keys(BR.TRICK_OF), drive:() => DRV,
+try { NET = initNet({THREE, scene, camera, S, bike, buildBikeRider: makeRider, skinTo:skinRemote, mySkin, myName:mpName, worldIdx:() => RAMP ? 1 : 0, toast, trickKeys:Object.keys(BR.TRICK_OF), drive:() => DRV,
   onWorld:(w, code) => { LS.set('trailDescent.world', w ? 'rampage' : 'mountain'); toast(`Room is on ${w ? 'RAMPAGE' : 'THE MOUNTAIN'} — switching world…`); setTimeout(() => location.reload(), 900); } });
   NET.on(() => { if (menu.open && menu.page === 'multi') renderMenu(); }); window.__net = NET; } catch (e) { console.warn('multiplayer unavailable', e); NET = null; }
 openMenu('main'); setTimeout(() => $('loading').classList.add('done'), 300);
