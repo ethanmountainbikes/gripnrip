@@ -130,16 +130,16 @@ export function buildBikeRider(frameMat, opts = {}){
     for (let i = 1; i < n; i++){ const t = i/n, rr = r0 + (r1 - r0)*t + bulge*r0*Math.exp(-(((t - at)/0.25)**2)); pts.push(new THREE.Vector2(rr, -h + t*len)); }
     for (let k = 0; k <= 3; k++){ const a = k/3*Math.PI/2; pts.push(new THREE.Vector2(Math.cos(a)*r1, h + Math.sin(a)*r1*0.55)); }
     return new THREE.LatheGeometry(pts, limbN); };
-  const limb = (r0, r1, len, mat, b, at) => mk(taper(r0, r1, len, legacy ? b : b * 0.28, at), mat);
+  const limb = (r0, r1, len, mat, b, at, name) => { const m = mk(taper(r0, r1, len, legacy ? b : b * 0.28, at), mat); if (name) m.name = name; return m; };
   const seg = legacy
     ? { thighL: limb(0.082, 0.056, L.thigh, M.pants, 0.15, 0.3), thighR: limb(0.082, 0.056, L.thigh, M.pants, 0.15, 0.3),
         shinL: limb(0.054, 0.036, L.shin, M.pants, 0.22, 0.28), shinR: limb(0.054, 0.036, L.shin, M.pants, 0.22, 0.28),
-        upperL: limb(0.05, 0.04, L.upper, M.jersey, 0.18, 0.4), upperR: limb(0.05, 0.04, L.upper, M.jersey, 0.18, 0.4),
-        foreL: limb(0.042, 0.03, L.fore, M.jersey2, 0.15, 0.25), foreR: limb(0.042, 0.03, L.fore, M.jersey2, 0.15, 0.25) }
+        upperL: limb(0.05, 0.04, L.upper, M.jersey, 0.18, 0.4, 'armUpperL'), upperR: limb(0.05, 0.04, L.upper, M.jersey, 0.18, 0.4, 'armUpperR'),
+        foreL: limb(0.042, 0.03, L.fore, M.jersey2, 0.15, 0.25, 'armForeL'), foreR: limb(0.042, 0.03, L.fore, M.jersey2, 0.15, 0.25, 'armForeR') }
     : { thighL: limb(0.062, 0.042, L.thigh, M.pants, 0.15, 0.32), thighR: limb(0.062, 0.042, L.thigh, M.pants, 0.15, 0.32),
         shinL: limb(0.04, 0.028, L.shin, M.pants, 0.22, 0.3), shinR: limb(0.04, 0.028, L.shin, M.pants, 0.22, 0.3),
-        upperL: limb(0.04, 0.03, L.upper, M.jersey, 0.18, 0.38), upperR: limb(0.04, 0.03, L.upper, M.jersey, 0.18, 0.38),
-        foreL: limb(0.03, 0.022, L.fore, M.jersey, 0.12, 0.28), foreR: limb(0.03, 0.022, L.fore, M.jersey, 0.12, 0.28) };
+        upperL: limb(0.04, 0.03, L.upper, M.jersey, 0.18, 0.38, 'armUpperL'), upperR: limb(0.04, 0.03, L.upper, M.jersey, 0.18, 0.38, 'armUpperR'),
+        foreL: limb(0.03, 0.022, L.fore, M.jersey, 0.12, 0.28, 'armForeL'), foreR: limb(0.03, 0.022, L.fore, M.jersey, 0.12, 0.28, 'armForeR') };
   const kneePad = [0, 1].map(() => mk(new THREE.SphereGeometry(legacy ? 0.062 : 0.048, 12, 10).scale(1, 1.25, 0.72), M.pad));
   const torso = new THREE.Group(); torso.name = 'riderTorso'; root.add(torso);
   { // torso: legacy is the original thicker build; athletic is a narrower waist and chest, still a stylized rider
@@ -206,7 +206,7 @@ export function buildBikeRider(frameMat, opts = {}){
     const tx = new THREE.CanvasTexture(cv); tx.colorSpace = THREE.SRGBColorSpace; bean.face = new THREE.Group(); bean.face.visible = false; head.add(bean.face);
     for (const s of [-1, 1]){ const f = new THREE.Mesh(new THREE.PlaneGeometry(0.1, 0.1), new THREE.MeshBasicMaterial({map: tx, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3})); f.position.set(s*0.139, 0.03, -0.01); f.rotation.y = s*Math.PI/2; bean.face.add(f); }
     const bk = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.04, 0.01), std(0xf2b705, 0.25, 0.9)); bk.position.set(0, 0.03, 0.158); bean.face.add(bk); }
-  const hand = [0, 1].map(() => { const g = new THREE.Group(); root.add(g); const p = new THREE.Mesh(new THREE.SphereGeometry(legacy ? 0.042 : 0.036, 14, 12).scale(0.85, 0.62, 1.2), M.glove); p.castShadow = true; g.add(p);
+  const hand = [0, 1].map(i => { const g = new THREE.Group(); g.name = i ? 'handR' : 'handL'; root.add(g); const p = new THREE.Mesh(new THREE.SphereGeometry(legacy ? 0.042 : 0.036, 14, 12).scale(0.85, 0.62, 1.2), M.glove); p.castShadow = true; g.add(p);
     const f = new THREE.Mesh(new THREE.CapsuleGeometry(0.022, 0.04, 4, 8).scale(1.6, 1, 1), M.glove); f.rotation.x = Math.PI/2; f.position.set(0, -0.012, -0.055); g.add(f);
     const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.034, 0.036, 0.04, 10), M.black); cuff.rotation.x = Math.PI/2; cuff.position.z = 0.045; g.add(cuff); return g; });
   const foot = [0, 1].map(() => { const g = new THREE.Group(); root.add(g);   // flat-pedal MTB shoe, ~0.28 m long

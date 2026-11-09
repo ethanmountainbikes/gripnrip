@@ -736,9 +736,15 @@ function step(dt, inp){
         } else if (!backFeat) vyFeat = (fAlong - f0)/dt; } }   // backwards: no ramp lip speed, it's just a hill
     // vertical speed from ground-following never exceeds slope x horizontal speed along the travel direction
     const fdx = -Math.sin(S.travel), fdz = -Math.cos(S.travel), g0 = groundH(S.x, S.z);
-    const gradeF = Math.max(0, (groundH(S.x + fdx*0.5, S.z + fdz*0.5) - g0)/0.5, (g0 - groundH(S.x - fdx*0.5, S.z - fdz*0.5))/0.5, (ng - g0)/Math.max(0.05, S.speed*dt));
+    const stepG = Math.max(0, (ng - g0)/Math.max(0.05, S.speed*dt));
+    const faceG = Math.max(0, (groundH(S.x + fdx*0.5, S.z + fdz*0.5) - g0)/0.5, (g0 - groundH(S.x - fdx*0.5, S.z - fdz*0.5))/0.5);
+    const gradeF = Math.max(faceG, stepG);
     let vyG = vyFeat === null ? (ng - S.y)/dt : (terrainH(nx,nz) - (S.y - featH(S.x,S.z)))/dt + vyFeat;
-    vyG = Math.max(-1.5*S.speed - 3, Math.min(vyG, (vyFeat !== null ? 1.5 : Math.min(1.0, gradeF))*S.speed + 0.3));   // ramp faces keep their full lip speed
+    // A one-frame feature sample can jump far more than the ground you are actually on.
+    // The old ramp ceiling was 1.5× speed, so that spike left the lip at a cannon angle.
+    // The face grade over half a metre is the lip. A hop still adds its own pop later.
+    const upCap = (vyFeat !== null ? faceG * S.speed + 0.45 : Math.min(1, gradeF) * S.speed + 0.3);
+    vyG = Math.max(-1.5*S.speed - 3, Math.min(vyG, upCap));
     S.landCool = Math.max(0, (S.landCool||0) - dt);
     S.gf = (S.gf||0) + 1;
     const crestG = (inp.counter && !hopNow) ? G*2.2 : G*1.15;   // counter-pump (RS up, and not the hop itself) keeps you glued over rollers
@@ -935,11 +941,11 @@ function frame(){
   for (const w of wheels) w.rotation.x -= S.speed*dt/0.36;
   // camera
   const ch = S.travel ?? S.yaw; const fx = -Math.sin(ch), fz = -Math.cos(ch);
-  const cm = camMode < 3 ? camMode : 0, back = [5.2,8,3.4][cm] + S.speed*0.04;
+  const cm = camMode < 3 ? camMode : 0, back = [5.2,8,3.4][cm];
   const fpRide = camMode === 3 && !S.lift && S.state === 'riding';
-  const fov = fpRide ? 78 : 66 + Math.min(14, S.speed*0.45);
-  if (fpRide){ if (Math.abs(camera.fov - 78) > 0.2){ camera.fov = 78; camera.updateProjectionMatrix(); } }
-  else if (Math.abs(camera.fov-fov) > 0.4){ camera.fov += (fov-camera.fov)*Math.min(1,dt*4); camera.updateProjectionMatrix(); }
+  // Speed used to widen the lens (up to +14°) and pull the chase cam back. That shifted every POV as you went faster.
+  const fov = fpRide ? 78 : 66;
+  if (Math.abs(camera.fov - fov) > 0.2){ camera.fov = fov; camera.updateProjectionMatrix(); }
   const tp = new THREE.Vector3(S.x - fx*back, 0, S.z - fz*back);
   tp.y = Math.max(groundH(tp.x,tp.z), S.y) + [2.3,3.4,1.7][cm];
   const tl = new THREE.Vector3(S.x + fx*4, S.y + 1.0, S.z + fz*4);
@@ -952,6 +958,8 @@ function frame(){
   const fpOn = camMode === 3 && !S.lift && S.state === 'riding';
   BR.head.visible = !fpOn;
   const torso = BR.root.getObjectByName('riderTorso'); if (torso) torso.visible = !fpOn;
+  // Arms are siblings of the hands on the rider root, not parents of them. Helmet cam hides the sleeves only.
+  for (const n of ['armUpperL','armUpperR','armForeL','armForeR']){ const o = BR.root.getObjectByName(n); if (o) o.visible = !fpOn; }
   if (camMode >= 3 && !S.lift && S.state === 'riding'){ const sx = -fz, sz = fx, up = 1;
     if (camMode === 3 || camMode === 4){   // helmet: just behind the grips so hands and bars stay in frame. Chest mount is lower.
       if (camMode === 3){
@@ -981,6 +989,10 @@ function frame(){
       if (drone.t <= 0 || d > 55){ const side = Math.random() < 0.5 ? -1 : 1, ax = S.x + fx*35 + sx*side*12, az = S.z + fz*35 + sz*side*12; drone.p.set(ax, Math.max(groundH(ax, az), S.y - 8) + 9, az); drone.t = 6; }
       camera.position.copy(drone.p); camera.up.set(0,1,0); camera.lookAt(S.x, S.y + 0.8, S.z); } }
   else if (camera.near !== 0.1){ camera.near = 0.1; camera.updateProjectionMatrix(); }
+  window.__view = { mode: camMode, fov: +camera.fov.toFixed(2), dist: +Math.hypot(camera.position.x - S.x, camera.position.z - S.z).toFixed(3),
+    arms: ['armUpperL','armUpperR','armForeL','armForeR'].map(n => { const o = BR.root.getObjectByName(n); return !!(o && o.visible); }),
+    hands: ['handL','handR'].map(n => { const o = BR.root.getObjectByName(n); return !!(o && o.visible && o.parent === BR.root); }),
+    head: BR.head.visible, torso: !!BR.root.getObjectByName('riderTorso')?.visible };
   if (window.__camSide){ const o = window.__camSide, c = Math.cos(S.yaw), s_ = Math.sin(S.yaw); camera.position.set(S.x + c*o.d + Math.sin(S.yaw)*(o.b||0), S.y + (o.h||1.2), S.z - s_*o.d + Math.cos(S.yaw)*(o.b||0)); camera.up.set(0,1,0); camera.lookAt(S.x, S.y + 0.9, S.z); }   // test hook: side camera for pose screenshots
   if (flyF) flyover(0);
   else if (shopOpen) shopCam(dt);   // main menu: flyover camera replaces the chase cam
