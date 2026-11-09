@@ -67,42 +67,42 @@ export function buildBikeRider(frameMat, opts = {}){
   tube(fb, BB, SEATJ, 0.03, M.frame); tube(fb, SEATJ, SADDLE.clone().add(V(0,-0.06,0)), 0.016, M.black);
   for (const sx of [-0.055, 0.055]){ tube(swb, BB, RA, 0.017, M.frame, sx); tube(fb, RA, ROCK2, 0.014, M.frame, sx);
     fb.add(new THREE.BoxGeometry(0.012, 0.05, 0.2), M.black, between(ROCK.clone().add(V(sx*0.8,0,0)), ROCK2.clone().add(V(sx*0.8,0,0)))); }
-  fb.add(new THREE.BoxGeometry(0.05, 0.05, 0.1), M.frame, at(0, 0.32, 0.04));           // BB shell / main pivot
+  fb.add(new THREE.CylinderGeometry(0.042, 0.042, 0.11, 16), M.frame, at(0, 0.32, 0.04, 0, 0, Math.PI/2));           // BB shell / main pivot
   tube(fb, SHOCK0, ROCK, 0.022, M.black); tube(fb, SHOCK0.clone().lerp(ROCK, 0.45), ROCK, 0.03, M.steel);
   { const pts = []; for (let i = 0; i <= 64; i++){ const t = i/64, a = t*Math.PI*2*7; pts.push(V(Math.cos(a)*0.032, t*0.16 - 0.08, Math.sin(a)*0.032)); }
     const coil = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 120, 0.0045, 5); const c = SHOCK0.clone().lerp(ROCK, 0.4);
     fb.add(coil, M.spring, new THREE.Matrix4().compose(c, new THREE.Quaternion().setFromUnitVectors(UP, ROCK.clone().sub(SHOCK0).normalize()), V(1,1,1))); }
   // saddle + dropper
-  fb.add(new THREE.BoxGeometry(0.14, 0.04, 0.27), M.saddle, at(SADDLE.x, SADDLE.y, SADDLE.z, -0.08));
-  fb.add(new THREE.BoxGeometry(0.06, 0.035, 0.1), M.saddle, at(0, SADDLE.y-0.005, SADDLE.z-0.16, -0.08));
+  fb.add(new THREE.SphereGeometry(0.075, 16, 12).scale(0.9, 0.42, 1.7), M.saddle, at(SADDLE.x, SADDLE.y, SADDLE.z, -0.08));
+  fb.add(new THREE.SphereGeometry(0.04, 12, 8).scale(0.75, 0.4, 1.15), M.saddle, at(0, SADDLE.y-0.008, SADDLE.z-0.15, -0.12));
   // drivetrain: chainring, chain runs, cassette, derailleur
   fb.add(new THREE.CylinderGeometry(0.085, 0.085, 0.006, 32), M.steel, at(0.065, BB.y, BB.z, 0, 0, Math.PI/2));
   fb.add(new THREE.CylinderGeometry(0.06, 0.06, 0.008, 6), M.black, at(0.068, BB.y, BB.z, 0, 0, Math.PI/2));
   for (const s of [1, -1]){ const a = V(0.065, BB.y + s*0.085, BB.z), b = V(0.065, RA.y + s*0.06, RA.z); fb.add(new THREE.BoxGeometry(0.008, 0.012, a.distanceTo(b)), M.steel, new THREE.Matrix4().compose(a.clone().add(b).multiplyScalar(0.5), new THREE.Quaternion().setFromUnitVectors(V(0,0,1), b.clone().sub(a).normalize()), V(1,1,1))); }
-  fb.add(new THREE.BoxGeometry(0.02, 0.12, 0.05), M.black, at(0.075, RA.y - 0.12, RA.z + 0.02));
+  fb.add(new THREE.CylinderGeometry(0.012, 0.016, 0.11, 8), M.black, at(0.075, RA.y - 0.12, RA.z + 0.02));
   // rear brake caliper
-  fb.add(new THREE.BoxGeometry(0.03, 0.06, 0.08), M.black, at(-0.085, RA.y + 0.09, RA.z - 0.06));
+  fb.add(new THREE.SphereGeometry(0.028, 10, 8).scale(0.8, 1.1, 1.3), M.black, at(-0.085, RA.y + 0.09, RA.z - 0.06));
   // fork (steer group): crown, stanchions, lowers, arch, steerer; stem, riser bar, grips, levers; front caliper
-  sb.add(new THREE.BoxGeometry(0.2, 0.045, 0.07), M.black, new THREE.Matrix4().compose(CROWN, new THREE.Quaternion().setFromUnitVectors(UP, AX), V(1,1,1)));
+  sb.add(new THREE.SphereGeometry(0.045, 12, 8).scale(2.3, 0.7, 0.85), M.black, new THREE.Matrix4().compose(CROWN, new THREE.Quaternion().setFromUnitVectors(UP, AX), V(1,1,1)));
   for (const sx of [-0.085, 0.085]){ const s0 = CROWN.clone(), s1 = onAxis(0.2); tube(sb, s0, s1, 0.018, M.gold, sx, 14); tube(lb, onAxis(0.26), FA, 0.027, M.lower, sx, 14);
     lb.add(new THREE.CylinderGeometry(0.03, 0.03, 0.03, 12), M.lower, new THREE.Matrix4().compose(onAxis(0.26).add(V(sx,0,0)), new THREE.Quaternion().setFromUnitVectors(UP, AX), V(1,1,1))); }
   lb.add(new THREE.TorusGeometry(0.085, 0.014, 6, 16, Math.PI), M.lower, new THREE.Matrix4().compose(onAxis(0.3), new THREE.Quaternion().setFromUnitVectors(V(0,1,0), AX).multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI/2, 0, 0))), V(1,1,1)));
   tube(sb, CROWN, STEM, 0.017, M.black);
-  const BARC = STEM.clone().add(V(0, 0.03, -0.05)); sb.add(new THREE.BoxGeometry(0.045, 0.04, 0.07), M.black, at(0, STEM.y + 0.015, STEM.z - 0.03));
+  const BARC = STEM.clone().add(V(0, 0.03, -0.05)); sb.add(new THREE.SphereGeometry(0.028, 12, 8).scale(1.1, 0.85, 1.3), M.black, at(0, STEM.y + 0.015, STEM.z - 0.03));
   const barPts = [V(-0.39, 0.03, 0.03), V(-0.22, 0.03, 0.01), V(-0.08, 0, 0), V(0.08, 0, 0), V(0.22, 0.03, 0.01), V(0.39, 0.03, 0.03)].map(p => p.add(BARC));
   sb.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(barPts), 24, 0.012, 8), M.black);
   const GRIP = [V(-0.34, 0, 0).add(barPts[0]).sub(V(-0.34,0,0)), barPts[5].clone()].map(p => p.clone().add(V(p.x < 0 ? 0.04 : -0.04, 0, 0)));
-  for (const g of GRIP){ sb.add(new THREE.CylinderGeometry(0.017, 0.017, 0.13, 10), M.rubber, at(g.x, g.y, g.z, 0, 0, Math.PI/2));
-    sb.add(new THREE.BoxGeometry(0.11, 0.012, 0.025), M.alu, at(g.x*0.78, g.y + 0.005, g.z - 0.06, 0, Math.sign(g.x)*0.35, 0)); }
-  lb.add(new THREE.BoxGeometry(0.03, 0.06, 0.08), M.black, at(-0.1, FA.y + 0.09, FA.z + 0.07));
+  for (const g of GRIP){ sb.add(new THREE.CylinderGeometry(0.017, 0.017, 0.13, 12), M.rubber, at(g.x, g.y, g.z, 0, 0, Math.PI/2));
+    sb.add(new THREE.CapsuleGeometry(0.008, 0.09, 3, 6), M.alu, at(g.x*0.78, g.y + 0.008, g.z - 0.05, 0, Math.sign(g.x)*0.4, Math.PI/2)); }
+  lb.add(new THREE.SphereGeometry(0.028, 10, 8).scale(0.8, 1.1, 1.3), M.black, at(-0.1, FA.y + 0.09, FA.z + 0.07));
   // wheels: knobby tyre, rim, 28 spokes, hub, 203/180 mm rotors
   const wheels = [];
   const makeWheel = (center, parent, rear) => { const w = new THREE.Group(); w.position.copy(center); parent.add(w); const wb = new Bucket();
     const ry = at(0,0,0,0,Math.PI/2,0);
-    wb.add(new THREE.TorusGeometry(R - 0.035, 0.045, 10, 48), M.rubber, ry); wb.add(new THREE.TorusGeometry(R - 0.075, 0.016, 6, 40), M.black, ry);
-    const knob = new THREE.BoxGeometry(0.022, 0.016, 0.026);
-    for (let i = 0; i < 56; i++){ const a = i/56*Math.PI*2, row = i%2;
-      for (const sx of row ? [-0.03, 0.03] : [0]) { const r = R - 0.035 + (sx ? 0.036 : 0.045); wb.add(knob, M.rubber, new THREE.Matrix4().compose(V(sx, Math.cos(a)*r, Math.sin(a)*r), new THREE.Quaternion().setFromEuler(new THREE.Euler(-a, 0, sx*6)), V(1,1,1))); } }
+    wb.add(new THREE.TorusGeometry(R - 0.032, 0.042, 12, 40), M.rubber, ry); wb.add(new THREE.TorusGeometry(R - 0.07, 0.014, 8, 32), M.black, ry);
+    const knob = new THREE.SphereGeometry(0.011, 6, 5);
+    for (let i = 0; i < 28; i++){ const a = i/28*Math.PI*2;
+      for (const sx of i%2 ? [-0.028, 0.028] : [0]) { const r = R - 0.03 + (sx ? 0.03 : 0.04); wb.add(knob, M.rubber, new THREE.Matrix4().compose(V(sx, Math.cos(a)*r, Math.sin(a)*r), new THREE.Quaternion(), V(1, sx ? 0.7 : 1.15, 1.3))); } }
     wb.add(new THREE.CylinderGeometry(0.028, 0.028, 0.12, 12), M.black, at(0,0,0,0,0,Math.PI/2));
     for (let i = 0; i < 28; i++){ const a = i/28*Math.PI*2, side = i%2 ? 0.03 : -0.03, a0 = a + (i%4<2 ? 0.25 : -0.25);
       const p0 = V(side, Math.cos(a0)*0.03, Math.sin(a0)*0.03), p1 = V(0, Math.cos(a)*(R-0.08), Math.sin(a)*(R-0.08)); wb.add(new THREE.CylinderGeometry(0.0022, 0.0022, p0.distanceTo(p1), 4), M.steel, between(p0, p1)); }
@@ -112,8 +112,8 @@ export function buildBikeRider(frameMat, opts = {}){
   makeWheel(FA, forkLow, false); makeWheel(RA, swingIn, true);
   // crankset: arms + flat pedals with pins (rotating group on the frame)
   const crank = new THREE.Group(); crank.position.copy(BB); frameG.add(crank); const pedals = [];
-  { const cb = new Bucket(); for (const s of [1, -1]) cb.add(new THREE.BoxGeometry(0.018, 0.17, 0.03), M.black, at(s*0.1, -s*0.085, 0)); cb.add(new THREE.CylinderGeometry(0.012, 0.012, 0.22, 8), M.steel, at(0,0,0,0,0,Math.PI/2)); cb.build(crank);
-    for (const s of [-1, 1]){ const p = new THREE.Group(); p.position.set(s*0.165, -s*0.17, 0); crank.add(p); const pb = new Bucket(); pb.add(new THREE.BoxGeometry(0.1, 0.018, 0.1), M.black); for (let k = 0; k < 8; k++) pb.add(new THREE.CylinderGeometry(0.003, 0.003, 0.03, 4), M.steel, at(-0.04 + (k%4)*0.027, 0, k < 4 ? -0.045 : 0.045)); pb.build(p); pedals.push(p); } }
+  { const cb = new Bucket(); for (const s of [1, -1]) cb.add(new THREE.CapsuleGeometry(0.014, 0.15, 4, 8), M.black, at(s*0.1, -s*0.085, 0)); cb.add(new THREE.CylinderGeometry(0.014, 0.014, 0.22, 12), M.steel, at(0,0,0,0,0,Math.PI/2)); cb.build(crank);
+    for (const s of [-1, 1]){ const p = new THREE.Group(); p.position.set(s*0.165, -s*0.17, 0); crank.add(p); const pb = new Bucket(); pb.add(new THREE.CylinderGeometry(0.048, 0.048, 0.014, 12).scale(1.05, 1, 0.85).rotateX(Math.PI/2), M.black); for (let k = 0; k < 6; k++) pb.add(new THREE.CylinderGeometry(0.003, 0.003, 0.028, 5), M.steel, at(-0.03 + (k%3)*0.03, 0, k < 3 ? -0.03 : 0.03)); pb.build(p); pedals.push(p); } }
   fb.build(frameG); sb.build(steerG); lb.build(forkLow); swb.build(swingIn);
 
   let bikeTris = 0; const bikeMats = new Set();
