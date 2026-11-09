@@ -657,13 +657,44 @@ export const connectors = CONN_DEFS.map(wp => { const pts = [];
     for (let i = (k ? 1 : 0); i <= n; i++){ const u = i/n; pts.push([ax + (bx-ax)*u, az + (bz-az)*u]); } }
   // gentle wiggle-free smoothing at the corners
   for (let it = 0; it < 6; it++) for (let i = 1; i < pts.length-1; i++){ pts[i] = [(pts[i-1][0]+2*pts[i][0]+pts[i+1][0])/4, (pts[i-1][1]+2*pts[i][1]+pts[i+1][1])/4]; }
-  return {pts}; });
+  return {pts, half: 1.3}; });
 export const CW = 1.3;   // connector half width
+// Unnamed exploration: narrow singletrack and a wider fire road. No gates, no timers.
+// They join a trail, a lift, or the shop, and bend off jump corridors.
+function exploreLine(wps, half){
+  const pts = [];
+  for (let k = 0; k < wps.length - 1; k++){
+    const [ax, az] = wps[k], [bx, bz] = wps[k + 1], n = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 2));
+    for (let i = k ? 1 : 0; i <= n; i++){
+      const u = i / n; let x = ax + (bx - ax) * u, z = az + (bz - az) * u;
+      if (featClear(x, z) < 10){ const a = Math.atan2(bz - az, bx - ax) + Math.PI / 2; x += Math.cos(a) * 16; z += Math.sin(a) * 16; }
+      pts.push([x, z]);
+    }
+  }
+  for (let it = 0; it < 4; it++) for (let i = 1; i < pts.length - 1; i++) pts[i] = [(pts[i - 1][0] + 2 * pts[i][0] + pts[i + 1][0]) / 4, (pts[i - 1][1] + 2 * pts[i][1] + pts[i + 1][1]) / 4];
+  connectors.push({ pts, half, explore: true });
+}
+{ const mids = trails.map(t => { const i = Math.floor(t.pts.length * 0.45); return { p: t.pts[i], q: t.pts[Math.floor(t.pts.length * 0.72)] }; });
+  mids.forEach((m, i) => {
+    let best = null, bd = 1e9;
+    for (const L of LIFTS){ const d = Math.hypot(m.p[0] - L.bx, m.p[1] - L.bz); if (d > 80 && d < bd && d < 700){ bd = d; best = [L.bx, L.bz]; } }
+    if (best){ const mx = (m.p[0] + best[0]) / 2, mz = (m.p[1] + best[1]) / 2, a = Math.atan2(best[1] - m.p[1], best[0] - m.p[0]) + Math.PI / 2;
+      exploreLine([m.p, [mx + Math.cos(a) * 55, mz + Math.sin(a) * 55], best], 1.15); }
+    if (i % 2 === 0 && mids[i + 1]){ const o = mids[i + 1].q, mx = (m.q[0] + o[0]) / 2, mz = (m.q[1] + o[1]) / 2;
+      if (Math.hypot(m.q[0] - o[0], m.q[1] - o[1]) < 900) exploreLine([m.q, [mx + 70, mz - 40], o], 1.15); }
+  });
+  const road = RAMP ? [[0, 385], [150, 330], [250, 200], [80, 80], [-40, 200]] : [valley, J, [PARK.x, PARK.z + PARK.r + 40], L_(1), L_(6)];
+  exploreLine(road, 3.4);
+}
+export function exploreStats(){
+  let m = 0, n = 0; for (const c of connectors) if (c.explore){ n++; for (let i = 1; i < c.pts.length; i++) m += Math.hypot(c.pts[i][0] - c.pts[i - 1][0], c.pts[i][1] - c.pts[i - 1][1]); }
+  return { segments: n, km: +(m / 1000).toFixed(2) };
+}
 const cGrid = new Map(), CG = 40;
 connectors.forEach((c, ci) => c.pts.forEach((p, i) => { const k = key(Math.floor(p[0]/CG), Math.floor(p[1]/CG)); let a = cGrid.get(k); if (!a) cGrid.set(k, a = []); a.push(ci*100000 + i); }));
 export function connDist(x, z){ let m = 1e9; const ci0 = Math.floor(x/CG), cj0 = Math.floor(z/CG);
   for (let di=-1; di<=1; di++) for (let dj=-1; dj<=1; dj++){ const a = cGrid.get(key(ci0+di, cj0+dj)); if (!a) continue;
-    for (const id of a){ const p = connectors[Math.floor(id/100000)].pts[id%100000]; const d = Math.hypot(x-p[0], z-p[1]); if (d < m) m = d; } }
+    for (const id of a){ const c = connectors[Math.floor(id/100000)], p = c.pts[id%100000]; const d = Math.hypot(x-p[0], z-p[1]) - ((c.half || CW) - CW); if (d < m) m = d; } }
   return m; }
 export const nearLiftStation = (x, z, r) => LIFTS.some(L => Math.hypot(x-L.bx, z-L.bz) < r || Math.hypot(x-L.tx, z-L.tz) < r);
 export function liftLineDist(x, z){ let m = 1e9; for (const L of LIFTS){ const u = Math.max(0, Math.min(L.len, (x-L.bx)*L.dx + (z-L.bz)*L.dz)); m = Math.min(m, Math.hypot(x-(L.bx+L.dx*u), z-(L.bz+L.dz*u))); } return m; }
@@ -698,7 +729,7 @@ for (const L of LIFTS){
 // automated layout check: returns a list of problems (empty = OK)
 const jumpClear = (x, z) => { let m = 1e9; for (const f of features){ if (f.kind === 'roller' || f.kind === 'berm') continue; const L = f.L||0, u = Math.max(-2, Math.min(L, (x-f.x)*f.dx + (z-f.z)*f.dz)), d = Math.hypot(x-f.x-f.dx*u, z-f.z-f.dz*u) - (f.hw||2); if (d < m) m = d; } return m; };
 export function pathTrailProblems(){ const out = [];
-  connectors.forEach((c, i) => { const ends = [c.pts[0], c.pts[c.pts.length-1]];
+  connectors.forEach((c, i) => { if (c.explore) return; const ends = [c.pts[0], c.pts[c.pts.length-1]];
     for (const t of trails){ const tj = [t.pts[0], t.pts[t.pts.length-1]].filter(q => ends.some(e => Math.hypot(e[0]-q[0], e[1]-q[1]) < 30));
       let worst = 1e9, wp = null;
       const n = t.pts.length, jS = tj.includes(t.pts[0]), jE = tj.includes(t.pts[n-1]);
@@ -714,7 +745,7 @@ export function liftLayoutProblems(){ const out = [];
       if (c - 3.2 < g + 2.0) out.push(`${L.name} chairs only ${(c-3.2-g).toFixed(1)} m above ground at ${dd} m`);
       if ((trailDist(x,z) < W + 3 || connDist(x,z) < CW + 3) && c - g < 8) out.push(`${L.name} cable only ${(c-g).toFixed(1)} m over a trail/path at ${dd} m`); } }
   // connector paths must stay >= 15 m clear of the park pad and of every jump corridor
-  connectors.forEach((c, i) => { let worst = 1e9, wp = null; for (const p of c.pts){ const d = Math.min(Math.hypot(p[0]-PARK.x, p[1]-PARK.z) - PARK.r, jumpClear(p[0], p[1])); if (d < worst){ worst = d; wp = p; } }
+  connectors.forEach((c, i) => { if (c.explore) return; let worst = 1e9, wp = null; for (const p of c.pts){ const d = Math.min(Math.hypot(p[0]-PARK.x, p[1]-PARK.z) - PARK.r, jumpClear(p[0], p[1])); if (d < worst){ worst = d; wp = p; } }
     if (worst < 15) out.push(`connector ${i} passes ${worst.toFixed(1)} m from the park/a jump at (${wp[0].toFixed(0)},${wp[1].toFixed(0)})`); });
   // connector paths never run along or across a trail: every path point stays >= 6 m from every trail centreline,
   // except within 30 m of the start gate / finish the path is deliberately joining
