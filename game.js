@@ -489,6 +489,7 @@ function readInput(){
   inp.wheelieChord = inp.lean > 0.62 && inp.ry > 0.62 && !inp.trick;
   inp.kbWheelie = !!keys.KeyK && !inp.trick;
   if (inp.wheelieChord || inp.kbWheelie){ inp.pumpHold = false; inp.pop = false; inp.counter = false; }
+  if (window.__forceInp) Object.assign(inp, window.__forceInp);
   return inp;
 }
 
