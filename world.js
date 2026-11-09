@@ -387,10 +387,69 @@ const segGrid = new Map(), featGrid = new Map();
 const put = (g, minx, maxx, minz, maxz, v) => { for (let i=Math.floor(minx/CELL); i<=Math.floor(maxx/CELL); i++) for (let j=Math.floor(minz/CELL); j<=Math.floor(maxz/CELL); j++){ const k = key(i,j); let a = g.get(k); if (!a) g.set(k, a = []); a.push(v); } };
 for (const tr of trails) for (let i=0;i<tr.pts.length-1;i++){ const a = tr.pts[i], b = tr.pts[i+1];
   put(segGrid, Math.min(a[0],b[0])-BLEND, Math.max(a[0],b[0])+BLEND, Math.min(a[1],b[1])-BLEND, Math.max(a[1],b[1])+BLEND, tr.id*100000 + i); }
+// Landings: a 30° downslope covering where a rider at slow, typical and fast speed touches down.
+// Tables keep their deck. Mega lips are already solved. Canyons stay open.
+function featRetarget(f){
+  f.minx = Math.min(f.x, f.x + f.dx*f.L) - f.hw - 2; f.maxx = Math.max(f.x, f.x + f.dx*f.L) + f.hw + 2;
+  f.minz = Math.min(f.z, f.z + f.dz*f.L) - f.hw - 2; f.maxz = Math.max(f.z, f.z + f.dz*f.L) + f.hw + 2;
+}
+const LAND_KIND = new Set(['kicker','table','double','gap','stepup','stepdown','drop','rockdrop']);
+const _near = [];
+export const landingFixes = [];
+function approachMs(f){
+  const tr = trails[f.trail];
+  const km = tr && (JUMP_SPEEDS[tr.name] || [])[f.k];
+  if (km) return Math.max(6, Math.min(16, km/3.6));
+  if (f.mega) return 16;
+  return {green:8, blue:11, black:13, dblack:15, pro3:15}[tr && tr.diff] || (f.park ? 11 : 10);
+}
+for (const f of features){
+  if (f.mega || f.canyon || f.boulders || f.rollin || !LAND_KIND.has(f.kind)) continue;
+  const old = f.p, oldL = f.L, v = approachMs(f);
+  let lipT = 0, lipH = -1;
+  for (let i = 1; i <= 36; i++){ const t = oldL*i/36*0.8, h = old(t, 0); if (h >= lipH){ lipH = h; lipT = t; } }
+  if (lipH < 0.7) continue;
+  const face = Math.max(0.08, (old(lipT, 0) - old(Math.max(0, lipT - 0.5), 0))/0.5);
+  let grade = 0.08; { const tr = trails[f.trail]; if (tr){ let bi = 0, bd = 1e9; for (let i = 0; i < tr.pts.length; i += 3){ const d = (tr.pts[i][0]-f.x)**2 + (tr.pts[i][1]-f.z)**2; if (d < bd){ bd = d; bi = i; } }
+    const j = Math.min(tr.pts.length - 1, bi + 10); grade = Math.max(0, (tr.h[bi] - tr.h[j]) / Math.max(4, (j - bi)*2)); } }
+  let lo = 1e9, hi = 0;
+  for (const spd of [v*0.75, v, Math.min(17, v*1.2)]){
+    const vy = face*spd + 0.45;
+    let hit = lipT + spd*2.2;
+    for (let t = 0.1; t < 3.4; t += 0.02){
+      const dist = lipT + spd*t;
+      const y = lipH + vy*t - 0.5*9.81*t*t + grade*spd*t;
+      const gnd = dist <= oldL ? old(dist, 0) : 0;
+      if (y <= gnd + 0.05){ hit = dist; break; }
+    }
+    lo = Math.min(lo, hit); hi = Math.max(hi, hit);
+  }
+  let deckEnd = lipT;
+  for (let t = lipT; t < oldL; t += 0.35) if (old(t, 0) > lipH*0.72) deckEnd = t;
+  const drop = Math.tan(30*Math.PI/180);
+  // The ramp starts just before the shortest flight and is still descending at the longest one.
+  // A ramp that begins at the lip runs out of height in a couple of metres and the rider cases beyond it.
+  const start = Math.max(deckEnd + 0.3, lo - 1.5);
+  let end = Math.max(start + 4, hi + 2);
+  let h0 = Math.min(2.2, Math.max(1.1, drop * Math.min(8, end - start)));
+  end = Math.min(end, start + h0 / drop + 0.5);
+  if (end <= start + 1) continue;
+  f.p = (t, us) => {
+    const base = t <= oldL ? old(Math.min(Math.max(t, 0), oldL), us) : 0;
+    if (t <= deckEnd || t > end) return base;
+    // Ride up onto the landing over a few metres. A step would be a wall and the head would hit it.
+    if (t < start){ const u = Math.max(0, (t - (start - h0/0.55)) / (h0/0.55)); return Math.max(base, h0 * Math.min(1, u)); }
+    const ramp = Math.max(0, h0 - drop * (t - start));
+    return Math.max(base, ramp);
+  };
+  f.L = Math.max(oldL, end);
+  f.landed = true;
+  featRetarget(f);
+  landingFixes.push(f);
+}
 for (const f of features) put(featGrid, f.minx, f.maxx, f.minz, f.maxz, f);
 
 // nearest point on each trail within reach: returns [{t, s, d, h}] (t = trail id, s = distance along, d = lateral distance, h = path height)
-const _near = [];
 export function nearTrails(x, z){
   _near.length = 0;
   const segs = segGrid.get(key(Math.floor(x/CELL), Math.floor(z/CELL))); if (!segs) return _near;
@@ -453,7 +512,7 @@ export const TCELL = 100;
 const treeCache = new Map();
 function treeBlocked(x, z){
   // Off the tread, and at least 2.5 m from a trail centre, a landing, a path, a lift, a gate, the shop or a spawn.
-  if (trailDist(x, z) < Math.max(2.5, W + 0.6)) return true;
+  if (trailDist(x, z) < Math.max(2.5, W + 2.5)) return true;
   if (featH(x, z) > 0.02 || featClear(x, z) < 2.5) return true;
   if (connDist(x, z) < CW + 2.2) return true;
   if (nearLiftStation(x, z, 16) || liftLineDist(x, z) < 8) return true;
@@ -483,7 +542,7 @@ export function treesInCell(ci, cj){
       if (x < x0 - 14 || x > x0 + TCELL + 14 || z < z0 - 14 || z > z0 + TCELL + 14) continue;
       const yaw = tr.yaw[i], nx = Math.cos(yaw), nz = -Math.sin(yaw);
       for (const side of [-1, 1]){
-        const d = 5.4 + ((i + side) % 3) * 1.3;
+        const d = 7.4 + ((i + side) % 3) * 1.5;
         const tx = x + nx*side*d, tz = z + nz*side*d;
         if (tx < x0 || tx >= x0 + TCELL || tz < z0 || tz >= z0 + TCELL) continue;
         if (treeBlocked(tx, tz)) continue;
