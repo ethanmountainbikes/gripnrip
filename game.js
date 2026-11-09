@@ -732,8 +732,14 @@ function step(dt, inp){
     let nx = S.x + S.vx*dt, nz = S.z + S.vz*dt, ng = groundH(nx,nz);
     // jump collision: only a feature's ramp face (along its forward axis) adds launch speed. Its sides are climbed
     // (rounded dirt) or block/deflect you with a speed loss (steep / wooden walls), never launch you.
-    let vyFeat = null, backFeat = false;
+    let vyFeat = null, backFeat = false, lipInfo = null;
     { const fa = featAxis(nx, nz) || featAxis(S.x, S.z);
+      if (fa && fa.p && fa.L > 0){ // first crest only, so a landing ramp is not mistaken for the lip
+        let peak = 0, peakT = 0; const n = 28;
+        for (let i = 1; i <= n; i++){ const t = fa.L * i / n, h = fa.p(t, 0);
+          if (h + 0.02 >= peak){ if (h > peak){ peak = h; peakT = t; } }
+          else if (peak > 0.12 && t > peakT + 0.5) break; }
+        if (peak > 0.08){ let t0 = 0; for (let i = 0; i <= n; i++){ const t = peakT * i / n; if (fa.p(t, 0) < peak * 0.18) t0 = t; } lipInfo = { h: peak, face: Math.max(0.4, peakT - t0) }; } }
       if (fa) backFeat = (S.vx*fa.dx + S.vz*fa.dz) < -0.2*S.speed;   // riding a jump the wrong way (up a landing / over the back of a lip)
       if (fa){ const mx = nx - S.x, mz = nz - S.z, dA = mx*fa.dx + mz*fa.dz;
         const ax = S.x + fa.dx*dA, az = S.z + fa.dz*dA, f0 = featH(S.x, S.z), fAlong = featH(ax, az), f1 = featH(nx, nz);
@@ -759,7 +765,12 @@ function step(dt, inp){
     // A one-frame feature sample can jump far more than the ground you are actually on.
     // The old ramp ceiling was 1.5× speed, so that spike left the lip at a cannon angle.
     // The face grade over half a metre is the lip. A hop still adds its own pop later.
-    const upCap = (vyFeat !== null ? faceG * S.speed + 0.45 : Math.min(1, gradeF) * S.speed + 0.3);
+    const upCap0 = (vyFeat !== null ? faceG * S.speed + 0.45 : Math.min(1, gradeF) * S.speed + 0.3);
+    // A small lip or a short face must not turn speed into height. Apex stays about 1.3× the lip.
+    // A big jump is left on the face-grade launch, so speed still makes it send.
+    const smallLip = lipInfo && (lipInfo.h < 0.62 || (lipInfo.h < 0.95 && lipInfo.face < 3.3));
+    const vySmall = smallLip ? Math.sqrt(2 * G_AIR * Math.max(0.12, lipInfo.h * 1.35)) : 1e9;
+    const upCap = Math.min(upCap0, vySmall);
     vyG = Math.max(-1.5*S.speed - 3, Math.min(vyG, upCap));
     S.landCool = Math.max(0, (S.landCool||0) - dt);
     S.gf = (S.gf||0) + 1;
@@ -782,7 +793,7 @@ function step(dt, inp){
       // falls away; that must not turn the hop into a dive. A plain crest keeps the ramp's own vertical speed.
       const groundVy = backFeat ? Math.min(S.lastVyG, 0.1*S.speed) : S.lastVyG;
       // The lip's own grade is the launch. A hop adds a small pop on top, never instead of it, and never a cannon.
-      const lipVy = Math.max(0, groundVy, onFace ? faceG * S.speed * 0.85 : 0);
+      const lipVy = Math.min(vySmall, Math.max(0, groundVy, onFace ? faceG * S.speed * 0.85 : 0));
       const popAdd = Math.min(pop, 2.0);
       S.vy = lipVy + popAdd;
       S.popped = pop > 0;
