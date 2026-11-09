@@ -891,7 +891,7 @@ function land(gh, gp){
 const fmtTime = t => `${Math.floor(t/60)}:${(t%60).toFixed(1).padStart(4,'0')}`;
 
 // ---------- Main loop ----------
-const camPos = new THREE.Vector3(), camLook = new THREE.Vector3(); let camInit = false;
+const camPos = new THREE.Vector3(), camLook = new THREE.Vector3(); let camInit = false, camHead = 0;
 const clock = new THREE.Clock(); let acc = 0;
 const arc = $('speedArc'), arcLen = arc.getTotalLength();
 let fpsT=0, fpsN=0, camRoll = 0, fpCam = { y: 0, pitch: 0, roll: 0, on: false };
@@ -952,12 +952,17 @@ function frame(){
   // Speed used to widen the lens (up to +14°) and pull the chase cam back. That shifted every POV as you went faster.
   const fov = fpRide ? 78 : 66;
   if (Math.abs(camera.fov - fov) > 0.2){ camera.fov = fov; camera.updateProjectionMatrix(); }
-  const tp = new THREE.Vector3(S.x - fx*back, 0, S.z - fz*back);
-  tp.y = Math.max(groundH(tp.x,tp.z), S.y) + [2.3,3.4,1.7][cm];
-  const tl = new THREE.Vector3(S.x + fx*4, S.y + 1.0, S.z + fz*4);
-  if (!camInit || camPos.distanceTo(tp) > 40){ camPos.copy(tp); camLook.copy(tl); camInit = true; }
-  const k = 1 - Math.exp(-dt*6);
-  camPos.lerp(tp, k); camLook.lerp(tl, 1 - Math.exp(-dt*10));
+  // Position is the current bike plus a fixed local offset. Smoothing the world position
+  // trailed by about speed/6 metres. Only the chase heading eases, so a turn stays soft.
+  if (!camInit || Math.abs(wrapA(ch - camHead)) > 1.2){ camHead = ch; camInit = true; }
+  else camHead += wrapA(ch - camHead) * (1 - Math.exp(-dt*8));
+  const hx = -Math.sin(camHead), hz = -Math.cos(camHead);
+  const bump = THREE.MathUtils.clamp((S.susp || 0)*0.08, -0.03, 0.05);
+  const tp = new THREE.Vector3(S.x - hx*back, 0, S.z - hz*back);
+  // Height follows the bike, not the hillside behind it. Sampling that hillside made the view rise and fall with speed.
+  tp.y = S.y + [2.3,3.4,1.7][cm] + bump;
+  const tl = new THREE.Vector3(S.x + hx*4, S.y + 1.0 + bump, S.z + hz*4);
+  camPos.copy(tp); camLook.copy(tl);
   camera.position.copy(camPos);
   camRoll = THREE.MathUtils.lerp(camRoll, -S.lean*0.08 + (S.sliding ? S.slip*0.04 : 0), Math.min(1, dt*3));
   camera.up.set(Math.sin(camRoll)*Math.cos(ch), Math.cos(camRoll), -Math.sin(camRoll)*Math.sin(ch)); camera.lookAt(camLook);
@@ -970,14 +975,12 @@ function frame(){
     if (camMode === 3 || camMode === 4){   // helmet: just behind the grips so hands and bars stay in frame. Chest mount is lower.
       if (camMode === 3){
         // Head lags the chassis: bars keep the full bump pitch, the view only takes a fraction of it.
-        const eyeH = 1.28;
-        if (!fpCam.on){ fpCam.y = S.y + eyeH; fpCam.pitch = (S.pitch || 0) * 0.22; fpCam.roll = 0; fpCam.on = true; }
-        const ky = 1 - Math.exp(-dt / 0.16), kp = 1 - Math.exp(-dt / 0.13);
-        fpCam.y += (S.y + eyeH - fpCam.y) * ky;
-        fpCam.pitch += ((S.pitch || 0) * 0.22 - fpCam.pitch) * kp;
+        // Rigid to the head. A lagged height sits above the bike while it descends, which reads as the view rising with speed.
+        const eyeH = 1.28, pitch = (S.pitch || 0) * 0.22;
+        fpCam.on = true; fpCam.y = S.y + eyeH; fpCam.pitch = pitch;
         fpCam.roll += ((-S.lean || 0) * 0.04 - fpCam.roll) * (1 - Math.exp(-dt / 0.22));
-        const eye = bodyPoint(S.x, fpCam.y - eyeH, S.z, S.yaw, fpCam.pitch, { x: 0, y: eyeH, z: 0.02, name: 'eye', fatal: false });
-        const look = bodyPoint(S.x, fpCam.y - eyeH, S.z, S.yaw, fpCam.pitch * 0.35, { x: 0, y: eyeH - 0.22, z: -8, name: 'look', fatal: false });
+        const eye = bodyPoint(S.x, S.y, S.z, S.yaw, pitch, { x: 0, y: eyeH, z: 0.02, name: 'eye', fatal: false });
+        const look = bodyPoint(S.x, S.y, S.z, S.yaw, pitch * 0.35, { x: 0, y: eyeH - 0.22, z: -8, name: 'look', fatal: false });
         camera.position.set(eye.x, eye.y, eye.z);
         const fdx = look.x - eye.x, fdz = look.z - eye.z, fl = Math.hypot(fdx, fdz) || 1;
         const rr = Math.sin(fpCam.roll); camera.up.set(fdz / fl * rr, Math.cos(fpCam.roll), -fdx / fl * rr);
@@ -986,10 +989,10 @@ function frame(){
         fpV.set(bar.x, bar.y, bar.z).project(camera); window.__fp = { fov: +camera.fov.toFixed(1), barNdcY: +fpV.y.toFixed(3), mode: camMode };
       } else { fpCam.on = false; window.__fp = { fov: camera.fov, barNdcY: null, mode: camMode };
         const hy = 1.32, fw = 0.36, pitchDn = 0.35;
-        camera.position.set(S.x + fx*fw, S.y + hy, S.z + fz*fw); camera.up.set(0,1,0); camera.lookAt(S.x + fx*6, S.y + hy - 6*pitchDn*0.4 + (S.vy||0)*0.05, S.z + fz*6); }
+        camera.position.set(S.x + fx*fw, S.y + hy, S.z + fz*fw); camera.up.set(0,1,0); camera.lookAt(S.x + fx*6, S.y + hy - 6*pitchDn*0.4, S.z + fz*6); }
       if (camera.near !== 0.08){ camera.near = 0.08; camera.updateProjectionMatrix(); } }
-    else if (camMode === 5){ const t = new THREE.Vector3(S.x + sx*5 - fx*1, Math.max(groundH(S.x + sx*5, S.z + sz*5), S.y) + 1.2, S.z + sz*5 - fz*1);   // side tracking
-      camPos.lerp(t, 1 - Math.exp(-dt*5)); camera.position.copy(camPos); camera.up.set(0,1,0); camera.lookAt(S.x, S.y + 0.9, S.z); }
+    else if (camMode === 5){ const t = new THREE.Vector3(S.x + sx*5 - fx*1, S.y + 1.2, S.z + sz*5 - fz*1);   // side tracking, locked to this frame
+      camPos.copy(t); camera.position.copy(camPos); camera.up.set(0,1,0); camera.lookAt(S.x, S.y + 0.9, S.z); }
     else { // drone: parks ahead beside the trail, pans as you pass, then leapfrogs ahead
       const d = Math.hypot(drone.p.x - S.x, drone.p.z - S.z); drone.t -= dt;
       if (drone.t <= 0 || d > 55){ const side = Math.random() < 0.5 ? -1 : 1, ax = S.x + fx*35 + sx*side*12, az = S.z + fz*35 + sz*side*12; drone.p.set(ax, Math.max(groundH(ax, az), S.y - 8) + 9, az); drone.t = 6; }
@@ -1658,6 +1661,7 @@ try { NET = initNet({THREE, scene, camera, S, bike, buildBikeRider: makeRider, s
 openMenu('main'); setTimeout(() => $('loading').classList.add('done'), 300);
 teleport(spotI, true);
 window.__features = features; window.__respawn = () => respawnSafe(); window.__game = S; window.__readInput = readInput; window.__groundH = groundH; window.__lift = i => startLift(i); window.__world = { LIFTS, connectors, trails, features, spots, PARK, SHOP, terrainH, featH, isDirt, nearTrails, base, inPark };
+window.__setCam = m => { camMode = ((m % CAM_NAMES.length) + CAM_NAMES.length) % CAM_NAMES.length; camInit = false; camHead = S.travel ?? S.yaw; };
 window.__BR = BR; window.__teleport = i => teleport(i); window.__unlocked = unlocked; window.__isOpen = isOpen; window.__chunks = () => chunks.size; window.__renderer = renderer; window.__place = (x, z, yaw) => { placeAt(x, z, yaw); S.air = false; };
 window.__sim = (secs, inp) => { const h=1/120; const base={steer:0,pedal:0,brake:0,jump:false,tx:0,ty:0}; for(let t=0;t<secs;t+=h){ step(h, Object.assign({}, base, typeof inp==='function'?inp(t):inp)); trackWorld(h); } return {x:S.x, z:S.z, kmh:S.speed*3.6, air:S.air, lives:S.lives, clean:S.clean, score:S.score}; };
 if (SETTINGS.gfx && SETTINGS.gfx !== 'low') import('./gfx.js').then(m => { GFX = m.initGfx({level:SETTINGS.gfx, renderer, scene, camera, sun, SUN_DIR, skyDome, TEX, terrainMat, trunkMat, frameMat, RAMP, S, groundH, terrainH, getCam:() => camMode, toast, tod:SETTINGS.tod, coneG, trunkG, bushG, rockG, folMat, bushMat, rockMat, farU, farMesh:FARMESH, grassMesh:grassField.mesh, chunks, treesInCell, TCELL, HALF, LOAD_R, isDirt, featH, trailDist, groundColor,
