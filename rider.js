@@ -282,7 +282,8 @@ export function buildBikeRider(frameMat, opts = {}){
     const hip = ATTACK.hip.clone().lerp(PEDAL.hip, pw); let lean = ATTACK.lean + (PEDAL.lean - ATTACK.lean)*pw, twist = -(S.tweak || 0)*0.35 + spinW*0.25, tilt = 0;
     hip.y += -flipW*0.08 - (S.susp || 0)*0.25; hip.z -= flipW*0.1; lean += flipW*0.2;
     for (const key in W){ const w = W[key]; if (w < 1e-3) continue; const P = POSES[key]; hip.lerp(P.hip, w); lean += (P.lean - base.lean)*w; twist += (P.twist || 0)*w; tilt += (P.tilt || 0)*w; }
-    hip.x += (S.tweak || 0)*0.08;
+    hip.x += (S.tweak || 0)*0.08 + (S.lean || 0)*0.16;
+    twist += (S.lean || 0)*0.22;
     if (!legacy && S.wheelie){ hip.z += 0.08; hip.y += 0.03; lean -= 0.12; }
     if (!legacy && S.fakie){ hip.z += 0.05; twist += 0.15; }
     { const st = pw, ph = -crankA; hip.y += st*0.025*Math.abs(Math.cos(ph)); hip.x += st*0.035*Math.sin(ph); twist += st*0.06*Math.sin(ph); }   // out of the saddle: bob + sway with the pedal stroke

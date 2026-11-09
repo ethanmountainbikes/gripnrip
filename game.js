@@ -431,7 +431,7 @@ function padMap(gp){
 
 // Descenders default Xbox layout:
 // LS steer (x) / lean fwd-back (y) · RT pedal · LT brake · RS down = pump/preload, RS down->up = bunny hop,
-// RS up = counter-pump · RS left/right in air = tweak · LB + RS direction = trick · B respawn · Y switch camera
+// RS up = counter-pump · RS left/right = lean / carve · LB + RS direction = trick · B respawn · Y switch camera
 // X reset camera · Menu pause. (View toggles the help panel; A starts/restarts from menus.)
 let kbSpacePrev = false;
 // ---------- drivetrain: 1x12 (32T ring, 10-51T cassette), 29er wheel (2.3 m roll-out). Visual only: physics speed is untouched ----------
@@ -454,17 +454,17 @@ const DRV = (() => { const COGS = [51,45,39,33,28,24,21,18,16,14,12,10], RING = 
   return D; })();
 window.__drv = DRV;
 function readInput(){
-  const inp = {rsy:0, ry:0, counter:false, steer:0, lean:0, pedal:0, brake:0, pumpHold:false, pop:false, tweak:0, trick:null, kbFlip:0, pressed:{}, hold:{DU:false, DD:false, DL:false, DR:false, T:!!keys.KeyT}};
+  const inp = {rsy:0, ry:0, counter:false, steer:0, lean:0, pedal:0, brake:0, pumpHold:false, pop:false, tweak:0, bank:0, trick:null, kbFlip:0, pressed:{}, hold:{DU:false, DD:false, DL:false, DR:false, T:!!keys.KeyT}};
   const pads = navigator.getGamepads ? navigator.getGamepads() : [];
   for (const gp of pads){ if (!gp || !gp.connected) continue;
     if (!knownPads[gp.index]){ knownPads[gp.index]=true; toast('🎮 Controller connected: ' + gp.id.slice(0,40)); }
-    const m = padMap(gp), rx = dz(m.rx), ry = dz(m.ry);
+    const m = padMap(gp), rx = dz(m.rx, 0.2), ry = dz(m.ry);
     inp.steer += dz(m.lx); inp.lean += dz(m.ly);
     inp.pedal = Math.max(inp.pedal, dz(m.rt, 0.12)); inp.brake = Math.max(inp.brake, dz(m.lt, 0.12));   // trigger deadzone: a resting trigger that reads 0.05-0.1 must not pedal
     if (m.btn.LB){ const mag = Math.hypot(rx,ry);   // LB + right stick: 8 directions (diagonals = tuck no-hander, X-up, nac-nac, tailwhip), RS click = barspin; stick amount = trick strength
       if (m.btn.RS){ inp.trick = 'bar'; inp.trickAmt = 1; }
       else if (mag > 0.35){ const sec = Math.round(Math.atan2(ry, rx)/(Math.PI/4)); inp.trick = {0:'right', 1:'dr', 2:'down', 3:'dl', 4:'left', '-4':'left', '-3':'ul', '-2':'up', '-1':'ur'}[sec]; inp.trickAmt = Math.min(1, (mag-0.35)/0.6); } }
-    else { if (ry > 0.5) inp.pumpHold = true; if (ry < -0.5){ inp.pop = true; inp.counter = true; } inp.tweak = rx; inp.rsy = ry; inp.ry = ry; }
+    else { if (ry > 0.5) inp.pumpHold = true; if (ry < -0.5){ inp.pop = true; inp.counter = true; } inp.bank = rx; inp.rsy = ry; inp.ry = ry; }
     inp.dpx = (m.btn.DR?1:0) - (m.btn.DL?1:0); inp.dpy = (m.btn.DD?1:0) - (m.btn.DU?1:0); inp.lsx = dz(m.lx); inp.lsy = dz(m.ly);
     inp.hold.DU = !!m.btn.DU; inp.hold.DD = !!m.btn.DD; inp.hold.DL = !!m.btn.DL; inp.hold.DR = !!m.btn.DR;
     for (const name of ['A','B','X','Y','Start','Back','DL','DR','DU','DD','LB','RB']){ const now=!!m.btn[name], key=gp.index+'_'+name; if(now && !prevBtn[key]) inp.pressed[name]=true; prevBtn[key]=now; }
@@ -474,15 +474,15 @@ function readInput(){
   if (keys.KeyI) inp.kbFlip -= 1; if (keys.KeyK) inp.kbFlip += 1;
   if (keys.KeyJ) inp.steer -= 1; if (keys.KeyL) inp.steer += 1;
   if (keys.ShiftLeft||keys.ShiftRight) inp.counter = true;
-  if (keys.KeyQ) inp.tweak -= 1; if (keys.KeyE) inp.tweak += 1;
+  if (keys.KeyQ) inp.bank -= 1; if (keys.KeyE) inp.bank += 1;
   if (keys.KeyC){ const u = keys.KeyI||keys.ArrowUp, d = keys.KeyK||keys.ArrowDown, l = keys.KeyJ||keys.ArrowLeft, r = keys.KeyL||keys.ArrowRight;
     const t = keys.KeyU ? 'bar' : u && l ? 'ul' : u && r ? 'ur' : d && l ? 'dl' : d && r ? 'dr' : u ? 'up' : d ? 'down' : l ? 'left' : r ? 'right' : null; if (t){ inp.trick = t; inp.trickAmt = 1; } }
   if (keys.Space) inp.pumpHold = true;
   if (!keys.Space && kbSpacePrev) inp.pop = true;
   kbSpacePrev = !!keys.Space;
   inp.steer = THREE.MathUtils.clamp(inp.steer,-1,1); inp.lean = THREE.MathUtils.clamp(inp.lean + inp.kbFlip,-1,1);
-  inp.tweak = THREE.MathUtils.clamp(inp.tweak,-1,1);
-  if (SETTINGS.invertY) inp.lean = -inp.lean; if (SETTINGS.invertX) inp.tweak = -inp.tweak;   // Settings: invert options (input mapping only)
+  inp.bank = THREE.MathUtils.clamp(inp.bank || 0,-1,1); inp.tweak = THREE.MathUtils.clamp(inp.tweak,-1,1);
+  if (SETTINGS.invertY) inp.lean = -inp.lean; if (SETTINGS.invertX) inp.bank = -inp.bank;   // Settings: invert options (input mapping only)
   // Standard sticks: +Y is down. Both must be pulled back past the pump threshold
   // before a wheelie can start. Left stick alone is only lean. Invert lean flips
   // which way the left stick counts as "back"; the right stick stays +Y = down.
@@ -537,11 +537,12 @@ function emoteFrame(dt, inp){
   if (inp.hold && inp.hold.T) tHold += dt; else { tHold = 0; if (emoteWheel === 't') closeEmote(); }
   if (!emoteWheel && can && duHold >= 0.35) openEmote('du');
   if (!emoteWheel && can && tHold >= 0.35) openEmote('t');
-  if (emoteWheel && !can) closeEmote();
+  if (emoteWheel && !can && !window.__forceEmote) closeEmote();
+  if (window.__forceEmote && !emoteWheel) openEmote(window.__forceEmote === true ? 'du' : window.__forceEmote);
   if (emoteWheel){ inp.pumpHold = false; inp.pop = false; inp.counter = false;
-    const rx = inp.tweak || 0, ry = inp.rsy || 0;
+    const rx = inp.bank || inp.tweak || 0, ry = inp.rsy || 0;
     if (ry < -0.55) sendEmote(0); else if (rx > 0.55) sendEmote(1); else if (ry > 0.55) sendEmote(2); else if (rx < -0.55) sendEmote(3);
-    inp.tweak = 0; inp.rsy = 0; }
+    inp.tweak = 0; inp.rsy = 0; inp.bank = 0; }
   window.__emote = { wheel: !!emoteWheel, tHold: +tHold.toFixed(2), can: !!can };
 }
 function onPress(code){
@@ -712,9 +713,12 @@ function step(dt, inp){
     // Holding preload on the face only compresses the suspension. It does not scrub the speed the lip needs.
     const pumpA = (onFace && inp.pumpHold) ? 0 : pumpAccel(cr, slope); S.pumpGain = pumpA;
     let a = longAccel({ slope, speed: S.speed, pedal: inp.pedal, brake: inp.brake, drag: BIKE.drag, weight: S.weight || 0, pumpA, fakie: !!S.fakie });
-    const gInfo = gripRate({ brake: inp.brake, steer: inp.steer, speed: S.speed, onTrail, bikeGrip: BIKE.grip, slip: S.slip || 0, weight: S.weight || 0 });
+    const gInfo = gripRate({ brake: inp.brake, steer: inp.steer, speed: S.speed, onTrail, bikeGrip: BIKE.grip, slip: S.slip || 0, weight: S.weight || 0, bank: inp.bank || 0 });
     const sliding = gInfo.sliding, grip = gInfo.grip;
-    const turn = 1.9 * Math.min(1, 0.25 + S.speed/8) / (1 + S.speed*0.03) * (sliding ? 1.7 : 1) * (1 + 0.15*Math.max(0,-inp.lean));
+    const agree = THREE.MathUtils.clamp((inp.steer || 0) * (inp.bank || 0), -1, 1);
+    // A drift from the brake still yaws faster. Leaning the wrong way must not: that slide widens the turn.
+    const slideBoost = sliding && agree > -0.2 ? 1.7 : 1;
+    const turn = 1.9 * Math.min(1, 0.25 + S.speed/8) / (1 + S.speed*0.03) * slideBoost * (1 + 0.15*Math.max(0,-inp.lean)) * (1 + 0.22*agree);
     const steer = S.fakie ? -inp.steer : inp.steer;
     S.yaw -= steer * turn * dt;
     const aim = S.fakie ? fakieAim(S.yaw) : S.yaw;
@@ -726,7 +730,8 @@ function step(dt, inp){
     S.speed = (typeof window.__holdSpeed === 'number') ? window.__holdSpeed : Math.max(0, S.speed + a*dt);
     // carve lean from actual cornering (v * yaw-rate / g)
     const yawRate = wrapA(S.travel - slipPrev)/dt;
-    S.lean = THREE.MathUtils.lerp(S.lean, THREE.MathUtils.clamp(Math.atan(-yawRate*S.speed/G), -0.85, 0.85), Math.min(1,dt*8));
+    const stickLean = (inp.bank || 0) * 0.62;
+    S.lean = THREE.MathUtils.lerp(S.lean, THREE.MathUtils.clamp(Math.atan(-yawRate*S.speed/G)*0.35 + stickLean, -0.75, 0.75), Math.min(1,dt*8));
     S.weight = THREE.MathUtils.lerp(S.weight||0, THREE.MathUtils.clamp(inp.lean + inp.brake*0.5 - inp.pedal*0.2, -1, 1), Math.min(1, dt*6));
     S.vx = -Math.sin(S.travel)*S.speed; S.vz = -Math.cos(S.travel)*S.speed;
     let nx = S.x + S.vx*dt, nz = S.z + S.vz*dt, ng = groundH(nx,nz);
@@ -850,7 +855,7 @@ function step(dt, inp){
     S.nose = THREE.MathUtils.lerp(S.nose||0, -inp.rsy*0.6, Math.min(1, dt*8));
     if (Math.abs(S.tweak) > 0.6) S.tweakT = (S.tweakT||0) + dt;
     if (inp.trick){ S.trick = inp.trick; S.trickAmt = inp.trickAmt ?? 1; S.trickT = (S.trickT||0) + dt; if (S.trickT > 0.3) S.tricksDone.add(inp.trick); } else { S.trick = null; S.trickT = 0; }
-    S.lean = THREE.MathUtils.lerp(S.lean, 0, dt*3); S.weight = THREE.MathUtils.lerp(S.weight||0, ty, dt*5);
+    S.lean = THREE.MathUtils.lerp(S.lean, (inp.bank || 0) * 0.7, Math.min(1, dt*5)); S.weight = THREE.MathUtils.lerp(S.weight||0, ty, dt*5);
     const gh = groundH(S.x,S.z), gs = (groundH(S.x+S.vx*0.05, S.z+S.vz*0.05)-gh)/(Math.hypot(S.vx,S.vz)*0.05+1e-3);
     const gp = Math.atan(gs);
     if (Math.abs(ty) < 0.2){ const e = wrapA(S.pitch-gp); if (Math.abs(e) < 1.3){ S.pitch -= e*Math.min(1,dt*2.5); } }
@@ -884,7 +889,7 @@ function land(gh, gp){
   const tvx = S.vx - vn*n[0], tvy = S.vy - vn*n[1], tvz = S.vz - vn*n[2];
   const horiz = Math.hypot(tvx, tvz);
   const impact = -vn; S.suspV = (S.suspV||0) + Math.min(Math.max(impact, 0),15)*0.12; S.dustBurst = Math.min(1, Math.max(impact,0)/8); sfxLand(Math.max(impact, 0));
-  const call = landingCall({ se, pe, stab: BIKE.stab, impact, trick: S.trick, tweak: S.tweak || 0 });
+  const call = landingCall({ se, pe, stab: BIKE.stab, impact, trick: S.trick, tweak: S.tweak || 0, lean: S.lean || 0 });
   if (!call.ok){ crash(call.reason); return; }
   if (call.fakie){ S.yaw = wrapA(S.yaw + S.spin); S.spin = 0; S.fakie = true; S.wheelie = false; S.speed = horiz * 0.96; }
   else { S.fakie = false; S.wheelie = !!call.wheelie; S.spin = se; S.speed = horiz * Math.max(0, Math.cos(wrapA(S.yaw - S.travel))) * 0.96; }
@@ -1684,7 +1689,7 @@ try { NET = initNet({THREE, scene, camera, S, bike, buildBikeRider: makeRider, s
   NET.on(() => { if (menu.open && menu.page === 'multi') renderMenu(); }); window.__net = NET; } catch (e) { console.warn('multiplayer unavailable', e); NET = null; }
 openMenu('main'); setTimeout(() => $('loading').classList.add('done'), 300);
 teleport(spotI, true);
-window.__features = features; window.__respawn = () => respawnSafe(); window.__game = S; window.__readInput = readInput; window.__groundH = groundH; window.__lift = i => startLift(i); window.__world = { LIFTS, connectors, trails, features, spots, PARK, SHOP, terrainH, featH, isDirt, nearTrails, base, inPark, treesInCell, trailDist };
+window.__features = features; window.__respawn = () => respawnSafe(); window.__game = S; window.__readInput = readInput; window.__emoteFrame = emoteFrame; window.__groundH = groundH; window.__lift = i => startLift(i); window.__world = { LIFTS, connectors, trails, features, spots, PARK, SHOP, terrainH, featH, isDirt, nearTrails, base, inPark, treesInCell, trailDist };
 window.__setCam = m => { camMode = ((m % CAM_NAMES.length) + CAM_NAMES.length) % CAM_NAMES.length; camInit = false; camHead = S.travel ?? S.yaw; };
 window.__BR = BR; window.__teleport = i => teleport(i); window.__unlocked = unlocked; window.__isOpen = isOpen; window.__chunks = () => chunks.size; window.__renderer = renderer; window.__place = (x, z, yaw) => { placeAt(x, z, yaw); S.air = false; };
 window.__sim = (secs, inp) => { const h=1/120; const base={steer:0,pedal:0,brake:0,jump:false,tx:0,ty:0}; for(let t=0;t<secs;t+=h){ step(h, Object.assign({}, base, typeof inp==='function'?inp(t):inp)); trackWorld(h); } return {x:S.x, z:S.z, kmh:S.speed*3.6, air:S.air, lives:S.lives, clean:S.clean, score:S.score}; };

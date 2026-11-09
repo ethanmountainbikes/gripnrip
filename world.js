@@ -228,7 +228,7 @@ for (const tr of trails){
         case 'flow':     f = [() => A('roller', 2.6, PROF.roller(0.5, 9)), () => A('table', 2.4, PROF.table(1.2*sz, 4, 3, 4)), () => hip(1.15*sz), () => bigTable(), () => A('stepup', 2.4, PROF.stepup(1.0, 4, 1.5, 1.3, 3, 5)), () => A('stepdown', 2.4, PROF.stepdown(1.2, 4, 1.5, 0.8, 5))][k%6](); break;
         case 'flowg':    f = k%4===3 ? hip(0.85) : k%3===2 ? A('table', 2.4, PROF.table(0.8, 3.5, 2.5, 3.5)) : A('roller', 2.6, PROF.roller(0.35, 9)); break;
         case 'xc':       f = k%4===1 ? A('table', 2.2, PROF.table(0.55, 3.2, 2.6, 3.2)) : k%4===3 ? hip(0.7) : A('roller', 2.6, PROF.roller(0.3, 9)); break;
-        case 'tech':     f = k%5===4 ? A('table', 2.3, PROF.table(0.9, 3.6, 4, 4)) : k%4===1 ? hip(0.85) : k%3===2 ? A('rockdrop', 1.6, {...PROF.drop(0.8, 3, 2), rock:true}) : A('rocks', 2.4, PROF.rocks(0.3, 8, 4)); break;
+        case 'tech':     f = k%6===5 ? hip(0.85) : k%7===6 ? A('table', 2.3, PROF.table(0.9, 3.6, 4, 4)) : k%3===2 ? A('rockdrop', 1.6, {...PROF.drop(0.8, 3, 2), rock:true}) : A('rocks', 2.4, PROF.rocks(0.3, 8, 4)); break;
         case 'freeride': f = [() => A('drop', 1.8, PROF.drop(2.0, 6, 3)), () => bigTable(), () => A('gap', 2.6, PROF.gap(2.0, 5.5, 4, 7)), () => hip(2.0), () => A('stepdown', 2.6, PROF.stepdown(1.9, 5, 2.5, 1.2, 7))][k%5](); break;
         case 'drops':    f = k%3===1 ? hip(1.5) : k%3===2 ? bigTable() : A('drop', 1.8, PROF.drop(1.6+0.3*(k%3), 6, 3)); break;
         case 'pump':     f = k%8===7 ? hip(0.6) : k%7===6 ? A('table', 2.1, PROF.table(0.42, 2.8, 2.2, 2.8)) : A('roller', 2.2, PROF.roller(0.72, 5.5)); break;

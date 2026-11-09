@@ -53,9 +53,12 @@ export function pumpAccel(cr, slope) {
 
 export function gripRate(o) {
   const brake = o.brake || 0, steer = o.steer || 0, speed = o.speed || 0, weight = o.weight || 0, slip = o.slip || 0;
+  const agree = Math.max(-1, Math.min(1, steer * (o.bank || 0)));
   const sliding = (brake > 0.3 && Math.abs(steer) > 0.35 && speed > 5)
-    || (brake > 0.45 && weight > 0.35 && Math.abs(steer) > 0.2 && speed > 5);
-  const grip = sliding ? 1.4 + Math.abs(slip) * 3 : ((o.onTrail ? 11 : 5) * (o.bikeGrip == null ? 1 : o.bikeGrip));
+    || (brake > 0.45 && weight > 0.35 && Math.abs(steer) > 0.2 && speed > 5)
+    || (agree < -0.28 && Math.abs(steer) > 0.35 && speed > 6);
+  let grip = sliding ? 1.4 + Math.abs(slip) * 3 : ((o.onTrail ? 11 : 5) * (o.bikeGrip == null ? 1 : o.bikeGrip));
+  if (!sliding) grip *= 1 + 0.2 * agree;
   return { sliding, grip };
 }
 
@@ -65,6 +68,7 @@ export function landingCall(o) {
   const sideLim = 0.85 * stab, pitchLim = 0.75 * stab;
   const absS = Math.abs(o.se || 0), pe = o.pe || 0, absP = Math.abs(pe);
   const hard = o.impact > 20, mid = !!o.trick, tweaked = Math.abs(o.tweak || 0) > 0.6;
+  if (Math.abs(o.lean || 0) > 0.61) return { ok: false, reason: 'Leaned it over!' };
   const bad = hard ? 'Too hard a landing!' : mid ? 'Still mid-trick!' : tweaked ? "Didn't straighten the tweak!" : null;
   const fakie = absS > Math.PI - 0.6 && absP < pitchLim * 1.25;
   if (fakie) return bad ? { ok: false, reason: bad } : { ok: true, fakie: true, wheelie: false };
