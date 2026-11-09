@@ -683,9 +683,11 @@ function step(dt, inp){
     const tx_ = -Math.sin(S.travel), tz_ = -Math.cos(S.travel);
     const h0 = groundH(S.x,S.z), h1 = groundH(S.x+tx_*0.5, S.z+tz_*0.5);
     const slope = (h1-h0)/0.5; S.slope = slope;
-    // pumping: only the rider's preload change counts. A passive suspension return adds no speed.
-    // A two-stick wheelie (or K) eats the right-stick pump so the chord cannot charge a hop.
-    if (inp.wheelieChord || inp.kbWheelie){ inp.pumpHold = false; inp.pop = false; inp.counter = false; S.preload = 0; S.hopWin = 0; }
+    // A rising jump face is not a wheelie and not a pump-track compression. Preload there is
+    // visual plus a later pop. Spending speed or arming a wheelie on the face glues you to the lip.
+    const onFace = slope > 0.08 && featH(S.x, S.z) > 0.04;
+    if ((inp.wheelieChord || inp.kbWheelie) && !onFace){ inp.pumpHold = false; inp.pop = false; inp.counter = false; S.preload = 0; S.hopWin = 0; }
+    if (onFace){ inp.wheelieChord = false; inp.kbWheelie = false; }
     const prevPre = S.preload;
     if (inp.pumpHold) { S.preload = Math.min(1, S.preload + dt*2.2); S.hopWin = 0.35; }
     let pop = 0;
@@ -694,7 +696,8 @@ function step(dt, inp){
       if (hopNow){ pop = (1.2 + S.preload*2.0)*BIKE.pop; /* bunny hop ~0.3-0.5 m */ S.preload = 0; }
       else S.preload = Math.max(0, S.preload - dt*3); }
     const cr = (inp.pumpHold || (inp.counter && !hopNow) || S.preload > 0) ? (S.preload - prevPre)/dt : 0;
-    const pumpA = pumpAccel(cr, slope); S.pumpGain = pumpA;
+    // Holding preload on the face only compresses the suspension. It does not scrub the speed the lip needs.
+    const pumpA = (onFace && inp.pumpHold) ? 0 : pumpAccel(cr, slope); S.pumpGain = pumpA;
     let a = longAccel({ slope, speed: S.speed, pedal: inp.pedal, brake: inp.brake, drag: BIKE.drag, weight: S.weight || 0, pumpA, fakie: !!S.fakie });
     const gInfo = gripRate({ brake: inp.brake, steer: inp.steer, speed: S.speed, onTrail, bikeGrip: BIKE.grip, slip: S.slip || 0, weight: S.weight || 0 });
     const sliding = gInfo.sliding, grip = gInfo.grip;
@@ -707,7 +710,7 @@ function step(dt, inp){
     const slip = wrapA(aim - S.travel);
     a -= Math.abs(Math.sin(slip)) * S.speed * 2.2;
     S.slip = slip; S.sliding = Math.abs(slip) > 0.12;
-    S.speed = Math.max(0, S.speed + a*dt);
+    S.speed = (typeof window.__holdSpeed === 'number') ? window.__holdSpeed : Math.max(0, S.speed + a*dt);
     // carve lean from actual cornering (v * yaw-rate / g)
     const yawRate = wrapA(S.travel - slipPrev)/dt;
     S.lean = THREE.MathUtils.lerp(S.lean, THREE.MathUtils.clamp(Math.atan(-yawRate*S.speed/G), -0.85, 0.85), Math.min(1,dt*8));
@@ -753,7 +756,7 @@ function step(dt, inp){
     if (onRock){ const climb = Math.max(0, ng - S.y); S.speed = Math.max(0, S.speed - climb*(2.2 + S.speed*0.25)); S.suspV = (S.suspV||0) + climb*25; S.jolt = Math.min(1, (S.jolt||0) + climb*4);
       vyG = THREE.MathUtils.clamp(vyG, -2, 2); S.rockT = 0.25; }
     S.rockT = Math.max(0, (S.rockT||0) - dt);
-    let crest = !S.wheelie && S.gf > 3 && S.landCool <= 0 && (S.lastVyG - vyG)/dt > crestG && S.speed > 4 && S.rockT <= 0;
+    let crest = !S.wheelie && S.gf > 3 && S.landCool <= 0 && (S.lastVyG - vyG)/dt > crestG && S.speed > (onFace ? 2.2 : 4) && S.rockT <= 0;
     const edge = (ng - S.y) < -0.12 && (S.lastVyG - vyG)/dt > G_AIR*3 && S.speed > 1.5;   // rolling off a ledge/lip: the ground drops away faster than you can fall
     if (backFeat && !edge) crest = false;   // wrong-way over a jump: roll over it, never pop off its crest
     if (edge && !crest && S.rockT <= 0 && S.landCool <= 0) crest = true;   // never re-launch right after touching down (no landing bounce)
@@ -765,7 +768,10 @@ function step(dt, inp){
       // A charged hop adds height. Ground-follow can be largely negative where the lip
       // falls away; that must not turn the hop into a dive. A plain crest keeps the ramp's own vertical speed.
       const groundVy = backFeat ? Math.min(S.lastVyG, 0.1*S.speed) : S.lastVyG;
-      S.vy = pop > 0 ? Math.max(groundVy, 0) + pop : groundVy;
+      // The lip's own grade is the launch. A hop adds a small pop on top, never instead of it, and never a cannon.
+      const lipVy = Math.max(0, groundVy, onFace ? faceG * S.speed * 0.85 : 0);
+      const popAdd = Math.min(pop, 2.0);
+      S.vy = lipVy + popAdd;
       S.popped = pop > 0;
       S.lipHop = pop > 0 ? null : ((S.preload||0) > 0.05 && (S.hopWin||0) > 0 ? { until: 0.12, pre: S.preload, used: false } : null);
       S.toX = S.x; S.toZ = S.z; S.tweakT = 0; S.tricksDone = new Set(); S.wYaw = 0; S.wPitch = 0;
@@ -805,7 +811,7 @@ function step(dt, inp){
   } else {
     // One pop if the stick comes up just after the lip, while the preload was still charged. Not again after that.
     if (S.lipHop && !S.lipHop.used && inp.pop && !inp.pumpHold && !(inp.wheelieChord || inp.kbWheelie) && S.airT <= S.lipHop.until){
-      S.vy = Math.max(S.vy, 0) + (1.2 + S.lipHop.pre*2.0)*BIKE.pop; S.popped = true; S.lipHop.used = true; }
+      S.vy = Math.max(S.vy, 0) + Math.min(2.0, (1.2 + S.lipHop.pre*2.0)*BIKE.pop); S.popped = true; S.lipHop.used = true; }
     S.wheelieArm = 0;
     S.airT += dt; S.vy -= G_AIR*dt;
     S.x += S.vx*dt; S.z += S.vz*dt; S.y += S.vy*dt;
@@ -989,10 +995,12 @@ function frame(){
       if (drone.t <= 0 || d > 55){ const side = Math.random() < 0.5 ? -1 : 1, ax = S.x + fx*35 + sx*side*12, az = S.z + fz*35 + sz*side*12; drone.p.set(ax, Math.max(groundH(ax, az), S.y - 8) + 9, az); drone.t = 6; }
       camera.position.copy(drone.p); camera.up.set(0,1,0); camera.lookAt(S.x, S.y + 0.8, S.z); } }
   else if (camera.near !== 0.1){ camera.near = 0.1; camera.updateProjectionMatrix(); }
-  window.__view = { mode: camMode, fov: +camera.fov.toFixed(2), dist: +Math.hypot(camera.position.x - S.x, camera.position.z - S.z).toFixed(3),
-    arms: ['armUpperL','armUpperR','armForeL','armForeR'].map(n => { const o = BR.root.getObjectByName(n); return !!(o && o.visible); }),
-    hands: ['handL','handR'].map(n => { const o = BR.root.getObjectByName(n); return !!(o && o.visible && o.parent === BR.root); }),
-    head: BR.head.visible, torso: !!BR.root.getObjectByName('riderTorso')?.visible };
+  { const yaw = S.yaw, fx = -Math.sin(yaw), fz = -Math.cos(yaw), dx = camera.position.x - S.x, dz = camera.position.z - S.z;
+    window.__view = { mode: camMode, fov: +camera.fov.toFixed(2), dist: +Math.hypot(dx, dz).toFixed(3),
+      off: { f: +(dx*fx + dz*fz).toFixed(3), r: +(dx*Math.cos(yaw) - dz*Math.sin(yaw)).toFixed(3), y: +(camera.position.y - S.y).toFixed(3) },
+      arms: ['armUpperL','armUpperR','armForeL','armForeR'].map(n => { const o = BR.root.getObjectByName(n); return !!(o && o.visible); }),
+      hands: ['handL','handR'].map(n => { const o = BR.root.getObjectByName(n); return !!(o && o.visible && o.parent === BR.root); }),
+      head: BR.head.visible, torso: !!BR.root.getObjectByName('riderTorso')?.visible, spd: +((S.speed||0)).toFixed(2) }; }
   if (window.__camSide){ const o = window.__camSide, c = Math.cos(S.yaw), s_ = Math.sin(S.yaw); camera.position.set(S.x + c*o.d + Math.sin(S.yaw)*(o.b||0), S.y + (o.h||1.2), S.z - s_*o.d + Math.cos(S.yaw)*(o.b||0)); camera.up.set(0,1,0); camera.lookAt(S.x, S.y + 0.9, S.z); }   // test hook: side camera for pose screenshots
   if (flyF) flyover(0);
   else if (shopOpen) shopCam(dt);   // main menu: flyover camera replaces the chase cam
