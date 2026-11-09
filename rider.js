@@ -139,7 +139,7 @@ export function buildBikeRider(frameMat, opts = {}){
     : { thighL: limb(0.062, 0.042, L.thigh, M.pants, 0.15, 0.32), thighR: limb(0.062, 0.042, L.thigh, M.pants, 0.15, 0.32),
         shinL: limb(0.04, 0.028, L.shin, M.pants, 0.22, 0.3), shinR: limb(0.04, 0.028, L.shin, M.pants, 0.22, 0.3),
         upperL: limb(0.04, 0.03, L.upper, M.jersey, 0.18, 0.38), upperR: limb(0.04, 0.03, L.upper, M.jersey, 0.18, 0.38),
-        foreL: limb(0.032, 0.024, L.fore, M.jersey2, 0.15, 0.28), foreR: limb(0.032, 0.024, L.fore, M.jersey2, 0.15, 0.28) };
+        foreL: limb(0.03, 0.022, L.fore, M.jersey, 0.12, 0.28), foreR: limb(0.03, 0.022, L.fore, M.jersey, 0.12, 0.28) };
   const kneePad = [0, 1].map(() => mk(new THREE.SphereGeometry(legacy ? 0.062 : 0.048, 12, 10).scale(1, 1.25, 0.72), M.pad));
   const torso = new THREE.Group(); torso.name = 'riderTorso'; root.add(torso);
   { // torso: legacy is the original thicker build; athletic is a narrower waist and chest, still a stylized rider
@@ -148,9 +148,11 @@ export function buildBikeRider(frameMat, opts = {}){
       : [[0,-0.05],[0.118,-0.03],[0.128,0.04],[0.112,0.14],[0.108,0.22],[0.13,0.32],[0.15,0.4],[0.132,0.46],[0.09,0.5],[0.045,0.52],[0,0.53]]
     ).map(([x,y]) => new THREE.Vector2(x, y));
     const t = new THREE.Mesh(new THREE.LatheGeometry(prof, 20).scale(1, 1, 0.62), M.jersey); t.castShadow = true; torso.add(t);
-    const stripe = new THREE.Mesh(new THREE.LatheGeometry([[0.162,0.33],[0.183,0.37],[0.186,0.41]].map(([x,y]) => new THREE.Vector2(x, y)), 20).scale(1.01, 1, 0.63), M.jersey2); torso.add(stripe);
-    const num = new THREE.Mesh(new THREE.PlaneGeometry(0.15, 0.11), M.jersey2); num.position.set(0, 0.3, 0.103); torso.add(num);
-    const shorts = new THREE.Mesh(new THREE.LatheGeometry([[0,-0.07],[0.155,-0.05],[0.182,0.03],[0.168,0.12],[0,0.12]].map(([x,y]) => new THREE.Vector2(x, y)), 20).scale(1, 1, 0.66), M.pants); shorts.castShadow = true; torso.add(shorts);
+    const stripePts = (legacy ? [[0.162,0.33],[0.183,0.37],[0.186,0.41]] : [[0.128,0.30],[0.148,0.36],[0.142,0.42]]).map(([x,y]) => new THREE.Vector2(x, y));
+    const stripe = new THREE.Mesh(new THREE.LatheGeometry(stripePts, 20).scale(1.01, 1, legacy ? 0.63 : 0.64), M.jersey2); torso.add(stripe);
+    if (legacy){ const num = new THREE.Mesh(new THREE.PlaneGeometry(0.15, 0.11), M.jersey2); num.position.set(0, 0.3, 0.103); torso.add(num); }
+    const hipPts = (legacy ? [[0,-0.07],[0.155,-0.05],[0.182,0.03],[0.168,0.12],[0,0.12]] : [[0,-0.16],[0.12,-0.12],[0.132,-0.02],[0.12,0.1],[0,0.12]]).map(([x,y]) => new THREE.Vector2(x, y));
+    const shorts = new THREE.Mesh(new THREE.LatheGeometry(hipPts, 20).scale(1, 1, legacy ? 0.66 : 0.7), M.pants); shorts.castShadow = true; torso.add(shorts);
     for (const s of [-1, 1]){ const d = new THREE.Mesh(new THREE.SphereGeometry(legacy ? 0.06 : 0.045, 12, 10), M.jersey); d.position.set(s*(legacy ? 0.2 : 0.16), 0.45, 0); torso.add(d); }   // deltoids
     const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.048, 0.055, 0.1, 10), M.skin); neck.position.y = 0.55; torso.add(neck); }
   // Buckle Bean extras (shown by the shop skins): cape flap on the back, belt + gold buckle, smiley face decal on the helmet
@@ -194,10 +196,10 @@ export function buildBikeRider(frameMat, opts = {}){
     H(new THREE.TorusGeometry(0.137, 0.008, 6, 28).scale(0.96, 1.14, 1), M.strap, 0, 0.015, 0.0, Math.PI/2);   // goggle strap
     } else {
       const shell = new THREE.Mesh(new THREE.SphereGeometry(0.132, 24, 18).scale(0.98, 1.05, 1.16), M.helmet); shell.castShadow = true; head.add(shell);
-      const peak = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.01, 0.11), M.helmet); peak.position.set(0, 0.095, -0.12); peak.rotation.x = 0.22; peak.castShadow = true; head.add(peak);
-      const chin = new THREE.Mesh(new THREE.SphereGeometry(0.078, 16, 12).scale(1.2, 0.72, 1.15), M.helmet); chin.position.set(0, -0.085, -0.07); chin.castShadow = true; head.add(chin);
-      const lens = new THREE.Mesh(new THREE.CapsuleGeometry(0.02, 0.1, 6, 14), M.lens); lens.rotation.z = Math.PI/2; lens.position.set(0, 0.012, -0.148); head.add(lens);
-      const pad = new THREE.Mesh(new THREE.CapsuleGeometry(0.028, 0.11, 4, 12).scale(1, 1, 0.45), M.black); pad.rotation.z = Math.PI/2; pad.position.set(0, 0.012, -0.132); head.add(pad);
+      const peak = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.012, 0.1), M.helmet); peak.position.set(0, 0.09, -0.13); peak.rotation.x = 0.28; peak.castShadow = true; head.add(peak);
+      const chin = new THREE.Mesh(new THREE.SphereGeometry(0.064, 16, 12).scale(1.45, 0.48, 1.05), M.helmet); chin.position.set(0, -0.112, -0.06); chin.castShadow = true; head.add(chin);
+      const lens = new THREE.Mesh(new THREE.CapsuleGeometry(0.04, 0.11, 6, 16), M.lens); lens.rotation.z = Math.PI/2; lens.position.set(0, -0.012, -0.142); head.add(lens);
+      const pad = new THREE.Mesh(new THREE.CapsuleGeometry(0.034, 0.1, 4, 12).scale(1, 1, 0.4), M.black); pad.rotation.z = Math.PI/2; pad.position.set(0, -0.012, -0.122); head.add(pad);
       H(new THREE.TorusGeometry(0.128, 0.007, 8, 28).scale(0.98, 1.08, 1), M.strap, 0, 0.01, 0, Math.PI/2);
     } }
   { const cv = document.createElement('canvas'); cv.width = cv.height = 128; const c = cv.getContext('2d'); c.fillStyle = '#1a120c'; c.beginPath(); c.arc(40, 50, 10, 0, 7); c.arc(88, 50, 10, 0, 7); c.fill(); c.lineWidth = 9; c.strokeStyle = '#1a120c'; c.beginPath(); c.arc(64, 64, 34, 0.2*Math.PI, 0.8*Math.PI); c.stroke();
@@ -239,7 +241,7 @@ export function buildBikeRider(frameMat, opts = {}){
   const toFull = (a, rate, dt) => { const tgt = Math.ceil(a/(Math.PI*2) - 1e-3)*Math.PI*2; return Math.min(tgt, a + rate*dt); };
 
   function update(S, inp, dt){
-    const air = S.air && S.crashT <= 0, k = 1 - Math.exp(-dt/(legacy ? 0.08 : 0.14));
+    const air = S.air && S.crashT <= 0, k = 1 - Math.exp(-dt/(legacy ? 0.08 : 0.2));
     const name = air && S.trick ? TRICK_OF[S.trick] : null, amt = name ? (S.trickAmt ?? 1) : 0;
     for (const key in W) W[key] = easeTo(W[key], key === name ? 0.35 + 0.65*amt : 0, k);
     // continuous spins: barspin spins the bars, tailwhip whips the frame; on release they finish the turn and lock straight
@@ -262,7 +264,7 @@ export function buildBikeRider(frameMat, opts = {}){
     // body: blend hip / spine lean / twist from all active poses (+ flip tuck, 360 head turn, whip counter-twist)
     // always standing: coasting = attack position (level pedals, hips back over the rear wheel, chest low);
     // pedalling = standing up over the cranks. pw blends the two smoothly.
-    pw = easeTo(pw, (inp?.standing || 0), 1 - Math.exp(-dt/(legacy ? 0.18 : 0.22)));
+    pw = easeTo(pw, (inp?.standing || 0), 1 - Math.exp(-dt/(legacy ? 0.18 : 0.28)));
     // Elbows and knees soften on bumps, landings and a wheelie. This is pose only.
     const giveT = legacy ? 0 : Math.min(1, Math.max(0, (S.susp || 0) * 3.1) + Math.min(1, S.jolt || 0) * 0.9 + (S.wheelie ? 0.22 : 0) + Math.min(0.35, (S.landBlend || 0) * 1.2));
     give = easeTo(give, giveT, 1 - Math.exp(-dt/0.1));
