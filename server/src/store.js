@@ -46,7 +46,7 @@ export function cleanSave(d) {
     best: { mountain: best(d.best?.mountain, 'mountain'), rampage: best(d.best?.rampage, 'rampage') },
     name: Array.isArray(d.name) && int(d.name[0], 0, 31) && int(d.name[1], 0, 31) ? d.name : [0, 0],
     earned: int(d.earned, 0, 1e9) ? d.earned : 0,
-    pb: (() => { const r = {}; if (d.pb && typeof d.pb === 'object') for (const [k, v] of Object.entries(d.pb).slice(0, 200)) if (/^[a-z]{2,8}(:[01]:\d{1,2})?$/.test(k) && typeof v === 'number' && Number.isFinite(v) && v >= 0 && v < 1e9) r[k] = v; return r; })(),
+    pb: (() => { const r = {}; if (d.pb && typeof d.pb === 'object') for (const [k, v] of Object.entries(d.pb).slice(0, 200)) if (/^[a-z]{2,8}(:[01]:\d{1,2}(:[0-9a-z]{4,8})?)?$/.test(k) && typeof v === 'number' && Number.isFinite(v) && v >= 0 && v < 1e9) r[k] = v; return r; })(),
   };
 }
 export function mergeSave(a, b) {   // a, b already cleaned
@@ -122,6 +122,10 @@ export class Store {
         const marks = [RUN_START, ...tr.cps, tr.len - RUN_END], times = [0, ...cps, time];
         for (let i = 1; i < marks.length; i++) { const dt = times[i] - times[i - 1], need = Math.max(0, marks[i] - marks[i - 1]) / MAX_SPEED;
           if (!(dt > 0) || dt + 0.05 < need) return json({ error: 'implausible time', rejected: true, split: i, min: +need.toFixed(2) }, 422); }
+        // NOT DEPLOYED. The live worker ignores body.layout and stores t as the trail index, so old times stay on that board.
+        // To reset a changed trail: when body.layout matches /^[0-9a-z]{4,8}$/, store and read
+        // t = trailIndex + 64 * ((layoutHash % 40) + 1), and raise int(body.trail, 0, 63) in /lb/get to that range.
+        // Plain trail indexes keep the old rows. The client already sends layout and versions the local PB key.
         const name = cleanSave(JSON.parse(row.data)).name, improved = this.put('time', w, body.trail, h, name, Math.round(time * 1000));
         let comboImproved = false; if (int(body.combo, 1, 1e7) && body.combo <= time * PTS_PER_S + 500) comboImproved = this.put('combo', w, body.trail, h, name, body.combo);
         return json({ ok: true, improved, comboImproved, ...this.board('time', w, body.trail, h) }); }

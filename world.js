@@ -396,6 +396,13 @@ function featRetarget(f){
 const LAND_KIND = new Set(['kicker','table','double','gap','stepup','stepdown','drop','rockdrop']);
 const _near = [];
 export const landingFixes = [];
+export function layoutTag(trailId){
+  let h = 2166136261;
+  for (const f of features){ if (f.trail !== trailId) continue;
+    const s = `${f.kind}|${Math.round(f.x)}|${Math.round(f.z)}|${Math.round((f.L||0)*10)}|${f.hip?1:0}|${f.landed?1:0}`;
+    for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619); }
+  return (h >>> 0).toString(36).slice(0, 6);
+}
 function approachMs(f){
   const tr = trails[f.trail];
   const km = tr && (JUMP_SPEEDS[tr.name] || [])[f.k];

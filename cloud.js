@@ -93,10 +93,13 @@ export function initCloud(g){   // g: {toast, worldIdx, onBoard(res), reload}
     jump(air, dist, tricks){ if (air > 0.35){ stat('air', +air.toFixed(3)); stat('dist', +dist.toFixed(2), {air:+air.toFixed(3)}); if (tricks > 0) stat('tricks', tricks, {air:+air.toFixed(3)}); } },
     speed(kmh){ stat('speed', +kmh.toFixed(1)); },
     park(score, dur){ if (score > 0) stat('park', Math.round(score), {dur:+dur.toFixed(2)}); },
-    trail(w, t, name, time, cps, combo){   // finish: time board (+ combo) — submitted even when not a PB so the finish screen can show the board
-      const tk = `time:${w}:${t}`, ck = `combo:${w}:${t}`, nt = better(tk, +time.toFixed(3), true), nc = combo > 0 && better(ck, Math.round(combo), false);
+    trail(w, t, name, time, cps, combo, layout){   // finish: time board (+ combo). layout versions the local best so a changed trail starts clean.
+      const tag = layout ? ':' + layout : '';
+      const tk = `time:${w}:${t}${tag}`, ck = `combo:${w}:${t}${tag}`, nt = better(tk, +time.toFixed(3), true), nc = combo > 0 && better(ck, Math.round(combo), false);
       if (nc) NB(`trick combo · ${name}`, `$${Math.round(combo)}`);
-      queue(tk, '/lb/submit', {world:w, trail:t, name, time:+time.toFixed(3), cps:cps.map(x => +x.toFixed(3)), combo:Math.round(combo) || undefined, show:true, label:name});
+      // The live worker keys the board on the integer trail index and rejects anything else, so the cloud row stays on that index.
+      // layout is sent for a worker that can split the board. See the note in server/src/store.js. Do not deploy that worker from here.
+      queue(tk, '/lb/submit', {world:w, trail:t, name, time:+time.toFixed(3), cps:cps.map(x => +x.toFixed(3)), combo:Math.round(combo) || undefined, show:true, label:name, layout: layout || undefined});
       return nt; },
     async board(cat, world, trail){ try { return await post('/lb/get', {cat, world, trail, code:st.code}); } catch { return null; } },
     nameOf: n => `${NAME_A[n[0]] || '?'} ${NAME_B[n[1]] || '?'}` };
