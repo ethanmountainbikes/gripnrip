@@ -206,7 +206,7 @@ for (const tr of trails){
   const n = tr.pts.length;
   // features match the trail type (spacing = run-out after each feature)
   if (tr.kind === 'mega' || tr.pro) continue;
-  const spacing = {rampage:62, dh:55, enduro:50, flow:40, flowg:45, xc:60, tech:28, freeride:60, drops:60, pump:1, jumps:24}[tr.kind];
+  const spacing = {rampage:46, dh:38, enduro:36, flow:28, flowg:32, xc:40, tech:22, freeride:42, drops:42, pump:1, jumps:16}[tr.kind];
   let i = 40, k = 0;
   const sp = (JUMP_SPEEDS[tr.name] || []).filter(Boolean).sort((a,b)=>a-b), vRef = sp.length ? sp[sp.length>>1] : 30;   // the trail's typical speed = current jump size
   while (i < n-(tr.kind==='rampage' ? 45 : 30)){
@@ -219,26 +219,27 @@ for (const tr of trails){
       const [x,z] = tr.pts[i], yaw = tr.yaw[i+2], A = (kind, hw, pr) => { const f = addFeature(kind, x, z, yaw, hw, S_(kind, pr), tr.id); f.k = k; f.g = JUMPY.has(kind) ? g : 1; return f; };
       let f;
       const sz = {green:0.7, blue:0.9, black:1.1, dblack:1.3}[tr.diff];   // feature size by difficulty
-      const hip = (H) => { const f = addFeature('kicker', x, z, yaw + (k%2 ? 0.35 : -0.35), KW, S_('kicker', PROF.kicker(H, KL)), tr.id); f.k = k; f.g = g; return f; };   // angled takeoff (hip)
+      const hip = (H) => { const ang = 0.38 + (k%3)*0.09; const f = addFeature('kicker', x, z, yaw + (k%2 ? ang : -ang), KW, S_('kicker', PROF.kicker(H, KL)), tr.id); f.k = k; f.g = g; f.hip = ang; return f; };
+      const bigTable = () => A('table', 2.8, PROF.table(1.5*sz, 5.5, 8, 7));
       switch (tr.kind){
-        case 'dh':       f = [() => A('kicker', KW, PROF.kicker(KH, KL)), () => A('rocks', 2.6, PROF.rocks(0.28, 10, 5)), () => A('drop', 1.8, PROF.drop(1.2*sz, 5, 2.5)),
-                              () => A('stepdown', 2.4, PROF.stepdown(1.5*sz, 4.5, 2, 1.0, 6)), () => A('rockdrop', 2.0, {...PROF.drop(1.0*sz, 3, 2), rock:true}), () => A('gap', 2.4, PROF.gap(1.6*sz, 5, 3, 6))][k%6](); break;      // fast: jumps, rock gardens, drops
-        case 'enduro':   f = [() => A('rocks', 2.6, PROF.rocks(0.3, 12, 6)), () => A('rockdrop', 2.0, {...PROF.drop(1.0, 4, 2), rock:true}), () => hip(1.3), () => A('stepdown', 2.4, PROF.stepdown(1.3, 4, 2, 0.9, 5))][k%4](); break;
-        case 'flow':     f = [() => A('roller', 2.6, PROF.roller(0.5, 9)), () => A('table', 2.4, PROF.table(1.2*sz, 4, 3, 4)), () => A('stepup', 2.4, PROF.stepup(1.0, 4, 1.5, 1.3, 3, 5)), () => A('stepdown', 2.4, PROF.stepdown(1.2, 4, 1.5, 0.8, 5))][k%4](); break;                                         // rollers + tables
-        case 'flowg':    f = k%3===2 ? A('table', 2.4, PROF.table(0.8, 3.5, 2.5, 3.5)) : A('roller', 2.6, PROF.roller(0.35, 9)); break;
-        case 'xc':       f = A('roller', 2.6, PROF.roller(0.3, 9)); break;                                                                                         // gentle rolling terrain
-        case 'tech':     f = k%3===2 ? A('rockdrop', 1.6, {...PROF.drop(0.8, 3, 2), rock:true}) : A('rocks', 2.4, PROF.rocks(0.3, 8, 4)); break;                                     // rock gardens, small ledges
-        case 'freeride': f = [() => A('drop', 1.8, PROF.drop(2.0, 6, 3)), () => A('gap', 2.6, PROF.gap(2.0, 5.5, 4, 7)), () => A('stepdown', 2.6, PROF.stepdown(1.9, 5, 2.5, 1.2, 7)), () => hip(2.0), () => A('rockdrop', 2.0, {...PROF.drop(1.8, 5, 3), rock:true})][k%5](); break;                                 // big drops and gaps
-        case 'drops':    f = A('drop', 1.8, PROF.drop(1.6+0.3*(k%3), 6, 3)); break;
-        case 'pump':     f = A('roller', 2.2, PROF.roller(0.72, 5.5)); break;                                                                                       // back-to-back pump rollers
+        case 'dh':       f = [() => A('kicker', KW, PROF.kicker(KH, KL)), () => hip(1.5*sz), () => bigTable(), () => A('rocks', 2.6, PROF.rocks(0.28, 10, 5)), () => A('drop', 1.8, PROF.drop(1.2*sz, 5, 2.5)),
+                              () => A('stepdown', 2.4, PROF.stepdown(1.5*sz, 4.5, 2, 1.0, 6)), () => A('gap', 2.4, PROF.gap(1.6*sz, 5, 3, 6))][k%7](); break;
+        case 'enduro':   f = [() => A('rocks', 2.6, PROF.rocks(0.3, 12, 6)), () => hip(1.3), () => bigTable(), () => A('rockdrop', 2.0, {...PROF.drop(1.0, 4, 2), rock:true}), () => A('stepdown', 2.4, PROF.stepdown(1.3, 4, 2, 0.9, 5))][k%5](); break;
+        case 'flow':     f = [() => A('roller', 2.6, PROF.roller(0.5, 9)), () => A('table', 2.4, PROF.table(1.2*sz, 4, 3, 4)), () => hip(1.15*sz), () => bigTable(), () => A('stepup', 2.4, PROF.stepup(1.0, 4, 1.5, 1.3, 3, 5)), () => A('stepdown', 2.4, PROF.stepdown(1.2, 4, 1.5, 0.8, 5))][k%6](); break;
+        case 'flowg':    f = k%4===3 ? hip(0.85) : k%3===2 ? A('table', 2.4, PROF.table(0.8, 3.5, 2.5, 3.5)) : A('roller', 2.6, PROF.roller(0.35, 9)); break;
+        case 'xc':       f = k%4===1 ? A('table', 2.2, PROF.table(0.55, 3.2, 2.6, 3.2)) : k%4===3 ? hip(0.7) : A('roller', 2.6, PROF.roller(0.3, 9)); break;
+        case 'tech':     f = k%5===4 ? A('table', 2.3, PROF.table(0.9, 3.6, 4, 4)) : k%4===1 ? hip(0.85) : k%3===2 ? A('rockdrop', 1.6, {...PROF.drop(0.8, 3, 2), rock:true}) : A('rocks', 2.4, PROF.rocks(0.3, 8, 4)); break;
+        case 'freeride': f = [() => A('drop', 1.8, PROF.drop(2.0, 6, 3)), () => bigTable(), () => A('gap', 2.6, PROF.gap(2.0, 5.5, 4, 7)), () => hip(2.0), () => A('stepdown', 2.6, PROF.stepdown(1.9, 5, 2.5, 1.2, 7))][k%5](); break;
+        case 'drops':    f = k%3===1 ? hip(1.5) : k%3===2 ? bigTable() : A('drop', 1.8, PROF.drop(1.6+0.3*(k%3), 6, 3)); break;
+        case 'pump':     f = k%8===7 ? hip(0.6) : k%7===6 ? A('table', 2.1, PROF.table(0.42, 2.8, 2.2, 2.8)) : A('roller', 2.2, PROF.roller(0.72, 5.5)); break;
         case 'rampage': { const kinds = trails[tr.id].feats, kk = kinds[k % kinds.length];
-          if (k >= kinds.length + 2){ f = A('roller', 2.6, PROF.roller(0.6, 10)); break; }
+          if (k >= kinds.length + 2){ f = k%2 ? hip(1.8) : bigTable(); break; }
           f = kk === 'bigdrop' ? A('drop', 2.8, bigDropP(3.4)) : kk === 'stratos' ? A('drop', 3.0, bigDropP(5.2)) :
               kk === 'wooddrop' ? A('drop', 2.0, PROF.drop(2.2, 6, 3)) : kk === 'goblin' ? A('stepdown', 2.8, PROF.stepdown(3.0, 7, 7, 2.2, 12)) :
               kk === 'stepdown' ? A('stepdown', 2.6, PROF.stepdown(2.2, 5.5, 4, 1.4, 9)) : kk === 'gap' ? A('gap', 2.6, PROF.gap(2.0, 5.5, 6, 8)) :
               (() => { const g = A('gap', 2.8, PROF.gap(2.4, 6, 12, 8)); CANYONS.push({x:g.x, z:g.z, dx:g.dx, dz:g.dz, t0:6, t1:18, w:g.hw+3, D:9}); g.canyon = true; return g; })();
           if (kk === 'goblin') f.goblin = true; if (kk === 'stratos') f.stratos = true; break; }
-        case 'jumps':    f = [() => A('table', 2.4, PROF.table(1.4, 4.5, 3.5, 4.5)), () => A('double', 2.4, PROF.double(1.5, 4.5, 2.2, 5)), () => A('stepup', 2.4, PROF.stepup(1.2, 4.5, 1.8, 1.6, 3, 5)), () => hip(1.4), () => A('gap', 2.4, PROF.gap(1.5, 4.5, 2.5, 6))][k%5](); break;                    // consecutive tables & doubles
+        case 'jumps':    f = [() => bigTable(), () => A('double', 2.4, PROF.double(1.5, 4.5, 2.2, 5)), () => hip(1.4), () => A('stepup', 2.4, PROF.stepup(1.2, 4.5, 1.8, 1.6, 3, 5)), () => A('gap', 2.4, PROF.gap(1.5, 4.5, 2.5, 6)), () => A('table', 2.4, PROF.table(1.4, 4.5, 3.5, 4.5))][k%6](); break;
       }
       k++; i += Math.round(spacing/2) + Math.round((f.L0 || f.L)/2); continue;
     }
@@ -253,6 +254,8 @@ export const MEGA = [];
 for (const tr of trails){ if (tr.kind !== 'mega') continue;
   const PLAN = [{H:6, gap:20, HL:5.6}, {H:7, gap:24, HL:6.5}, {H:7.5, gap:22, HL:4, kind:'stepdown'}, {H:5, gap:18, HL:6.5, kind:'stepup'}, {H:7, gap:26, HL:6.5}, {H:6, gap:28, HL:1.5, finale:true}];
   const n = tr.pts.length; let i = 75, k = 0;   // 150 m flat-out run-in past the summit traverse before the first lip
+  if (n > 60){ const hf = addFeature('kicker', tr.pts[18][0], tr.pts[18][1], tr.yaw[20] + 0.45, 2.3, PROF.kicker(1.2, 5), tr.id); hf.hip = 0.45;
+    addFeature('table', tr.pts[46][0], tr.pts[46][1], tr.yaw[48], 2.6, PROF.table(1.7, 5.5, 8, 6.5), tr.id); }
   if (tr.megaStart){ let bd = 1e9, bi = 0; tr.pts.forEach((p, j) => { const d = Math.hypot(p[0]-tr.megaStart[0], p[1]-tr.megaStart[1]); if (d < bd){ bd = d; bi = j; } }); i = bi + 75; }
   for (const J of PLAN){ if (i >= n - 40) break;
     const s = Math.max(0.05, (tr.h[i] - tr.h[Math.min(n-1, i+30)])/60), v = ((MEGA_LIP[k] ?? 62)/3.6), g = 9.81, back = 3;
@@ -293,9 +296,9 @@ if (!RAMP) { const d = PARK.dir, yaw = Math.atan2(-d[0], -d[1]), sx = -d[1], sz 
   const spine = (H, L) => ({L, p: t => t>=0 && t<=L ? H*Math.pow(1 - Math.abs(2*t/L - 1), 1.4) : 0});
   const whale = (H, L1, L3) => ({L:L1+L3, p: t => t<0 ? 0 : t<=L1 ? H*Math.pow(t/L1, 2.2) : t<=L1+L3 ? H*Math.pow(1-(t-L1)/L3, 0.8) : 0});
   const lines = [
-    {off:-30, name:'Beginner Tables', diff:'green', roll:4.5, items:[k => ['table', PROF.table(0.7, 3.5, 2.5, 3.5)], k => ['roller', PROF.roller(0.35, 7)], k => ['table', PROF.table(0.8, 3.5, 3, 3.5)], k => ['roller', PROF.roller(0.35, 7)], k => ['table', PROF.table(0.8, 3.5, 3, 3.5)], k => ['table', PROF.table(0.7, 3.5, 2.5, 3.5)]]},
-    {off:-10, name:'Intermediate Doubles', diff:'blue', roll:6, items:[k => ['double', PROF.double(1.1, 3.8, 1.6, 4)], k => ['double', PROF.double(1.2, 4, 1.8, 4.5)], k => ['stepup', PROF.stepup(1.0, 4, 1.4, 1.3, 2.5, 4.5)], k => ['stepdown', PROF.stepdown(1.2, 4, 1.6, 0.8, 4.5)], k => ['double', PROF.double(1.2, 4, 1.8, 4.5)]]},
-    {off:12, name:'Pro Big Doubles', diff:'black', roll:8, items:[k => ['double', PROF.double(1.7, 4.5, 2.6, 5)], k => ['double', PROF.double(1.8, 4.6, 2.8, 5.2)], k => ['double', PROF.double(1.8, 4.6, 2.8, 5.2)], k => ['double', PROF.double(1.9, 4.8, 3.0, 5.4)]]},
+    {off:-30, name:'Beginner Tables', diff:'green', roll:4.5, items:[k => ['table', PROF.table(0.7, 3.5, 2.5, 3.5)], k => ['kicker', PROF.kicker(0.65, 4), 0.42], k => ['roller', PROF.roller(0.35, 7)], k => ['table', PROF.table(0.8, 3.5, 3, 3.5)], k => ['roller', PROF.roller(0.35, 7)], k => ['table', PROF.table(0.8, 3.5, 3, 3.5)]]},
+    {off:-10, name:'Intermediate Doubles', diff:'blue', roll:6, items:[k => ['table', PROF.table(1.55, 5, 8, 6)], k => ['kicker', PROF.kicker(1.15, 4.5), -0.48], k => ['double', PROF.double(1.1, 3.8, 1.6, 4)], k => ['double', PROF.double(1.2, 4, 1.8, 4.5)], k => ['stepdown', PROF.stepdown(1.2, 4, 1.6, 0.8, 4.5)]]},
+    {off:12, name:'Pro Big Doubles', diff:'black', roll:8, items:[k => ['table', PROF.table(2.0, 6, 10, 7)], k => ['kicker', PROF.kicker(1.6, 5), 0.5], k => ['double', PROF.double(1.7, 4.5, 2.6, 5)], k => ['double', PROF.double(1.8, 4.6, 2.8, 5.2)], k => ['double', PROF.double(1.9, 4.8, 3.0, 5.4)]]},
     {off:32, name:'Slopestyle Mix', diff:'black', roll:9, items:[k => ['kicker', PROF.kicker(1.3, 5), -0.3], k => ['spine', spine(1.4, 8)], k => ['kicker', whale(1.2, 3.2, 3)], k => ['table', PROF.table(1.3, 4, 4, 4)], k => ['kicker', PROF.kicker(1.3, 5), 0.3], k => ['roller', PROF.roller(0.4, 6)], k => ['roller', PROF.roller(0.4, 6)], k => ['berm', PROF.berm(1.6, 14, 1, 5)]]},
   ];
   PARK.lines = lines;
@@ -320,7 +323,7 @@ if (!RAMP) { const d = PARK.dir, yaw = Math.atan2(-d[0], -d[1]), sx = -d[1], sz 
     const r = addFeature('roller', ox - d[0]*pr.ramp, oz - d[1]*pr.ramp, yaw, 2.6, pr, -1); r.rollin = true; r.rampLen = pr.ramp; ln.start = t + 5.5; ln.rampFoot = {x: ox - d[0]*pr.ramp, z: oz - d[1]*pr.ramp};
     t += r.L - pr.ramp + 6;
     for (let k = 0; k < ln.items.length && t < 62; k++){ const [kind, p, yo] = ln.items[k](k);
-      const f = addFeature(kind === 'spine' ? 'table' : kind, PARK.x + d[0]*t + sx*ln.off, PARK.z + d[1]*t + sz*ln.off, yaw + (yo || 0), kind === 'berm' ? 5 : 2.4, p, -1); f.park = ln.name;
+      const f = addFeature(kind === 'spine' ? 'table' : kind, PARK.x + d[0]*t + sx*ln.off, PARK.z + d[1]*t + sz*ln.off, yaw + (yo || 0), kind === 'berm' ? 5 : 2.4, p, -1); f.park = ln.name; if (kind === 'kicker' && yo) f.hip = Math.abs(yo);
       t += p.L + (kind === 'roller' ? 1 : 9); } }
   // pump-track loop: steeper rollers around an oval, berms at the ends. Speed comes from timed pumping, not a motor.
   { const cx = PARK.x + sx*56, cz = PARK.z + sz*56, A = 28, B = 10;
