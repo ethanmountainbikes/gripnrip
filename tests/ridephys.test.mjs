@@ -39,6 +39,11 @@ for (let i = 0; i < 80; i++) { const s = wheelieStep({ active: true, pitch, lean
 assert.equal(tip, false, 'a moderate lean holds the wheelie');
 w = wheelieStep({ active: false, pitch: 0, lean: 0.8, brake: 0, speed: 7, dt: 1 / 30, rearOnGround: true, fakie: true });
 assert.equal(w.active, false, 'no wheelie while fakie');
+w = wheelieStep({ active: false, pitch: 0.1, lean: 1, brake: 0, speed: 7, dt: 1 / 30, rearOnGround: true, fakie: false, arm: false });
+assert.equal(w.active, false, 'lean alone does not start a wheelie');
+let braked = 0.6;
+for (let i = 0; i < 20; i++) { const s = wheelieStep({ active: true, pitch: braked, lean: 0.8, brake: 0.8, speed: 7, dt: 1 / 30, rearOnGround: true, fakie: false }); braked = s.pitch; if (!s.active) break; }
+assert.ok(braked < 0.2, 'brake brings the front wheel down');
 
 const fwd = bodyPoint(0, 0, 0, 0, 0, { x: 0, y: 0, z: -1, name: 'f', fatal: false });
 assert.ok(Math.abs(fwd.x) < 1e-6 && Math.abs(fwd.z + 1) < 1e-6, 'yaw 0 faces -Z');

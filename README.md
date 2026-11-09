@@ -24,7 +24,7 @@ A low-poly open-world mountain-bike game in the browser, inspired by Descenders 
 | Reset camera | X | Square | X |
 | Pause | Menu | Options | P / Esc |
 | Help panel | View | Share | H |
-| Wheelie | Left stick ↓ while rolling | Left stick ↓ | K while rolling |
+| Wheelie (both sticks down together, then balance with the left stick; brake cancels) | Both sticks ↓, then left stick | Both sticks ↓, then left stick | K while rolling. Space does not hop while K is held |
 | Fakie (land a level 180, roll backward) | Left stick ← → in the air | Left stick ← → | A / D in the air |
 | Teleport to previous / next spot | D-pad ← / → | D-pad ← / → | [ / ] (or , / .), 1–9 and 0 jump straight to spots 1–10 |
 | Start / restart (menus) | A | Cross | Enter / Space |
@@ -35,7 +35,7 @@ Controller support has been checked against an Xbox One pad's layout in Chrome, 
 
 ## Riding physics
 - **Weight and momentum:** speed comes from gravity, with pedalling, drag and grass rolling resistance on top. The rider shifts visibly fore and aft, and the suspension compresses on landings and when you preload.
-- **Pumping:** compress (right stick ↓) on backsides and extend over faces to gain speed. Bad timing costs speed. Counter-pumping (right stick ↑) keeps you on the ground over rollers.
+- **Pumping:** compress (right stick ↓) on backsides and extend over faces to gain speed. Bad timing costs speed. Counter-pumping (right stick ↑) keeps you on the ground over rollers. A bunny hop is that compress then a pop; the pop adds upward speed and is not pulled into a dive by the lip falling away. Climbing a lip only pays the slope once (gravity). A rock or a step still costs extra. Coasting plays the freehub tick a little louder than the pedal click; tire, wind and music levels are unchanged.
 - **Carving and slides:** the lean angle comes from your actual cornering force. Braking while steering breaks rear traction, so the bike drifts (the heading leads the travel direction), throws dust and scrubs off speed.
 - **Air:** the left stick spins and flips with rotational inertia. The right stick whips and tweaks the bike in proportion to how far you push it. Laying the bike over at takeoff (a scrub) flattens the trajectory and keeps your speed.
 - **Landings:** your velocity is projected onto the real terrain surface, on or off the trail. Within the tolerance, the bike's orientation is damped smoothly to the ground and there's no rebound or bounce.
@@ -144,7 +144,7 @@ Each park roll-in has a 12% pedal-up ramp at its back.
 All sound effects (chain clicks following pedal cadence, tyre roll by speed and surface, wind, landing thuds scaled by impact, skids, crashes, chairlift hum) are synthesized live with the Web Audio API in `sfx.js`. No sample files are used, so there is nothing to license. Adjust them with **Sound volume** in the settings menu (0% = mute).
 
 ## Music
-NCS was considered, but its FAQ says: *"Q. Can I use NCS music in my game? … Please get in touch via our commercial licensing form"*, so CC0 tracks from OpenGameArt are used instead:
+The bed that starts the ride is **Switchback**, an original instrumental lo-fi loop written for this game (`tools/make-lofi.py`, 2026, public domain). It is not from a sample pack. Skip song still reaches the older CC0 tracks. NCS was considered, but its FAQ says: *"Q. Can I use NCS music in my game? … Please get in touch via our commercial licensing form"*, so those other tracks are CC0 from OpenGameArt:
 - "Action Track" and "Simple Action Beat": LushoGames (CC0)
 - "Rock Theme 3": Umplix (CC0)
 - "Fast Song": annandistance (CC0)

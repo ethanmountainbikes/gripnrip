@@ -442,7 +442,7 @@ const DRV = (() => { const COGS = [51,45,39,33,28,24,21,18,16,14,12,10], RING = 
   return D; })();
 window.__drv = DRV;
 function readInput(){
-  const inp = {rsy:0, counter:false, steer:0, lean:0, pedal:0, brake:0, pumpHold:false, pop:false, tweak:0, trick:null, kbFlip:0, pressed:{}, hold:{DU:false, DD:false, DL:false, DR:false, T:!!keys.KeyT}};
+  const inp = {rsy:0, ry:0, counter:false, steer:0, lean:0, pedal:0, brake:0, pumpHold:false, pop:false, tweak:0, trick:null, kbFlip:0, pressed:{}, hold:{DU:false, DD:false, DL:false, DR:false, T:!!keys.KeyT}};
   const pads = navigator.getGamepads ? navigator.getGamepads() : [];
   for (const gp of pads){ if (!gp || !gp.connected) continue;
     if (!knownPads[gp.index]){ knownPads[gp.index]=true; toast('🎮 Controller connected: ' + gp.id.slice(0,40)); }
@@ -452,7 +452,7 @@ function readInput(){
     if (m.btn.LB){ const mag = Math.hypot(rx,ry);   // LB + right stick: 8 directions (diagonals = tuck no-hander, X-up, nac-nac, tailwhip), RS click = barspin; stick amount = trick strength
       if (m.btn.RS){ inp.trick = 'bar'; inp.trickAmt = 1; }
       else if (mag > 0.35){ const sec = Math.round(Math.atan2(ry, rx)/(Math.PI/4)); inp.trick = {0:'right', 1:'dr', 2:'down', 3:'dl', 4:'left', '-4':'left', '-3':'ul', '-2':'up', '-1':'ur'}[sec]; inp.trickAmt = Math.min(1, (mag-0.35)/0.6); } }
-    else { if (ry > 0.5) inp.pumpHold = true; if (ry < -0.5){ inp.pop = true; inp.counter = true; } inp.tweak = rx; inp.rsy = ry; }
+    else { if (ry > 0.5) inp.pumpHold = true; if (ry < -0.5){ inp.pop = true; inp.counter = true; } inp.tweak = rx; inp.rsy = ry; inp.ry = ry; }
     inp.dpx = (m.btn.DR?1:0) - (m.btn.DL?1:0); inp.dpy = (m.btn.DD?1:0) - (m.btn.DU?1:0); inp.lsx = dz(m.lx); inp.lsy = dz(m.ly);
     inp.hold.DU = !!m.btn.DU; inp.hold.DD = !!m.btn.DD; inp.hold.DL = !!m.btn.DL; inp.hold.DR = !!m.btn.DR;
     for (const name of ['A','B','X','Y','Start','Back','DL','DR','DU','DD','LB','RB']){ const now=!!m.btn[name], key=gp.index+'_'+name; if(now && !prevBtn[key]) inp.pressed[name]=true; prevBtn[key]=now; }
@@ -471,6 +471,12 @@ function readInput(){
   inp.steer = THREE.MathUtils.clamp(inp.steer,-1,1); inp.lean = THREE.MathUtils.clamp(inp.lean + inp.kbFlip,-1,1);
   inp.tweak = THREE.MathUtils.clamp(inp.tweak,-1,1);
   if (SETTINGS.invertY) inp.lean = -inp.lean; if (SETTINGS.invertX) inp.tweak = -inp.tweak;   // Settings: invert options (input mapping only)
+  // Standard sticks: +Y is down. Both must be pulled back past the pump threshold
+  // before a wheelie can start. Left stick alone is only lean. Invert lean flips
+  // which way the left stick counts as "back"; the right stick stays +Y = down.
+  inp.wheelieChord = inp.lean > 0.62 && inp.ry > 0.62 && !inp.trick;
+  inp.kbWheelie = !!keys.KeyK && !inp.trick;
+  if (inp.wheelieChord || inp.kbWheelie){ inp.pumpHold = false; inp.pop = false; inp.counter = false; }
   return inp;
 }
 
@@ -483,7 +489,7 @@ const trickEl = $('trick'), centerEl = $('center');
 function flash(msg, t=1.2){ centerEl.textContent = msg; centerEl.style.opacity = 1; S.flashT = t; }
 function placeAt(x, z, yaw){
   S.x = x; S.z = z; S.y = groundH(S.x,S.z); S.yaw = yaw;
-  S.speed = 0; S.vy = 0; S.air = false; S.travel = S.yaw; S.wYaw = S.wPitch = 0; S.nose = 0; S.susp = S.suspV = 0; S.pitch = 0; S.spin = 0; S.lean = 0; S.preload = 0; S.crashT = 0; S.tweak = 0; S.trick = null; S.landCool = 0.3; S.fakie = false; S.wheelie = false; S.jolt = 0;
+  S.speed = 0; S.vy = 0; S.air = false; S.travel = S.yaw; S.wYaw = S.wPitch = 0; S.nose = 0; S.susp = S.suspV = 0; S.pitch = 0; S.spin = 0; S.lean = 0; S.preload = 0; S.crashT = 0; S.tweak = 0; S.trick = null; S.landCool = 0.3; S.fakie = false; S.wheelie = false; S.wheelieArm = 0; S.lipHop = null; S.hopWin = 0; S.jolt = 0;
 }
 function resetGame(){
   Object.assign(S,{lives:3,bestAir:0,totalAir:0,time:0,maxKmh:0,clean:0,spins:0,flips:0,finishes:0,parkClean:0,state:'riding',paused:false});
@@ -678,13 +684,16 @@ function step(dt, inp){
     const h0 = groundH(S.x,S.z), h1 = groundH(S.x+tx_*0.5, S.z+tz_*0.5);
     const slope = (h1-h0)/0.5; S.slope = slope;
     // pumping: only the rider's preload change counts. A passive suspension return adds no speed.
+    // A two-stick wheelie (or K) eats the right-stick pump so the chord cannot charge a hop.
+    if (inp.wheelieChord || inp.kbWheelie){ inp.pumpHold = false; inp.pop = false; inp.counter = false; S.preload = 0; S.hopWin = 0; }
     const prevPre = S.preload;
     if (inp.pumpHold) { S.preload = Math.min(1, S.preload + dt*2.2); S.hopWin = 0.35; }
     let pop = 0;
+    const hopNow = !inp.pumpHold && !!inp.pop && S.preload > 0.05 && (S.hopWin||0) > 0;
     if (!inp.pumpHold){ S.hopWin = (S.hopWin||0) - dt;
-      if (inp.pop && S.preload > 0.05 && S.hopWin > 0){ pop = (1.2 + S.preload*2.0)*BIKE.pop; /* bunny hop ~0.3-0.5 m */ S.preload = 0; }
+      if (hopNow){ pop = (1.2 + S.preload*2.0)*BIKE.pop; /* bunny hop ~0.3-0.5 m */ S.preload = 0; }
       else S.preload = Math.max(0, S.preload - dt*3); }
-    const cr = (inp.pumpHold || inp.counter || S.preload > 0) ? (S.preload - prevPre)/dt : 0;
+    const cr = (inp.pumpHold || (inp.counter && !hopNow) || S.preload > 0) ? (S.preload - prevPre)/dt : 0;
     const pumpA = pumpAccel(cr, slope); S.pumpGain = pumpA;
     let a = longAccel({ slope, speed: S.speed, pedal: inp.pedal, brake: inp.brake, drag: BIKE.drag, weight: S.weight || 0, pumpA, fakie: !!S.fakie });
     const gInfo = gripRate({ brake: inp.brake, steer: inp.steer, speed: S.speed, onTrail, bikeGrip: BIKE.grip, slip: S.slip || 0, weight: S.weight || 0 });
@@ -732,7 +741,7 @@ function step(dt, inp){
     vyG = Math.max(-1.5*S.speed - 3, Math.min(vyG, (vyFeat !== null ? 1.5 : Math.min(1.0, gradeF))*S.speed + 0.3));   // ramp faces keep their full lip speed
     S.landCool = Math.max(0, (S.landCool||0) - dt);
     S.gf = (S.gf||0) + 1;
-    const crestG = inp.counter ? G*2.2 : G*1.15;   // counter-pump (RS up) keeps you glued over rollers
+    const crestG = (inp.counter && !hopNow) ? G*2.2 : G*1.15;   // counter-pump (RS up, and not the hop itself) keeps you glued over rollers
     // small boulders: wheels follow the real rock shape; each climb costs speed and jolts the bike, never launches
     const rockH = featH(nx, nz) - featBase(nx, nz), onRock = rockH > 0.005 || (featH(S.x, S.z) - featBase(S.x, S.z)) > 0.005;
     if (onRock){ const climb = Math.max(0, ng - S.y); S.speed = Math.max(0, S.speed - climb*(2.2 + S.speed*0.25)); S.suspV = (S.suspV||0) + climb*25; S.jolt = Math.min(1, (S.jolt||0) + climb*4);
@@ -746,7 +755,13 @@ function step(dt, inp){
       let clear = 0; for (let t=0.03; t<=0.18; t+=0.03){ const bx=S.x+S.vx*t, bz=S.z+S.vz*t, by=S.y+S.lastVyG*t-0.5*G_AIR*t*t; const gap_=by-groundH(bx,bz); if (t < 0.065 && gap_ < 0.03){ clear = 0; break; } clear=Math.max(clear, gap_); }   // must actually separate right away (no 1-frame micro-hops)
       if (clear < 0.4) crest = false; }
     if (pop > 0 || crest){
-      S.air = true; S.airT = 0; S.vy = (backFeat ? Math.min(S.lastVyG, 0.1*S.speed) : S.lastVyG) + pop; S.takeoffPitch = S.pitch; S.spin = 0; S.popped = pop > 0;
+      S.air = true; S.airT = 0; S.takeoffPitch = S.pitch; S.spin = 0;
+      // A charged hop adds height. Ground-follow can be largely negative where the lip
+      // falls away; that must not turn the hop into a dive. A plain crest keeps the ramp's own vertical speed.
+      const groundVy = backFeat ? Math.min(S.lastVyG, 0.1*S.speed) : S.lastVyG;
+      S.vy = pop > 0 ? Math.max(groundVy, 0) + pop : groundVy;
+      S.popped = pop > 0;
+      S.lipHop = pop > 0 ? null : ((S.preload||0) > 0.05 && (S.hopWin||0) > 0 ? { until: 0.12, pre: S.preload, used: false } : null);
       S.toX = S.x; S.toZ = S.z; S.tweakT = 0; S.tricksDone = new Set(); S.wYaw = 0; S.wPitch = 0;
       if (!S.fakie){ S.yaw = S.travel + slip*0.5; S.travel = S.yaw; } S.nose = 0;
       // scrub: laying the bike over (right stick sideways) at takeoff keeps you low and fast
@@ -756,11 +771,18 @@ function step(dt, inp){
       S.x = nx; S.z = nz; S.y += S.vy*dt;
     } else { S.x = nx; S.z = nz; S.vy = vyG; S.lastVyG = vyG;
       const axw = axleXZ(nx, nz, S.yaw), hf = groundH(axw.fx, axw.fz), hr = groundH(axw.rx, axw.rz);
-      const rise = Math.max(0, hf - (S.prevHf ?? hf)) + Math.max(0, hr - (S.prevHr ?? hr));
-      if (rise > 0){ S.speed = Math.max(0, S.speed - rise * (1.6 + S.speed * 0.18)); S.jolt = Math.min(1, (S.jolt || 0) + rise * 3); S.suspV = (S.suspV || 0) + rise * 18; }
+      // Gravity already spends speed on the slope. Only a wheel rising *more* than that
+      // grade (a rock, a step) costs extra. Charging both full wheel rises on a lip
+      // was a second climb penalty and bled speed up every jump.
+      const expected = Math.max(0, slope) * S.speed * dt;
+      const extra = Math.max(0, hf - (S.prevHf ?? hf) - expected) + Math.max(0, hr - (S.prevHr ?? hr) - expected);
+      if (extra > 0.004){ S.speed = Math.max(0, S.speed - extra * (1.6 + S.speed * 0.18)); S.jolt = Math.min(1, (S.jolt || 0) + extra * 3); S.suspV = (S.suspV || 0) + extra * 18; }
       S.prevHf = hf; S.prevHr = hr;
       const sup = supportPitch(hf, hr), drop = Math.min(hf, hr) < ng - 0.4;
-      const w = wheelieStep({ active: !!S.wheelie, pitch: S.pitch || 0, lean: inp.lean, brake: inp.brake, speed: S.speed, dt, rearOnGround: hr < ng + 0.8, fakie: !!S.fakie });
+      if (inp.kbWheelie) S.wheelieArm = 1;
+      else if (inp.wheelieChord) S.wheelieArm = Math.min(1, (S.wheelieArm||0) + dt);
+      else if (!S.wheelie) S.wheelieArm = 0;
+      const w = wheelieStep({ active: !!S.wheelie, pitch: S.pitch || 0, lean: inp.lean, brake: inp.brake, speed: S.speed, dt, rearOnGround: hr < ng + 0.8, fakie: !!S.fakie, arm: (S.wheelieArm||0) >= 0.1 });
       if (w.tip){ S.wheelie = false; crash('Looped out!'); return; }
       S.wheelie = w.active;
       if (w.active){ S.pitch = w.pitch; S.y = hr + Math.sin(S.pitch) * WHEEL_R; }
@@ -775,6 +797,10 @@ function step(dt, inp){
     if (bodyHazards()) return;
     if (S.speed > 4) for (const t of nearTrees(S.x, S.z)) if ((t.x-S.x)**2 + (t.z-S.z)**2 < 0.55) { crash('Hit a tree!'); return; }
   } else {
+    // One pop if the stick comes up just after the lip, while the preload was still charged. Not again after that.
+    if (S.lipHop && !S.lipHop.used && inp.pop && !inp.pumpHold && !(inp.wheelieChord || inp.kbWheelie) && S.airT <= S.lipHop.until){
+      S.vy = Math.max(S.vy, 0) + (1.2 + S.lipHop.pre*2.0)*BIKE.pop; S.popped = true; S.lipHop.used = true; }
+    S.wheelieArm = 0;
     S.airT += dt; S.vy -= G_AIR*dt;
     S.x += S.vx*dt; S.z += S.vz*dt; S.y += S.vy*dt;
     if (hitBoulders()) return;
@@ -885,7 +911,7 @@ function frame(){
     acc += dt; const h = 1/120; while (acc >= h){ step(h, inp); acc -= h; }
     trackWorld(dt); shopProximity(dt); liftProximity(dt);
   } else if (S.state!=='riding' && S.state!=='menu') { step(dt, {steer:0,pedal:0,brake:1,jump:false,tx:0,ty:0}); }
-  updateSfx({riding: S.state==='riding' && !S.paused, speed:S.speed||0, air:!!S.air && S.crashT<=0, lift:!!S.lift, sliding:!!S.sliding, brake:inp.brake||0, crank:BR.crank(), surface: S.rockT > 0 ? 'rock' : isDirt(S.x,S.z) ? 'dirt' : 'grass'});
+  updateSfx({riding: S.state==='riding' && !S.paused, speed:S.speed||0, air:!!S.air && S.crashT<=0, lift:!!S.lift, sliding:!!S.sliding, brake:inp.brake||0, crank:BR.crank(), coasting: (DRV.cadence||0) < 1 && !S.air && (S.speed||0) > 1.5, surface: S.rockT > 0 ? 'rock' : isDirt(S.x,S.z) ? 'dirt' : 'grass'});
   windU.value += dt; grassField.update();
   if (menu.open) menuFrame(dt, inp);
   const flyF = S.state === 'menu' ? flyover(dt) : null, fX = flyF ? flyF[0] : S.x, fZ = flyF ? flyF[1] : S.z;
@@ -1120,6 +1146,7 @@ function mapFrame(dt, inp){
 syncBeacons();
 // ---------- music: shuffled CC0 playlist (starts after the first user input, per browser autoplay rules) ----------
 const TRACKS = [
+  {file:'music/lofi-switchback.mp3', title:'Switchback', artist:"Grip 'N Rip", src:'original instrumental written for this game, 2026 (tools/make-lofi.py). Public domain.', loop:true},
   {file:'music/actiontrack.mp3', title:'Action Track', artist:'LushoGames', src:'opengameart.org/content/action-track'},
   {file:'music/simplebeat.mp3', title:'Simple Action Beat', artist:'LushoGames', src:'opengameart.org/content/simple-action-beat'},
   {file:'music/rock-theme-3.mp3', title:'Rock Theme 3', artist:'Umplix', src:'opengameart.org/content/rock-theme-3'},
@@ -1129,8 +1156,11 @@ const music = { el: new Audio(), order: [], i: -1, started: false };
 music.el.preload = 'auto';
 const shuffle = a => { for (let i = a.length-1; i > 0; i--){ const j = Math.floor(Math.random()*(i+1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 function musicVol(){ music.el.volume = SETTINGS.musicOn ? SETTINGS.musicVol : 0; }
-function nextSong(){ if (!SETTINGS.musicOn) return; if (++music.i >= music.order.length){ music.order = shuffle(TRACKS.map((_, k) => k)); music.i = 0; }
-  const t = TRACKS[music.order[music.i]]; music.el.src = t.file; musicVol(); music.el.play().then(() => toast(`♪ Now playing: ${t.title} — ${t.artist} (CC0)`)).catch(() => {}); }
+function nextSong(){ if (!SETTINGS.musicOn) return;
+  if (music.i < 0){ const rest = shuffle(TRACKS.map((_, k) => k).filter(k => k !== 0)); music.order = [0, ...rest]; music.i = 0; }
+  else if (++music.i >= music.order.length){ music.order = shuffle(TRACKS.map((_, k) => k)); music.i = 0; }
+  const t = TRACKS[music.order[music.i]]; music.el.loop = !!t.loop; music.el.src = t.file; musicVol();
+  music.el.play().then(() => toast(`♪ Now playing: ${t.title} — ${t.artist}${t.loop ? '' : ' (CC0)'}`)).catch(() => {}); }
 music.el.addEventListener('ended', nextSong);
 function startMusic(){ initSfx(); setSfxVolume(SETTINGS.volume); if (music.started || !SETTINGS.musicOn) return; music.started = true; nextSong(); }
 for (const ev of ['keydown', 'pointerdown', 'touchend', 'click']) addEventListener(ev, startMusic, {once:false});
@@ -1198,7 +1228,7 @@ const PAGES = {
     return {title:'LEADERBOARDS', html, items}; },
   credits: () => ({title:'CREDITS', html:`<div class="credits"><p><b>Grip 'N Rip</b> — an open-world mountain bike game in the browser.</p>
     <p><b>Game, code, world, rider and bike models, textures:</b> made procedurally for this project (Three.js r160).</p>
-    <p><b>Music (CC0, from OpenGameArt.org):</b><br>${TRACKS.map(t => `${t.title} — ${t.artist} <small>(${t.src})</small>`).join('<br>')}</p>
+    <p><b>Music:</b><br>${TRACKS.map(t => `${t.title} — ${t.artist} <small>(${t.src})</small>`).join('<br>')}</p>
     <p><b>Fonts:</b> Bebas Neue & Barlow Condensed (SIL Open Font License, Google Fonts).</p>
     <p><b>Trick references:</b> Red Bull slopestyle trick dictionary, X Games BMX Tricktionary, riding.guide.</p>
     <p><b>Graphics Medium/High/Max:</b> CC0 textures & HDRIs from Poly Haven (polyhaven.com): sparse_grass, brown_mud_leaves_01, aerial_rocks_02, bark_brown_02, gravel, aerial_sand, red_dirt_mud_01, dry_riverbed_rock; skies pizzo_pernice_puresky (Mountain), quarry_01_puresky (Rampage).</p>

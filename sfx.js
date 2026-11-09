@@ -1,5 +1,5 @@
 // Grip 'N Rip sound effects: 100% synthesized with Web Audio (no sample files), mixed under the music.
-let ctx = null, master, noiseBuf, roll, rollF, wind, windF, skid, skidF, lift, liftG, vol = 0.8, crankPrev = 0;
+let ctx = null, master, noiseBuf, roll, rollF, wind, windF, skid, skidF, lift, liftG, vol = 0.8, crankPrev = 0, coastAt = 0;
 const MIX = 0.55;   // overall SFX trim so effects sit under the music
 function loop(src, filterType, f){ const s = ctx.createBufferSource(); s.buffer = noiseBuf; s.loop = true; const fl = ctx.createBiquadFilter(); fl.type = filterType; fl.frequency.value = f; const g = ctx.createGain(); g.gain.value = 0; s.connect(fl).connect(g).connect(master); s.start(); return [g, fl]; }
 export function initSfx(){ if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
@@ -13,8 +13,8 @@ export function setSfxVolume(v){ vol = v; if (master) master.gain.setTargetAtTim
 const set = (g, v) => g.gain.setTargetAtTime(v, ctx.currentTime, 0.06);
 function burst(dur, f, type, gain, q = 1){ const s = ctx.createBufferSource(); s.buffer = noiseBuf; const fl = ctx.createBiquadFilter(); fl.type = type; fl.frequency.value = f; fl.Q.value = q; const g = ctx.createGain(); const t = ctx.currentTime; g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur); s.connect(fl).connect(g).connect(master); s.start(t, Math.random()); s.stop(t + dur + 0.05); }
 function thump(f0, dur, gain){ const o = ctx.createOscillator(), g = ctx.createGain(), t = ctx.currentTime; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f0*0.4, t + dur); g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur); o.connect(g).connect(master); o.start(t); o.stop(t + dur + 0.05); }
-function click(){ burst(0.025, 3500 + Math.random()*800, 'highpass', 0.12); }
-// per-frame continuous sounds. st: {speed m/s, air, surface:'dirt'|'rock'|'grass', sliding, brake 0..1, crank angle rad, lift bool, riding bool}
+function click(gain){ burst(0.025, 3500 + Math.random()*800, 'highpass', gain); }
+// per-frame continuous sounds. st: {speed m/s, air, surface, sliding, brake, crank angle rad, lift, riding, coasting}
 export function updateSfx(st){ if (!ctx) return; const on = st.riding;
   const sp = on && !st.air && !st.lift ? st.speed : 0;
   const surf = { dirt:[1, 500], rock:[1.4, 1400], grass:[0.7, 300] }[st.surface] || [1, 500];
@@ -23,8 +23,12 @@ export function updateSfx(st){ if (!ctx) return; const on = st.riding;
   const ws = on && !st.lift ? st.speed : 0; set(wind, Math.min(0.45, (ws/25)**2*0.35 + (st.air ? 0.12 : 0))); windF.frequency.setTargetAtTime(400 + ws*30 + (st.air ? 300 : 0), ctx.currentTime, 0.2);
   const sk = on && !st.air && sp > 3 ? (st.sliding ? 0.35 : st.brake > 0.4 ? 0.18*st.brake : 0) : 0; set(skid, sk);
   set(liftG, on && st.lift ? 0.08 : 0);
-  // chain/freehub clicks: one per 1/8 crank turn while the crank moves (cadence)
-  const step = Math.PI/4; if (Math.floor(st.crank/step) !== Math.floor(crankPrev/step) && on && !st.lift) click(); crankPrev = st.crank;
+  // Chain click while pedalling: one tick per 1/8 crank turn. Gain stays 0.12.
+  // The cranks freewheel to a stop when cadence hits 0, so that tick used to go
+  // silent for the rest of a coast. The coast tick is the same click, a bit louder
+  // (0.20), and only while rolling on the ground with no pedal. Tire, wind and music are untouched.
+  const step = Math.PI/4; if (!st.coasting && Math.floor(st.crank/step) !== Math.floor(crankPrev/step) && on && !st.lift) click(0.12); crankPrev = st.crank;
+  if (on && st.coasting && sp > 1.5){ const now = ctx.currentTime, gap = Math.max(0.08, 0.85 / sp); if (now - coastAt >= gap){ coastAt = now; click(0.20); } }
 }
 export function sfxLand(impact){ if (!ctx) return; const k = Math.min(1, impact/14); thump(90, 0.18 + k*0.15, 0.25 + k*0.6); burst(0.12 + k*0.15, 700, 'lowpass', 0.2 + k*0.4); if (k > 0.5) burst(0.08, 2500, 'bandpass', 0.15, 3); }
 export function sfxCrash(){ if (!ctx) return; thump(70, 0.4, 0.9); burst(0.6, 900, 'lowpass', 0.7); setTimeout(() => { burst(0.3, 1800, 'bandpass', 0.35, 2); thump(110, 0.2, 0.4); }, 160); setTimeout(() => burst(0.15, 4000, 'highpass', 0.25), 300); }

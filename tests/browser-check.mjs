@@ -95,10 +95,10 @@ const ride = await evalJs(`(() => {
   const rolled = S.fakie ? window.__sim(1, { pedal: 0, brake: 0, lean: 0, steer: 0, pumpHold: false }) : null;
   const fakie = { ...landed, still: !!S.fakie, rollKmh: rolled ? +rolled.kmh.toFixed(2) : null };
   window.__place(flat.x, flat.z, yaw); S.speed = 8; S.crashT = 0; S.lastCrash = null;
-  const held = window.__sim(1.2, { pedal: 0, brake: 0, lean: 0.55, steer: 0, pumpHold: false });
+  const held = window.__sim(1.2, { pedal: 0, brake: 0, lean: 0.55, steer: 0, pumpHold: false, kbWheelie: true });
   const wheelie = { on: !!S.wheelie, crash: S.lastCrash || null, pitch: +S.pitch.toFixed(2) };
   window.__place(flat.x, flat.z, yaw); S.speed = 8; S.crashT = 0; S.lastCrash = null; S.wheelie = false;
-  window.__sim(2.4, { pedal: 0, brake: 0, lean: 1, steer: 0, pumpHold: false });
+  window.__sim(2.4, { pedal: 0, brake: 0, lean: 1, steer: 0, pumpHold: false, kbWheelie: true });
   const loop = { crash: S.lastCrash || null, wheelie: !!S.wheelie };
   window.__place(flat.x, flat.z, yaw); S.speed = 6; S.air = true; S.y = gH(flat.x, flat.z) + 0.4; S.vy = -2; S.pitch = 0.9; S.spin = 0; S.yaw = yaw; S.vx = 0; S.vz = -6; S.crashT = 0; S.lastCrash = null; S.trick = null; S.tweak = 0; S.nose = 0; S.airT = 0.5; S.fakie = false;
   guard = 0; while (S.air && S.crashT <= 0 && guard++ < 200) window.__sim(1/120, { lean: 0.2, pedal: 0, brake: 0, steer: 0 });

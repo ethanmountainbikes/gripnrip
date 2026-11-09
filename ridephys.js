@@ -79,17 +79,21 @@ export function landingCall(o) {
 export function wheelieStep(o) {
   const dt = o.dt || 1 / 120;
   const lean = o.lean || 0, brake = o.brake || 0, speed = o.speed || 0;
-  const want = !o.fakie && lean > 0.45 && brake < 0.35 && speed > 3.5 && o.rearOnGround;
+  // arm defaults on so the balance checks below still run. The game passes arm:false
+  // until both sticks (or the keyboard key) have actually asked for a wheelie.
+  const armed = o.arm !== false;
+  const want = armed && !o.fakie && lean > 0.45 && brake < 0.35 && speed > 3.5 && o.rearOnGround;
   if (!o.active && !want) return { active: false, pitch: o.pitch || 0, tip: false };
-  if (!o.rearOnGround || speed < 2.2) return { active: false, pitch: (o.pitch || 0) * 0.85, tip: false };
+  if (!o.rearOnGround || speed < 2.2 || o.fakie) return { active: false, pitch: (o.pitch || 0) * 0.85, tip: false };
+  if (brake >= 0.35 || lean < 0.15) {
+    let p = (o.pitch || 0) + (0 - (o.pitch || 0)) * Math.min(1, dt * 8);
+    if (p < 0.08) return { active: false, pitch: p, tip: false };
+    return { active: true, pitch: p, tip: false };
+  }
   // Full lean-back aims past the balance point, so holding it loops out. A lighter lean holds.
   const target = 0.34 + Math.max(0, lean - 0.15) * 0.95;
   let p = (o.pitch || 0) + (target - (o.pitch || 0)) * Math.min(1, dt * 3.2);
   if (p > 1.05) return { active: false, pitch: p, tip: true };
-  if (lean < 0.15) {
-    p += (0 - p) * Math.min(1, dt * 6);
-    if (p < 0.08) return { active: false, pitch: p, tip: false };
-  }
   return { active: true, pitch: p, tip: false };
 }
 

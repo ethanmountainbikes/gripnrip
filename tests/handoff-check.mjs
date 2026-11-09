@@ -81,10 +81,10 @@ try {
     const fakie = {fakie:!!S.fakie, kmh:+(S.speed*3.6).toFixed(2), crash:S.lastCrash||null};
     const roll = S.fakie ? window.__sim(1,{pedal:0,brake:0,lean:0,steer:0,pumpHold:false}) : null;
     window.__place(P.x, P.z, 0); S.speed=8; S.crashT=0; S.lastCrash=null; S.wheelie=false;
-    window.__sim(1.2,{pedal:0,brake:0,lean:0.55,steer:0,pumpHold:false});
+    window.__sim(1.2,{pedal:0,brake:0,lean:0.55,steer:0,pumpHold:false,kbWheelie:true});
     const wheelie = {on:!!S.wheelie, pitch:+S.pitch.toFixed(2), crash:S.lastCrash||null};
     window.__place(P.x, P.z, 0); S.speed=8; S.crashT=0; S.lastCrash=null;
-    window.__sim(2.4,{pedal:0,brake:0,lean:1,steer:0,pumpHold:false});
+    window.__sim(2.4,{pedal:0,brake:0,lean:1,steer:0,pumpHold:false,kbWheelie:true});
     const loop = S.lastCrash||null;
     window.__place(P.x, P.z, 0); S.speed=6; S.air=true; S.y=gH(P.x,P.z)+0.4; S.vy=-2; S.pitch=0.9; S.spin=0; S.yaw=0; S.vx=0; S.vz=-6; S.crashT=0; S.lastCrash=null; S.trick=null; S.tweak=0; S.nose=0; S.airT=0.5; S.fakie=false;
     g=0; while (S.air && S.crashT<=0 && g++<200) window.__sim(1/120,{lean:0.2,pedal:0,brake:0,steer:0});
