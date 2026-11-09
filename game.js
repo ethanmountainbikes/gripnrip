@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { buildBikeRider } from './rider.js';
+import { createDrone, stepDrone } from './drone.js';
 import { longAccel, pumpAccel, gripRate, landingCall, wheelieStep, axleXZ, supportPitch, bodyPoint, BODY_POINTS, fakieAim, WHEEL_R } from './ridephys.js';
 import { initNet, NAME_A, NAME_B, EMOTES, cleanCode } from './net.js';
 import { initCloud, CATS as LB_CATS, fmtCode, cleanSaveCode } from './cloud.js';
@@ -32,7 +33,7 @@ const G_AIR = 9.81*1.35;   // heavier feel in the air: realistic MTB airtime (~0
 let seed = 7; const rnd = () => (seed = (seed*16807) % 2147483647) / 2147483647;
 
 // ---------- settings (quality, inverts, volume) ----------
-const SETTINGS = Object.assign({gfx:'low', tod:'noon', fpsOn:false, invertY:false, invertX:false, volume:0.8, musicOn:true, musicVol:0.5}, LS.get('trailDescent.settings', {}));
+const SETTINGS = Object.assign({gfx:'low', tod:'noon', fpsOn:false, invertY:false, invertX:false, volume:0.8, musicOn:true, musicVol:0.5, droneSpeed:12, droneTilt:12, droneDist:8, droneHeight:4, droneFly:'follow'}, LS.get('trailDescent.settings', {}));
 const saveSettings = () => LS.set('trailDescent.settings', SETTINGS);
 const QUALITY = { low:{pr:0.75, shadow:0, tex:256, grassR:0, grassCell:2, post:false, rocks:10, bushes:10},
                   med:{pr:1.0, shadow:1024, tex:256, grassR:38, grassCell:1.0, post:false, rocks:22, bushes:26},
@@ -51,6 +52,7 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
 document.body.prepend(renderer.domElement);
 const scene = new THREE.Scene();
+const FPV = createDrone(); scene.add(FPV.group);
 const SKY = RAMP ? 0x9cc4e4 : 0xa9cfe6;
 scene.background = new THREE.Color(SKY);
 scene.fog = new THREE.Fog(RAMP ? 0xe7b48a : 0xf0b48c, RAMP ? 220 : 160, RAMP ? 3200 : 3400);   // warm horizon haze; Low has no post stack
@@ -466,7 +468,7 @@ function readInput(){
       else if (mag > 0.35){ const sec = Math.round(Math.atan2(ry, rx)/(Math.PI/4)); inp.trick = {0:'right', 1:'dr', 2:'down', 3:'dl', 4:'left', '-4':'left', '-3':'ul', '-2':'up', '-1':'ur'}[sec]; inp.trickAmt = Math.min(1, (mag-0.35)/0.6); } }
     else { if (ry > 0.5) inp.pumpHold = true; if (ry < -0.5){ inp.pop = true; inp.counter = true; } inp.bank = rx; inp.rsy = ry; inp.ry = ry; }
     inp.dpx = (m.btn.DR?1:0) - (m.btn.DL?1:0); inp.dpy = (m.btn.DD?1:0) - (m.btn.DU?1:0); inp.lsx = dz(m.lx); inp.lsy = dz(m.ly);
-    inp.hold.DU = !!m.btn.DU; inp.hold.DD = !!m.btn.DD; inp.hold.DL = !!m.btn.DL; inp.hold.DR = !!m.btn.DR;
+    inp.hold.DU = !!m.btn.DU; inp.hold.DD = !!m.btn.DD; inp.hold.DL = !!m.btn.DL; inp.hold.DR = !!m.btn.DR; inp.hold.Back = !!m.btn.Back;
     for (const name of ['A','B','X','Y','Start','Back','DL','DR','DU','DD','LB','RB']){ const now=!!m.btn[name], key=gp.index+'_'+name; if(now && !prevBtn[key]) inp.pressed[name]=true; prevBtn[key]=now; }
     break; }
   if (keys.KeyA||keys.ArrowLeft) inp.steer -= 1; if (keys.KeyD||keys.ArrowRight) inp.steer += 1;
@@ -482,6 +484,7 @@ function readInput(){
   kbSpacePrev = !!keys.Space;
   inp.steer = THREE.MathUtils.clamp(inp.steer,-1,1); inp.lean = THREE.MathUtils.clamp(inp.lean + inp.kbFlip,-1,1);
   inp.bank = THREE.MathUtils.clamp(inp.bank || 0,-1,1); inp.tweak = THREE.MathUtils.clamp(inp.tweak,-1,1);
+  inp.lyRaw = inp.lean; inp.bankRaw = inp.bank;
   if (SETTINGS.invertY) inp.lean = -inp.lean; if (SETTINGS.invertX) inp.bank = -inp.bank;   // Settings: invert options (input mapping only)
   // Standard sticks: +Y is down. Both must be pulled back past the pump threshold
   // before a wheelie can start. Left stick alone is only lean. Invert lean flips
@@ -554,7 +557,9 @@ function onPress(code){
   if (shopOpen){ shopKey(code); return; }
   if (bigMap.open){ mapKey(code); return; }
   if (menu.open){ menuKey(code); return; }
-  if ((code==='Back'||code==='KeyM') && S.state==='riding' && !S.lift){ openMap(); return; }
+  if (code==='KeyM' && S.state==='riding' && !S.lift && !bigMap.open){ openMap(); return; }
+  if (code==='Back' && bigMap.open){ closeMap(); return; }
+  if (code==='KeyZ' && S.state==='riding' && !menu.open && !shopOpen && !bigMap.open){ toggleDrone(); return; }
   if (code==='Y' && S.paused){ $('help').classList.toggle('hidden'); return; }   // help moved into the pause menu on the controller
   if ((code==='X'||code==='KeyO') && (S.state==='menu' || S.paused)){ openShop(); return; }
   if (code==='KeyO' && S.state==='riding'){ openShop(); return; }
@@ -586,6 +591,64 @@ function savedCam(){
   return Number.isFinite(n) ? Math.max(0, Math.min(CAM_NAMES.length - 1, n)) : CAM_HELMET;
 }
 let camMode = savedCam(); const drone = {t: 0, p: new THREE.Vector3()};
+let backHold = 0, backWas = false;
+function droneOpts(){
+  const num = (k, d, lo, hi) => { const v = SETTINGS[k]; return typeof v === 'number' && v >= lo && v <= hi ? v : d; };
+  return { speed: num('droneSpeed', 12, 6, 24), tilt: num('droneTilt', 12, 0, 35) * Math.PI/180, dist: num('droneDist', 8, 4, 18), height: num('droneHeight', 4, 2, 12), manual: SETTINGS.droneFly === 'manual' };
+}
+function toggleDrone(){
+  if (S.run){ toast('Drone is off during a timed run'); return; }
+  if (S.lift || shopOpen || bigMap.open) return;
+  const D = FPV.state;
+  if (D.on){ D.on = false; FPV.group.visible = false; toast('Drone away'); return; }
+  D.on = true; D.manual = droneOpts().manual; D.yaw = S.yaw; D.pitch = 0; D.roll = 0; D.vx = D.vy = D.vz = 0;
+  const fx = -Math.sin(S.yaw), fz = -Math.cos(S.yaw);
+  D.x = S.x - fx * 3; D.z = S.z - fz * 3; D.y = Math.max(S.y + 3, groundH(D.x, D.z) + 2);
+  FPV.group.visible = true;
+  if (D.manual){ S.speed = 0; S.vx = S.vz = S.vy = 0; S.air = false; S.y = groundH(S.x, S.z); toast('FPV drone — manual. Z or hold View to put it away'); }
+  else toast('FPV drone — following. Z or hold View to put it away');
+}
+function flyDrone(dt, inp){
+  const D = FPV.state; if (!D.on){ FPV.group.visible = false; return; }
+  if (S.run){ D.on = false; FPV.group.visible = false; toast('Drone is off during a timed run'); return; }
+  const opt = droneOpts(); D.manual = opt.manual;
+  // Left stick yaw is the stick only. Arrows also write into steer for the bike, and they are pitch/roll here.
+  let thr = -(inp.lyRaw || 0), yawIn = inp.lsx || 0, pitchIn = inp.rsy || 0, rollIn = inp.bankRaw || 0;
+  if (D.manual){
+    if (keys.KeyW || keys.Space) thr = 1;
+    if (keys.KeyS || keys.ShiftLeft || keys.ShiftRight) thr = -1;
+    if (keys.KeyA) yawIn -= 1; if (keys.KeyD) yawIn += 1;
+    if (keys.ArrowUp) pitchIn = -1; if (keys.ArrowDown) pitchIn = 1;
+    if (keys.ArrowLeft) rollIn = -1; if (keys.ArrowRight) rollIn = 1;
+    yawIn = THREE.MathUtils.clamp(yawIn, -1, 1);
+    inp.steer = 0; inp.lean = 0; inp.bank = 0; inp.pedal = 0; inp.brake = 0; inp.pumpHold = false; inp.pop = false; inp.counter = false; inp.trick = null;
+    S.speed = 0; S.vx = S.vz = S.vy = 0; S.wheelie = false; S.lean = 0; S.pitch = 0; S.air = false; S.y = groundH(S.x, S.z);
+  }
+  stepDrone(D, dt, opt, { groundH, nearTrees, half: HALF }, { x:S.x, y:S.y, z:S.z, yaw:S.yaw || 0 }, { thr, yaw: yawIn, pitch: pitchIn, roll: rollIn });
+  FPV.group.visible = true;
+  FPV.group.position.set(D.x, D.y, D.z);
+  FPV.group.rotation.set(D.pitch, D.yaw, D.roll);
+  for (const p of FPV.props) p.rotation.y = D.spin;
+}
+function droneCamera(){
+  const D = FPV.state, opt = droneOpts();
+  const fx = -Math.sin(D.yaw), fz = -Math.cos(D.yaw);
+  if (D.manual){
+    const up = opt.tilt;
+    camera.position.set(D.x - fx * 0.42, D.y + 0.08, D.z - fz * 0.42);
+    camera.up.set(0, 1, 0);
+    camera.lookAt(D.x + fx * 8, D.y + Math.sin(up) * 8 + D.pitch * 4, D.z + fz * 8);
+  } else {
+    const look = new THREE.Vector3(S.x, S.y + 1.05, S.z);
+    const back = new THREE.Vector3(D.x - look.x, 0, D.z - look.z);
+    if (back.lengthSq() < 0.01) back.set(fx, 0, fz);
+    back.normalize();
+    camera.position.set(D.x + back.x * 2.05, D.y + 0.55, D.z + back.z * 2.05);
+    camera.up.set(0, 1, 0);
+    camera.lookAt(look);
+  }
+  if (camera.fov !== 82){ camera.fov = 82; camera.updateProjectionMatrix(); }
+}
 // ---------- open world: spots, safe respawn, trail runs ----------
 // teleport unlocks: a trail's spot unlocks after you finish that trail once. Flow Line, the park and the meadow are always open.
 const UKEY = RAMP ? 'trailDescent.unlocked.rampage' : 'trailDescent.unlocked';
@@ -637,14 +700,17 @@ function trackWorld(dt){
   for (const n of near) if (n.d <= W+1.5 && (!cur || n.d < cur.d)) cur = n;
   S.onTrailName = cur ? trails[cur.t].name : inPark(S.x,S.z) ? 'Dirt Jump Park' : '';
   if (cur){ const tr = trails[cur.t];
-    if (cur.s < 18 && (!S.run || S.run.t !== cur.t)) { S.run = {t:cur.t, start:S.time, s:cur.s}; S.lives = 3; trickEl.textContent = `⏱ ${tr.name} — run started`; S.trickMsgT = 2; }
+    if (cur.s < 18 && (!S.run || S.run.t !== cur.t)) {
+      if (FPV.state.on){ if (!FPV.told){ toast('Put the drone away to start a timed run'); FPV.told = true; } }
+      else { FPV.told = false; S.run = {t:cur.t, start:S.time, s:cur.s}; S.lives = 3; trickEl.textContent = `⏱ ${tr.name} — run started`; S.trickMsgT = 2; } }
     if (S.run && S.run.t === cur.t){ S.run.s = Math.max(S.run.s, cur.s);
       const cps = tr.cps || []; while ((S.run.cp ?? -1) + 1 < cps.length && cur.s >= cps[(S.run.cp ?? -1) + 1].s - 2 && cur.s < cps[(S.run.cp ?? -1) + 1].s + 25){ S.run.cp = (S.run.cp ?? -1) + 1; (S.run.cpt ||= [])[S.run.cp] = S.time - S.run.start; toast(`🚩 Checkpoint ${S.run.cp+1}/${cps.length} · ${tr.name}`); flash('CHECKPOINT', 1.0); }
       if (cur.s > tr.len - 8){ const time = S.time - S.run.start, bonus = Math.round((1000 + tr.len/2)*EARN);
         S.finishes++; S.score += bonus; flash('FINISH!', 2.5); trickEl.textContent = `${tr.name} in ${fmtTime(time)}  +$${bonus}`; S.trickMsgT = 3.5;
         S.best ||= {}; if (!S.best[tr.name] || time < S.best[tr.name]){ S.best[tr.name] = time; LS.set('trailDescent.best.' + WORLD, S.best); toast(`⭐ NEW BEST! ${tr.name}: ${fmtTime(time)}`); }
         { const cps = tr.cps || [], cpt = S.run.cpt || [];
-          if (CLOUD && cps.length === cpt.filter(x => x != null).length) CLOUD.trail(RAMP ? 1 : 0, S.run.t, tr.name, time, cpt, S.run.combo || 0, layoutTag(tr.id));
+          if (FPV.state.on || S.run.unranked) toast('Drone was out — this run is not ranked');
+          else if (CLOUD && cps.length === cpt.filter(x => x != null).length) CLOUD.trail(RAMP ? 1 : 0, S.run.t, tr.name, time, cpt, S.run.combo || 0, layoutTag(tr.id));
           else if (CLOUD) setTimeout(() => toast('Leaderboard: missed a checkpoint, so this time is not ranked'), 2500); }
         if (!unlocked.has(tr.name)){ const pro = trails.find(o => o.unlockAny && o !== tr), wasPro = pro && anyOtherDone(pro); unlocked.add(tr.name); saveUnlocks(); setTimeout(()=>toast(`🔓 Unlocked: ${tr.name} — teleport there any time`), 1200);
           if (pro && !wasPro && anyOtherDone(pro)) setTimeout(()=>toast(`☠ ${pro.name} UNLOCKED — the hardest line on the mountain. PRO only.`), 4200); }
@@ -956,9 +1022,20 @@ function frame(){
   const inp = readInput(); if (Object.keys(inp.pressed).length) startMusic();
   emoteFrame(dt, inp);
   for (const k in inp.pressed) onPress(k);
+  if (inp.hold && inp.hold.Back && S.state==='riding' && !menu.open && !shopOpen && !bigMap.open) backHold += dt;
+  else {
+    if (backWas && S.state==='riding' && !menu.open && !shopOpen && !bigMap.open){
+      if (backHold >= 0.45) toggleDrone();
+      else if (backHold > 0.05) openMap();
+    }
+    backHold = 0;
+  }
+  backWas = !!(inp.hold && inp.hold.Back);
   if (S.state==='riding' && !S.paused && S.lift){ liftRide(dt, inp); }
+  else if (S.state==='riding' && !S.paused && FPV.state.on && FPV.state.manual){ flyDrone(dt, inp); }
   else if (S.state==='riding' && !S.paused){
     acc += dt; const h = 1/120; while (acc >= h){ step(h, inp); acc -= h; }
+    if (FPV.state.on) flyDrone(dt, inp);
     trackWorld(dt); shopProximity(dt); liftProximity(dt);
   } else if (S.state!=='riding' && S.state!=='menu') { step(dt, {steer:0,pedal:0,brake:1,jump:false,tx:0,ty:0}); }
   updateSfx({riding: S.state==='riding' && !S.paused, speed:S.speed||0, air:!!S.air && S.crashT<=0, lift:!!S.lift, sliding:!!S.sliding, brake:inp.brake||0, crank:BR.crank(), coasting: (DRV.cadence||0) < 1 && !S.air && (S.speed||0) > 1.5, surface: S.rockT > 0 ? 'rock' : isDirt(S.x,S.z) ? 'dirt' : 'grass'});
@@ -1042,6 +1119,7 @@ function frame(){
       arms: ['armUpperL','armUpperR','armForeL','armForeR'].map(n => { const o = BR.root.getObjectByName(n); return !!(o && o.visible); }),
       hands: ['handL','handR'].map(n => { const o = BR.root.getObjectByName(n); return !!(o && o.visible && o.parent === BR.root); }),
       head: BR.head.visible, torso: !!BR.root.getObjectByName('riderTorso')?.visible, spd: +((S.speed||0)).toFixed(2) }; }
+  if (FPV.state.on && S.state==='riding' && !menu.open && !shopOpen && !bigMap.open && !window.__camSide) droneCamera();
   if (window.__camSide){ const o = window.__camSide, c = Math.cos(S.yaw), s_ = Math.sin(S.yaw); camera.position.set(S.x + c*o.d + Math.sin(S.yaw)*(o.b||0), S.y + (o.h||1.2), S.z - s_*o.d + Math.cos(S.yaw)*(o.b||0)); camera.up.set(0,1,0); camera.lookAt(S.x, S.y + 0.9, S.z); }   // test hook: side camera for pose screenshots
   if (flyF) flyover(0);
   else if (shopOpen) shopCam(dt);   // main menu: flyover camera replaces the chase cam
@@ -1259,6 +1337,11 @@ const PAGES = {
     {label:'Sound volume', value:PCT(SETTINGS.volume), sub:'sound effects (0% = mute)', adj:d => { SETTINGS.volume = Math.max(0, Math.min(1, Math.round((SETTINGS.volume + d*0.1)*10)/10)); saveSettings(); setSfxVolume(SETTINGS.volume); }},
     {label:'Invert lean / flip (left stick ↕)', value:ON(SETTINGS.invertY), adj:() => { SETTINGS.invertY = !SETTINGS.invertY; saveSettings(); }, act:() => { SETTINGS.invertY = !SETTINGS.invertY; saveSettings(); }},
     {label:'Invert whip / tweak (right stick ↔)', value:ON(SETTINGS.invertX), adj:() => { SETTINGS.invertX = !SETTINGS.invertX; saveSettings(); }, act:() => { SETTINGS.invertX = !SETTINGS.invertX; saveSettings(); }},
+    {label:'Drone', value:SETTINGS.droneFly === 'manual' ? 'MANUAL FPV' : 'AUTO FOLLOW', sub:'Z to launch. Manual parks the bike. Follow films you while you ride.', adj:() => { SETTINGS.droneFly = SETTINGS.droneFly === 'manual' ? 'follow' : 'manual'; saveSettings(); }, act:() => { SETTINGS.droneFly = SETTINGS.droneFly === 'manual' ? 'follow' : 'manual'; saveSettings(); }},
+    {label:'Drone max speed', value:(SETTINGS.droneSpeed||12) + ' m/s', adj:d => { SETTINGS.droneSpeed = Math.max(6, Math.min(24, (SETTINGS.droneSpeed||12) + d*2)); saveSettings(); }},
+    {label:'Drone camera tilt', value:(SETTINGS.droneTilt||12) + '°', adj:d => { SETTINGS.droneTilt = Math.max(0, Math.min(35, (SETTINGS.droneTilt||12) + d*3)); saveSettings(); }},
+    {label:'Follow distance', value:(SETTINGS.droneDist||8) + ' m', adj:d => { SETTINGS.droneDist = Math.max(4, Math.min(18, (SETTINGS.droneDist||8) + d)); saveSettings(); }},
+    {label:'Follow height', value:(SETTINGS.droneHeight||4) + ' m', adj:d => { SETTINGS.droneHeight = Math.max(2, Math.min(12, (SETTINGS.droneHeight||4) + d)); saveSettings(); }},
     {label:'Rider name', value:(() => { const n = mpName(); return `${NAME_A[n[0]]} ${NAME_B[n[1]]}`.toUpperCase(); })(), sub:'Preset words only. ← → changes it. No typing. Friends see it next time you join a room.', adj:d => { const n = mpName(), k = (n[0]*NAME_B.length + n[1] + d*7 + NAME_A.length*NAME_B.length) % (NAME_A.length*NAME_B.length); LS.set('trailDescent.mpName', [Math.floor(k/NAME_B.length), k % NAME_B.length]); }, act:() => { LS.set('trailDescent.mpName', [Math.floor(Math.random()*NAME_A.length), Math.floor(Math.random()*NAME_B.length)]); }},
     {label:'Rider look', value:legacyRider ? 'CLASSIC' : 'ATHLETIC', sub:'Athletic is the lean rider. Classic is the original. Reloads.', act:() => { LS.set('trailDescent.legacyRider', !legacyRider); toast(legacyRider ? 'Athletic rider — reloading…' : 'Classic rider — reloading…'); setTimeout(() => location.reload(), 500); }},
     {label:'Controls / help', value:$('help').classList.contains('hidden') ? 'SHOW' : 'HIDE', act:() => $('help').classList.toggle('hidden')},
@@ -1297,6 +1380,7 @@ const PAGES = {
   pause: () => ({title:'PAUSED', items:[
     {label:'Resume', act:() => togglePause()},
     {label:'Map', sub:'View / M', act:() => { closeMenu(); openMap(); bigMap.wasPaused = false; }},
+    {label:'FPV drone', sub:'Z, or hold View. Off during a timed run.', act:() => { closeMenu(); S.paused = false; toggleDrone(); }},
     {label:'Bike Shop', act:() => openShop()},
     {label:'Multiplayer', value:NET && NET.st.status === 'in' ? 'ROOM ' + NET.st.code : undefined, act:() => go('multi')},
     {label:'Leaderboards', act:() => openBoards()},
@@ -1698,7 +1782,8 @@ try { NET = initNet({THREE, scene, camera, S, bike, buildBikeRider: makeRider, s
   NET.on(() => { if (menu.open && menu.page === 'multi') renderMenu(); }); window.__net = NET; } catch (e) { console.warn('multiplayer unavailable', e); NET = null; }
 openMenu('main'); setTimeout(() => $('loading').classList.add('done'), 300);
 teleport(spotI, true);
-window.__features = features; window.__respawn = () => respawnSafe(); window.__game = S; window.__readInput = readInput; window.__emoteFrame = emoteFrame; window.__groundH = groundH; window.__lift = i => startLift(i); window.__world = { LIFTS, connectors, trails, features, spots, PARK, SHOP, terrainH, featH, isDirt, nearTrails, base, inPark, treesInCell, trailDist };
+window.__features = features; window.__respawn = () => respawnSafe(); window.__game = S; window.__readInput = readInput; window.__emoteFrame = emoteFrame;
+window.__drone = FPV.state; window.__droneToggle = toggleDrone; window.__droneFly = (dt, inp) => flyDrone(dt, inp || {steer:0, lyRaw:0, bankRaw:0, rsy:0}); window.__saveSettings = saveSettings; window.__settings = SETTINGS; window.__groundH = groundH; window.__lift = i => startLift(i); window.__world = { LIFTS, connectors, trails, features, spots, PARK, SHOP, terrainH, featH, isDirt, nearTrails, base, inPark, treesInCell, trailDist };
 window.__setCam = m => { camMode = ((m % CAM_NAMES.length) + CAM_NAMES.length) % CAM_NAMES.length; camInit = false; camHead = S.travel ?? S.yaw; };
 window.__BR = BR; window.__teleport = i => teleport(i); window.__unlocked = unlocked; window.__isOpen = isOpen; window.__chunks = () => chunks.size; window.__renderer = renderer; window.__place = (x, z, yaw) => { placeAt(x, z, yaw); S.air = false; };
 window.__sim = (secs, inp) => { const h=1/120; const base={steer:0,pedal:0,brake:0,jump:false,tx:0,ty:0}; for(let t=0;t<secs;t+=h){ step(h, Object.assign({}, base, typeof inp==='function'?inp(t):inp)); trackWorld(h); } return {x:S.x, z:S.z, kmh:S.speed*3.6, air:S.air, lives:S.lives, clean:S.clean, score:S.score}; };

@@ -24,7 +24,7 @@ const post = async (path, body, ms = 8000) => { const ac = new AbortController()
 
 // ---- save <-> localStorage
 export function collect(){ const st = J('trailDescent.settings', {}), settings = {};
-  for (const k of ['tod','quality','invertY','invertX','volume','musicOn','musicVol']) if (st[k] !== undefined) settings[k] = st[k];
+  for (const k of ['tod','quality','invertY','invertX','volume','musicOn','musicVol','droneSpeed','droneTilt','droneDist','droneHeight','droneFly']) if (st[k] !== undefined) settings[k] = st[k];
   return { updated: J('trailDescent.saveUpdated', 0), dollahs: J('trailDescent.dollahs', 0), owned: J('trailDescent.owned', ['hardtail']), bike: J('trailDescent.bike', 'hardtail'),
     cosmetics: J('trailDescent.cosmetics', []), skins: J('trailDescent.skins', {}), settings,
     unlocked: { mountain: J('trailDescent.unlocked', []), rampage: J('trailDescent.unlocked.rampage', []) },

@@ -36,7 +36,11 @@ export function cleanSave(d) {
   const unl = (a, w) => Array.isArray(a) ? [...new Set(a.filter(x => names(w).has(x)))] : [];
   const best = (o, w) => { const r = {}; if (o && typeof o === 'object') for (const t of TRAILS[w]) { const v = o[t.name]; if (typeof v === 'number' && v > 0 && v < 36000) r[t.name] = Math.round(v * 1000) / 1000; } return r; };
   const skins = {}; if (d.skins && typeof d.skins === 'object') for (const [b, s] of Object.entries(d.skins).slice(0, 20)) if (ID_RE.test(b) && s && typeof s === 'object') { const o = {}; for (const [k, v] of Object.entries(s).slice(0, 8)) if (ID_RE.test(k) && typeof v === 'string' && ID_RE.test(v)) o[k] = v; skins[b] = o; }
-  const settings = {}; if (d.settings && typeof d.settings === 'object') for (const [k, t] of Object.entries(SETTINGS_KEYS)) { const v = d.settings[k]; if (Array.isArray(t) ? t.includes(v) : t === 'b' ? typeof v === 'boolean' : (typeof v === 'number' && v >= 0 && v <= 1)) settings[k] = v; }
+  const settings = {}; if (d.settings && typeof d.settings === 'object') {
+    for (const [k, t] of Object.entries(SETTINGS_KEYS)) { const v = d.settings[k]; if (Array.isArray(t) ? t.includes(v) : t === 'b' ? typeof v === 'boolean' : (typeof v === 'number' && v >= 0 && v <= 1)) settings[k] = v; }
+    const span = (k, lo, hi) => { const v = d.settings[k]; if (typeof v === 'number' && v >= lo && v <= hi) settings[k] = v; };
+    span('droneSpeed', 6, 24); span('droneTilt', 0, 35); span('droneDist', 4, 18); span('droneHeight', 2, 12);
+    if (d.settings.droneFly === 'manual' || d.settings.droneFly === 'follow') settings.droneFly = d.settings.droneFly; }
   return {
     v: 1, updated: int(d.updated, 0, 9e15) ? d.updated : 0,
     dollahs: int(d.dollahs, 0, 1e9) ? d.dollahs : 0,
