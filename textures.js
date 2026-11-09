@@ -57,7 +57,10 @@ export function triplanar(mat, set, scale = 0.5, nStr = 0.8){
       .replace('#include <project_vertex>', `#include <project_vertex>
         { vec4 tw = vec4(transformed, 1.0); vec3 tn = objectNormal;
           #ifdef USE_INSTANCING
-            tw = instanceMatrix*tw; tn = mat3(instanceMatrix)*tn;
+            tw = instanceMatrix*tw;
+            mat3 im = mat3(instanceMatrix);
+            vec3 sc = max(vec3(length(im[0]), length(im[1]), length(im[2])), vec3(1e-4));
+            tn = im * (tn / (sc * sc));
           #endif
           vTWP = (modelMatrix*tw).xyz; vTWN = normalize(mat3(modelMatrix)*tn); }`);
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vTWP; varying vec3 vTWN; uniform sampler2D tA; uniform sampler2D tN; uniform float tS; uniform float tNS;')

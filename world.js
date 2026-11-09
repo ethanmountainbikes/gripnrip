@@ -177,6 +177,11 @@ const PROF = {
   roller: (H,L) => ({L, p: t => t>=0 && t<=L ? H*Math.sin(Math.PI*t/L)**2 : 0}),
   rocks:  (H,L,n) => ({L, rock:true, p: t => t>=0 && t<=L ? H*Math.sin(Math.PI*n*t/L)**2 * (0.7+0.3*Math.sin(t*2.3)) : 0}),
   drop:   (H,L1,deck) => ({L:L1+deck, p: t => t<0 ? 0 : t<=L1 ? H*Math.pow(t/L1,1.2) : t<=L1+deck ? H : 0, wood:true}),
+  // Rock ledge: ease onto a short deck, then a steep face that eases out onto the descending tread. Slow speed can roll it; the lip falls away at speed.
+  rockDrop: (H) => { const up = Math.max(5, H / 0.2), deck = 1.1, face = Math.max(3.2, H / 0.42), lip = up + deck, L = lip + face;
+    return { L, wood: false, rock: true, handLand: true, p: t => { if (t < 0 || t > L) return 0; if (t <= up){ const u = t / up; return H * u * u * (3 - 2 * u); } if (t <= lip) return H; const u = (t - lip) / face; return H * (1 - u) * (1 - u); } }; },
+  // Smooth slab. Zero slope at the crest and at both ends, so it rides down instead of launching.
+  rockRoll: (H, down) => { const up = Math.max(5.5, H * 4.2), L = up + down; return { L, wood: false, rock: true, p: t => { if (t < 0 || t > L) return 0; if (t <= up){ const u = t / up; return H * u * u * (3 - 2 * u); } const u = (t - up) / down; return H * (1 - u * u * (3 - 2 * u)); } }; },
 };
 // Rampage-scale features (sized for ~45-55 km/h, the speed riders carry down the face)
 // big dirt drop: run-up lip, short flat deck, a knuckle and a long steep landing transition (like the park's Big Drop)
@@ -207,13 +212,13 @@ for (const tr of trails){
   // features match the trail type (spacing = run-out after each feature)
   if (tr.kind === 'mega' || tr.pro) continue;
   const spacing = {rampage:46, dh:38, enduro:36, flow:28, flowg:32, xc:40, tech:22, freeride:42, drops:42, pump:1, jumps:16}[tr.kind];
-  let i = 40, k = 0;
+  let i = tr.kind === 'tech' ? 4 : 40, k = 0;
   const sp = (JUMP_SPEEDS[tr.name] || []).filter(Boolean).sort((a,b)=>a-b), vRef = sp.length ? sp[sp.length>>1] : 30;   // the trail's typical speed = current jump size
-  while (i < n-(tr.kind==='rampage' ? 45 : 30)){
+  while (i < n-(tr.kind==='tech' ? 6 : tr.kind==='rampage' ? 45 : 30)){
     const turn = Math.abs(Math.atan2(Math.sin(tr.yaw[i+12]-tr.yaw[i]), Math.cos(tr.yaw[i+12]-tr.yaw[i])));
     const sl = (tr.h[i]-tr.h[i+10])/20;
     const crowded = tr.kind === 'rampage' && trails.some(o => o !== tr && !o.pro && o.pts.some(p => Math.hypot(p[0]-tr.pts[i][0], p[1]-tr.pts[i][1]) < 34 || Math.hypot(p[0]-tr.pts[Math.min(n-1,i+14)][0], p[1]-tr.pts[Math.min(n-1,i+14)][1]) < 34));
-    if (!crowded && turn < 0.18 && sl > 0.04 || (tr.kind==='pump' || tr.kind==='xc' || tr.kind==='tech') && turn < 0.3){
+    if (!crowded && turn < 0.18 && sl > 0.04 || (tr.kind==='pump' || tr.kind==='xc') && turn < 0.3 || tr.kind==='tech' && turn < 0.6){
       const v = (JUMP_SPEEDS[tr.name] || [])[k], g = v ? Math.max(0.7, Math.min(GMAX[tr.diff], (v/vRef)**2)) : 1;
       const S_ = (kind, pr) => JUMPY.has(kind) ? scaleProf(pr, g) : pr;
       const [x,z] = tr.pts[i], yaw = tr.yaw[i+2], A = (kind, hw, pr) => { const f = addFeature(kind, x, z, yaw, hw, S_(kind, pr), tr.id); f.k = k; f.g = JUMPY.has(kind) ? g : 1; return f; };
@@ -228,7 +233,15 @@ for (const tr of trails){
         case 'flow':     f = [() => A('roller', 2.6, PROF.roller(0.5, 9)), () => A('table', 2.4, PROF.table(1.2*sz, 4, 3, 4)), () => hip(1.15*sz), () => bigTable(), () => A('stepup', 2.4, PROF.stepup(1.0, 4, 1.5, 1.3, 3, 5)), () => A('stepdown', 2.4, PROF.stepdown(1.2, 4, 1.5, 0.8, 5))][k%6](); break;
         case 'flowg':    f = k%4===3 ? hip(0.85) : k%3===2 ? A('table', 2.4, PROF.table(0.8, 3.5, 2.5, 3.5)) : A('roller', 2.6, PROF.roller(0.35, 9)); break;
         case 'xc':       f = k%4===1 ? A('table', 2.2, PROF.table(0.55, 3.2, 2.6, 3.2)) : k%4===3 ? hip(0.7) : A('roller', 2.6, PROF.roller(0.3, 9)); break;
-        case 'tech':     f = k%6===5 ? hip(0.85) : k%7===6 ? A('table', 2.3, PROF.table(0.9, 3.6, 4, 4)) : k%3===2 ? A('rockdrop', 1.6, {...PROF.drop(0.8, 3, 2), rock:true}) : A('rocks', 2.4, PROF.rocks(0.3, 8, 4)); break;
+        case 'tech': {
+          // Rock Garden: almost the whole tread is rock. One slot in twelve is a short dirt run-out.
+          const slot = k % 12;
+          if (slot === 0){ k++; i += 2; continue; }
+          const ahead = Math.abs(Math.atan2(Math.sin(tr.yaw[Math.min(n - 1, i + 10)] - yaw), Math.cos(tr.yaw[Math.min(n - 1, i + 10)] - yaw)));
+          if ((slot === 2 || slot === 8) && ahead < 0.16){ const H = 0.6 + (Math.floor(k / 6) % 3) * 0.4; f = addFeature('rockdrop', x, z, yaw, 3.3, PROF.rockDrop(H), tr.id); f.k = k; f.rockDrop = H; }
+          else if (slot === 5 && ahead < 0.35){ f = A('roll', 3.2, PROF.rockRoll(0.9 + (k % 3) * 0.2, 10 + (k % 2) * 2)); f.rockRoll = true; }
+          else { f = A('rocks', 3.2, { L: 12 + (k % 2) * 4, rock: true, wood: false, p: () => 0 }); f.garden = true; }
+          break; }
         case 'freeride': f = [() => A('drop', 1.8, PROF.drop(2.0, 6, 3)), () => bigTable(), () => A('gap', 2.6, PROF.gap(2.0, 5.5, 4, 7)), () => hip(2.0), () => A('stepdown', 2.6, PROF.stepdown(1.9, 5, 2.5, 1.2, 7))][k%5](); break;
         case 'drops':    f = k%3===1 ? hip(1.5) : k%3===2 ? bigTable() : A('drop', 1.8, PROF.drop(1.6+0.3*(k%3), 6, 3)); break;
         case 'pump':     f = k%8===7 ? hip(0.6) : k%7===6 ? A('table', 2.1, PROF.table(0.42, 2.8, 2.2, 2.8)) : A('roller', 2.2, PROF.roller(0.72, 5.5)); break;
@@ -241,7 +254,7 @@ for (const tr of trails){
           if (kk === 'goblin') f.goblin = true; if (kk === 'stratos') f.stratos = true; break; }
         case 'jumps':    f = [() => bigTable(), () => A('double', 2.4, PROF.double(1.5, 4.5, 2.2, 5)), () => hip(1.4), () => A('stepup', 2.4, PROF.stepup(1.2, 4.5, 1.8, 1.6, 3, 5)), () => A('gap', 2.4, PROF.gap(1.5, 4.5, 2.5, 6)), () => A('table', 2.4, PROF.table(1.4, 4.5, 3.5, 4.5))][k%6](); break;
       }
-      k++; i += Math.round(spacing/2) + Math.round((f.L0 || f.L)/2); continue;
+      k++; i += (tr.kind === 'tech' ? 0 : Math.round(spacing/2)) + Math.round((f.L0 || f.L)/2); continue;
     }
     i += 3;
   }
@@ -333,8 +346,8 @@ if (!RAMP) { const d = PARK.dir, yaw = Math.atan2(-d[0], -d[1]), sx = -d[1], sz 
       else addFeature('roller', x, z, ty, 2.3, PROF.roller(0.78, 4.4), -1).park = 'Pump Track'; }
     PARK.pump = {x:cx, z:cz}; } }
 // Rock shapes are the collision shapes. Small rocks are ground the wheels climb (a jolt and some speed loss, no launch).
-// Big rocks are solid: head-on is a crash, a glance pushes you off. Rock Garden (tech) is packed angular pyramids with
-// dirt pockets left in the tread. Other gardens stay rounded and keep a wider clear lane down the middle.
+// Big rocks are solid: head-on is a crash, a glance pushes you off. Rock Garden is packed low angular slabs
+// across almost the whole tread, with the tall rocks kept off the riding line. Other gardens stay rounded.
 export const BOULDERS = [];
 const smallDome = (b, d) => d >= b.r ? 0 : b.h*0.5*(1 + Math.cos(Math.PI*d/b.r));
 const bigDome = (b, d) => d >= b.r ? 0 : b.h*Math.sqrt(1 - (d/b.r)**4);
@@ -359,9 +372,31 @@ export function rockContact(b, x, z){
   const nx = xFace ? sign*c : -sign*s, nz = xFace ? sign*s : sign*c;
   return { nx, nz, x: b.x + (lx*c - lz*s), z: b.z + (lx*s + lz*c) };
 }
+function fillGarden(f){
+  const rnd = mulberry(Math.round(f.x*31 + f.z*17) + 11); f.p = () => 0; f.boulders = [];
+  const at = (t, us) => [f.x + f.dx*t + f.dz*us, f.z + f.dz*t - f.dx*us];
+  const stepT = 0.8, stepU = 0.8;
+  for (let t = 0.4; t < f.L - 0.4; t += stepT) for (let us = -f.hw + 0.3; us <= f.hw - 0.3; us += stepU){
+    if (rnd() < 0.02 && Math.abs(us) > 0.55) continue;
+    const tt = t + (rnd() - 0.5) * 0.16, uu = Math.abs(us) < stepU * 0.5 ? (rnd() - 0.5) * 0.12 : us + (rnd() - 0.5) * 0.16;
+    const edge = Math.min(1, Math.abs(uu) / f.hw);
+    const h = Math.abs(uu) < 1.35 ? 0.12 + rnd() * 0.08 : 0.18 + rnd() * 0.1 + edge * 0.06;
+    const r = Math.abs(uu) < 1.35 ? 0.85 + rnd() * 0.16 : 0.7 + rnd() * 0.16;
+    const [x, z] = at(tt, uu);
+    f.boulders.push({ x, z, t: tt, us: uu, h, r, big: false, ang: true, rot: rnd() * 6.28, f });
+  }
+  for (let k = 0, side = rnd() < 0.5 ? -1 : 1, NB = 5; k < NB; k++, side = -side){
+    const h = 0.55 + rnd() * 0.35, r = 0.5 + rnd() * 0.22;
+    const t = (k + 0.5) / NB * f.L, us = side * (f.hw + 3.6);
+    const [x, z] = at(t, us);
+    f.boulders.push({ x, z, t, us, h, r, big: true, ang: true, rot: rnd() * 1.57, f });
+  }
+  BOULDERS.push(...f.boulders);
+}
 for (const f of features){ if (!f.rock || f.kind !== 'rocks') continue;
+  if (f.garden){ fillGarden(f); continue; }
   const rnd = mulberry(Math.round(f.x*31 + f.z*17) + 7); f.p = () => 0; f.boulders = [];
-  const garden = !!(trails[f.trail] && trails[f.trail].kind === 'tech');
+  const garden = false;
   const at = (t, us) => [f.x + f.dx*t + f.dz*us, f.z + f.dz*t - f.dx*us];
   const nS = Math.round(f.L * (garden ? 2.8 : 1.4)), gapK = garden ? 0.48 : 0.75;
   for (let i = 0; i < nS*4 && f.boulders.length < nS; i++){
@@ -411,7 +446,7 @@ function approachMs(f){
   return {green:8, blue:11, black:13, dblack:15, pro3:15}[tr && tr.diff] || (f.park ? 11 : 10);
 }
 for (const f of features){
-  if (f.mega || f.canyon || f.boulders || f.rollin || !LAND_KIND.has(f.kind)) continue;
+  if (f.mega || f.canyon || f.boulders || f.rollin || f.handLand || !LAND_KIND.has(f.kind)) continue;
   const old = f.p, oldL = f.L, v = approachMs(f);
   let lipT = 0, lipH = -1;
   for (let i = 1; i <= 36; i++){ const t = oldL*i/36*0.8, h = old(t, 0); if (h >= lipH){ lipH = h; lipT = t; } }
