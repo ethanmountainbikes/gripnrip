@@ -1042,10 +1042,19 @@ function land(gh, gp){
 const fmtTime = t => `${Math.floor(t/60)}:${(t%60).toFixed(1).padStart(4,'0')}`;
 
 // ---------- Main loop ----------
-const camPos = new THREE.Vector3(), camLook = new THREE.Vector3(); let camInit = false, camHead = 0;
+const camPos = new THREE.Vector3(), camLook = new THREE.Vector3(); let camInit = false, camHead = 0, camPitch = 0, camRollV = 0, camBump = 0, camBumpV = 0, camSusp = 0, camChest = 0;
+const easeTo = (cur, target, dt, tau) => cur + (target - cur) * (1 - Math.exp(-dt / tau));
+const easeAng = (cur, target, dt, tau) => cur + wrapA(target - cur) * (1 - Math.exp(-dt / tau));
+// Critically damped. Used for roll and bump so a landing settles without ringing.
+function camSpring(x, v, target, dt, omega){
+  const a = omega * omega * (target - x) - 2 * omega * v;
+  v += a * dt; x += v * dt;
+  if (Math.abs(target - x) < 1e-4 && Math.abs(v) < 1e-3) return [target, 0];
+  return [x, v];
+}
 const clock = new THREE.Clock(); let acc = 0;
 const arc = $('speedArc'), arcLen = arc.getTotalLength();
-let fpsT=0, fpsN=0, camRoll = 0, fpCam = { y: 0, pitch: 0, roll: 0, on: false };
+let fpsT=0, fpsN=0, camRoll = 0, fpCam = { y: 0, pitch: 0, yaw: 0, roll: 0, rollV: 0, on: false };
 const fpV = new THREE.Vector3();
 // dust particles (slides, hard braking, off-trail, landings)
 const DN = 400, dustPos = new Float32Array(DN*3), dustVel = new Float32Array(DN*3), dustLife = new Float32Array(DN); let dustI = 0;
@@ -1117,20 +1126,36 @@ function frame(){
   // Speed used to widen the lens (up to +14°) and pull the chase cam back. That shifted every POV as you went faster.
   const fov = fpRide ? 78 : 66;
   if (Math.abs(camera.fov - fov) > 0.2){ camera.fov = fov; camera.updateProjectionMatrix(); }
-  // Position is the current bike plus a fixed local offset. Smoothing the world position
-  // trailed by about speed/6 metres. Only the chase heading eases, so a turn stays soft.
-  if (!camInit || Math.abs(wrapA(ch - camHead)) > 1.2){ camHead = ch; camInit = true; }
-  else camHead += wrapA(ch - camHead) * (1 - Math.exp(-dt*8));
-  const hx = -Math.sin(camHead), hz = -Math.cos(camHead);
-  const bump = THREE.MathUtils.clamp((S.susp || 0)*0.08, -0.03, 0.05);
+  // Position is the bike plus a fixed offset along THIS frame's heading. A smoothed
+  // heading used to swing the camera around the rider, and a world-space lerp trailed with speed.
+  // Yaw, pitch and roll ease on their own. The bump spring targets zero, so a landing
+  // dips and settles without leaving a speed-dependent height.
+  const yawErr = wrapA(ch - camHead);
+  if (!camInit || Math.abs(yawErr) > 1.2){
+    camHead = ch; camPitch = S.pitch || 0; camRoll = 0; camRollV = 0; camBump = 0; camBumpV = 0; camSusp = S.susp || 0; camChest = (S.pitch || 0) * 0.25;
+    fpCam.pitch = (S.pitch || 0) * 0.22; fpCam.yaw = S.yaw || 0; fpCam.roll = 0; fpCam.rollV = 0; camInit = true;
+  } else if (!S.paused){
+    camHead = easeAng(camHead, ch, dt, 0.22);
+    camPitch = easeTo(camPitch, (S.pitch || 0) * 0.5, dt, 0.24);
+    camSusp = easeTo(camSusp, S.susp || 0, dt, 0.2);
+    const hf = THREE.MathUtils.clamp(((S.susp || 0) - camSusp) * 0.045, -0.02, 0.03);
+    [camBump, camBumpV] = camSpring(camBump, camBumpV, hf, dt, 9);
+    const rollT = THREE.MathUtils.clamp(-(S.lean || 0) * 0.11 + (S.sliding ? (S.slip || 0) * 0.03 : 0), -0.13, 0.13);
+    [camRoll, camRollV] = camSpring(camRoll, camRollV, rollT, dt, 5.5);
+    camChest = easeTo(camChest, (S.pitch || 0) * 0.25, dt, 0.16);
+    const fpYaw = S.yaw || 0;
+    fpCam.yaw = Math.abs(wrapA(fpYaw - fpCam.yaw)) > 1 ? fpYaw : easeAng(fpCam.yaw, fpYaw, dt, 0.07);
+    fpCam.pitch = easeTo(fpCam.pitch, (S.pitch || 0) * 0.22, dt, 0.12);
+    [fpCam.roll, fpCam.rollV] = camSpring(fpCam.roll, fpCam.rollV, THREE.MathUtils.clamp(-(S.lean || 0) * 0.04, -0.05, 0.05), dt, 8);
+  }
+  const hx = fx, hz = fz;
   const tp = new THREE.Vector3(S.x - hx*back, 0, S.z - hz*back);
-  // Height follows the bike, not the hillside behind it. Sampling that hillside made the view rise and fall with speed.
-  tp.y = S.y + [2.3,3.4,1.7][cm] + bump;
-  const tl = new THREE.Vector3(S.x + hx*4, S.y + 1.0 + bump, S.z + hz*4);
+  tp.y = S.y + [2.3,3.4,1.7][cm] + camBump;
+  const lx = -Math.sin(camHead), lz = -Math.cos(camHead);
+  const tl = new THREE.Vector3(S.x + lx*4, S.y + 1.0 + Math.sin(camPitch) * 2.4 + camBump, S.z + lz*4);
   camPos.copy(tp); camLook.copy(tl);
   camera.position.copy(camPos);
-  camRoll = THREE.MathUtils.lerp(camRoll, -S.lean*0.08 + (S.sliding ? S.slip*0.04 : 0), Math.min(1, dt*3));
-  camera.up.set(Math.sin(camRoll)*Math.cos(ch), Math.cos(camRoll), -Math.sin(camRoll)*Math.sin(ch)); camera.lookAt(camLook);
+  camera.up.set(Math.sin(camRoll)*Math.cos(camHead), Math.cos(camRoll), -Math.sin(camRoll)*Math.sin(camHead)); camera.lookAt(camLook);
   const fpOn = camMode === 3 && !S.lift && S.state === 'riding' && !rag.on;
   BR.head.visible = !fpOn;
   const torso = BR.root.getObjectByName('riderTorso'); if (torso) torso.visible = !fpOn;
@@ -1143,10 +1168,10 @@ function frame(){
         // Head lags the chassis: bars keep the full bump pitch, the view only takes a fraction of it.
         // Rigid to the head. A lagged height sits above the bike while it descends, which reads as the view rising with speed.
         const eyeH = 1.28, pitch = (S.pitch || 0) * 0.22;
-        fpCam.on = true; fpCam.y = S.y + eyeH; fpCam.pitch = pitch;
-        fpCam.roll += ((-S.lean || 0) * 0.04 - fpCam.roll) * (1 - Math.exp(-dt / 0.22));
+        fpCam.on = true; fpCam.y = S.y + eyeH;
+        // The eye stays on the head. Look yaw, pitch and roll are the smoothed ones, so a bump does not flick the horizon.
         const eye = bodyPoint(S.x, S.y, S.z, S.yaw, pitch, { x: 0, y: eyeH, z: 0.02, name: 'eye', fatal: false });
-        const look = bodyPoint(S.x, S.y, S.z, S.yaw, pitch * 0.35, { x: 0, y: eyeH - 0.22, z: -8, name: 'look', fatal: false });
+        const look = bodyPoint(S.x, S.y, S.z, fpCam.yaw, fpCam.pitch * 0.35, { x: 0, y: eyeH - 0.22, z: -8, name: 'look', fatal: false });
         camera.position.set(eye.x, eye.y, eye.z);
         const fdx = look.x - eye.x, fdz = look.z - eye.z, fl = Math.hypot(fdx, fdz) || 1;
         const rr = Math.sin(fpCam.roll); camera.up.set(fdz / fl * rr, Math.cos(fpCam.roll), -fdx / fl * rr);
@@ -1154,8 +1179,10 @@ function frame(){
         const bar = bodyPoint(S.x, S.y, S.z, S.yaw, S.pitch || 0, { x: 0, y: 0.98, z: -0.55, name: 'bar', fatal: false });
         fpV.set(bar.x, bar.y, bar.z).project(camera); window.__fp = { fov: +camera.fov.toFixed(1), barNdcY: +fpV.y.toFixed(3), mode: camMode };
       } else { fpCam.on = false; window.__fp = { fov: camera.fov, barNdcY: null, mode: camMode };
-        const hy = 1.32, fw = 0.36, pitchDn = 0.35;
-        camera.position.set(S.x + fx*fw, S.y + hy, S.z + fz*fw); camera.up.set(0,1,0); camera.lookAt(S.x + fx*6, S.y + hy - 6*pitchDn*0.4, S.z + fz*6); }
+        const hy = 1.32, fw = 0.36, pitchDn = 0.35 + camChest;
+        camera.position.set(S.x + fx*fw, S.y + hy, S.z + fz*fw);
+        const rr = Math.sin(camRoll * 0.5); camera.up.set(fz * rr, Math.cos(camRoll * 0.5), -fx * rr);
+        camera.lookAt(S.x + fx*6, S.y + hy - 6*pitchDn*0.4, S.z + fz*6); }
       if (camera.near !== 0.08){ camera.near = 0.08; camera.updateProjectionMatrix(); } }
     else if (camMode === 5){ const t = new THREE.Vector3(S.x + sx*5 - fx*1, S.y + 1.2, S.z + sz*5 - fz*1);   // side tracking, locked to this frame
       camPos.copy(t); camera.position.copy(camPos); camera.up.set(0,1,0); camera.lookAt(S.x, S.y + 0.9, S.z); }
