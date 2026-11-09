@@ -84,7 +84,7 @@ export function wheelieStep(o) {
   const dt = o.dt || 1 / 120;
   const lean = o.lean || 0, brake = o.brake || 0, speed = o.speed || 0;
   // arm defaults on so the balance checks below still run. The game passes arm:false
-  // until both sticks (or the keyboard key) have actually asked for a wheelie.
+  // until both sticks have been held up together, or the keyboard key has asked for a wheelie.
   const armed = o.arm !== false;
   const want = armed && !o.fakie && lean > 0.45 && brake < 0.35 && speed > 3.5 && o.rearOnGround;
   if (!o.active && !want) return { active: false, pitch: o.pitch || 0, tip: false };

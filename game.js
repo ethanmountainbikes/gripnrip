@@ -456,6 +456,9 @@ const DRV = (() => { const COGS = [51,45,39,33,28,24,21,18,16,14,12,10], RING = 
     const el = document.getElementById('gearVal'); if (el){ const t = `${D.gear}/12`; if (el.textContent !== t) el.textContent = t; el.classList.toggle('shifting', !!D.pending); } };
   return D; })();
 window.__drv = DRV;
+// Both-up wheelie vs down-then-up hop. ready means the sticks were centered together.
+const stickGate = { ready: true, downAt: 0 };
+window.__stickGate = stickGate;
 function readInput(){
   const inp = {rsy:0, ry:0, counter:false, steer:0, lean:0, pedal:0, brake:0, pumpHold:false, pop:false, tweak:0, bank:0, trick:null, kbFlip:0, pressed:{}, hold:{DU:false, DD:false, DL:false, DR:false, T:!!keys.KeyT}};
   const pads = navigator.getGamepads ? navigator.getGamepads() : [];
@@ -467,7 +470,7 @@ function readInput(){
     if (m.btn.LB){ const mag = Math.hypot(rx,ry);   // LB + right stick: 8 directions (diagonals = tuck no-hander, X-up, nac-nac, tailwhip), RS click = barspin; stick amount = trick strength
       if (m.btn.RS){ inp.trick = 'bar'; inp.trickAmt = 1; }
       else if (mag > 0.35){ const sec = Math.round(Math.atan2(ry, rx)/(Math.PI/4)); inp.trick = {0:'right', 1:'dr', 2:'down', 3:'dl', 4:'left', '-4':'left', '-3':'ul', '-2':'up', '-1':'ur'}[sec]; inp.trickAmt = Math.min(1, (mag-0.35)/0.6); } }
-    else { if (ry > 0.5) inp.pumpHold = true; if (ry < -0.5){ inp.pop = true; inp.counter = true; } inp.bank = rx; inp.rsy = ry; inp.ry = ry; }
+    else { if (ry > 0.5) inp.pumpHold = true; if (ry < -0.5) inp.counter = true; inp.bank = rx; inp.rsy = ry; inp.ry = ry; }
     inp.dpx = (m.btn.DR?1:0) - (m.btn.DL?1:0); inp.dpy = (m.btn.DD?1:0) - (m.btn.DU?1:0); inp.lsx = dz(m.lx); inp.lsy = dz(m.ly);
     inp.hold.DU = !!m.btn.DU; inp.hold.DD = !!m.btn.DD; inp.hold.DL = !!m.btn.DL; inp.hold.DR = !!m.btn.DR; inp.hold.Back = !!m.btn.Back;
     for (const name of ['A','B','X','Y','Start','Back','DL','DR','DU','DD','LB','RB']){ const now=!!m.btn[name], key=gp.index+'_'+name; if(now && !prevBtn[key]) inp.pressed[name]=true; prevBtn[key]=now; }
@@ -487,10 +490,17 @@ function readInput(){
   inp.bank = THREE.MathUtils.clamp(inp.bank || 0,-1,1); inp.tweak = THREE.MathUtils.clamp(inp.tweak,-1,1);
   inp.lyRaw = inp.lean; inp.bankRaw = inp.bank;
   if (SETTINGS.invertY) inp.lean = -inp.lean; if (SETTINGS.invertX) inp.bank = -inp.bank;   // Settings: invert options (input mapping only)
-  // Standard sticks: +Y is down. Both must be pulled back past the pump threshold
-  // before a wheelie can start. Left stick alone is only lean. Invert lean flips
-  // which way the left stick counts as "back"; the right stick stays +Y = down.
-  inp.wheelieChord = inp.lean > 0.62 && inp.ry > 0.62 && !inp.trick;
+  // Physical stick up is negative Y. A wheelie arms only when both sticks leave center
+  // together and stay up. A right-stick hop is down first, then up, and that up is not a wheelie.
+  // Left stick up on its own is just lean. Keyboard K is separate and unchanged.
+  const lyS = inp.lsy || 0, ryS = inp.ry || 0, nowMs = performance.now();
+  const lsUp = lyS <= -0.62, rsUp = ryS <= -0.62, rsDown = ryS >= 0.5;
+  if (rsDown){ stickGate.downAt = nowMs; stickGate.ready = false; }
+  const recentDown = stickGate.downAt > 0 && (nowMs - stickGate.downAt) < 400;
+  if (Math.abs(lyS) <= 0.3 && Math.abs(ryS) <= 0.3 && !recentDown) stickGate.ready = true;
+  else if ((lsUp || rsUp) && !(lsUp && rsUp)) stickGate.ready = false;
+  if (rsUp && recentDown) inp.pop = true;
+  inp.wheelieChord = lsUp && rsUp && stickGate.ready && !recentDown && !inp.trick;
   inp.kbWheelie = !!keys.KeyK && !inp.trick;
   if (inp.wheelieChord || inp.kbWheelie){ inp.pumpHold = false; inp.pop = false; inp.counter = false; }
   if (window.__forceInp) Object.assign(inp, window.__forceInp);
@@ -548,6 +558,7 @@ function bailCamera(){
 }
 function placeAt(x, z, yaw){
   endRagdoll();
+  stickGate.ready = true; stickGate.downAt = 0;
   S.x = x; S.z = z; S.y = groundH(S.x,S.z); S.yaw = yaw;
   S.speed = 0; S.vy = 0; S.air = false; S.travel = S.yaw; S.wYaw = S.wPitch = 0; S.nose = 0; S.susp = S.suspV = 0; S.pitch = 0; S.spin = 0; S.lean = 0; S.preload = 0; S.crashT = 0; S.tweak = 0; S.trick = null; S.landCool = 0.3; S.fakie = false; S.wheelie = false; S.wheelieArm = 0; S.lipHop = null; S.hopWin = 0; S.jolt = 0;
 }
@@ -945,7 +956,10 @@ function step(dt, inp){
       if (inp.kbWheelie) S.wheelieArm = 1;
       else if (inp.wheelieChord) S.wheelieArm = Math.min(1, (S.wheelieArm||0) + dt);
       else if (!S.wheelie) S.wheelieArm = 0;
-      const w = wheelieStep({ active: !!S.wheelie, pitch: S.pitch || 0, lean: inp.lean, brake: inp.brake, speed: S.speed, dt, rearOnGround: hr < ng + 0.8, fakie: !!S.fakie, arm: (S.wheelieArm||0) >= 0.1 });
+      // Stick forward lifts the front. K still reports a positive lean and keeps the old balance.
+      const rawLean = typeof inp.lyRaw === 'number' ? inp.lyRaw : (inp.lean || 0);
+      const balance = inp.kbWheelie ? (inp.lean || 0) : ((inp.wheelieChord || S.wheelie) ? -rawLean : (inp.lean || 0));
+      const w = wheelieStep({ active: !!S.wheelie, pitch: S.pitch || 0, lean: balance, brake: inp.brake, speed: S.speed, dt, rearOnGround: hr < ng + 0.8, fakie: !!S.fakie, arm: (S.wheelieArm||0) >= 0.1 });
       if (w.tip){ S.wheelie = false; crash('Looped out!'); return; }
       S.wheelie = w.active;
       if (w.active){ S.pitch = w.pitch; S.y = hr + Math.sin(S.pitch) * WHEEL_R; }

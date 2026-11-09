@@ -28,8 +28,21 @@ try {
       navigator.getGamepads=()=>[{index:0,connected:true,mapping:'standard',id:'mock',axes:[o.lx||0, o.ly||0, o.rx||0, o.ry||0],buttons,timestamp:1}];
       return window.__readInput();
     }
-    const right=pad({rx:0.85}), left=pad({rx:-0.85}), dead=pad({rx:0.12}), down=pad({ry:0.9}), downRight=pad({rx:0.8, ry:0.9});
-    const up=pad({ry:-0.9}), steer=pad({lx:0.8}), both=pad({ly:0.9, ry:0.9, rx:0.7}), lb=pad({rx:0.9, ry:0, lb:true});
+    const reset=()=>{ window.__stickGate.ready=true; window.__stickGate.downAt=0; pad({}); };
+    reset();
+    const right=pad({rx:0.85}), left=pad({rx:-0.85}), dead=pad({rx:0.12});
+    reset();
+    const down=pad({ry:0.9}), downRight=pad({rx:0.8, ry:0.9});
+    reset();
+    const upAlone=pad({ry:-0.9});
+    const downThen=pad({ry:0.9});
+    const up=pad({ry:-0.9});
+    reset();
+    const steer=pad({lx:0.8}), forward=pad({ly:-0.9});
+    reset();
+    const both=pad({ly:-0.9, ry:-0.9, rx:0.7}), back=pad({ly:0.9, ry:0.9});
+    reset();
+    const lb=pad({rx:0.9, ry:-0.9, lb:true});
     navigator.getGamepads=()=>[];
     document.dispatchEvent(new KeyboardEvent('keydown',{code:'KeyE',bubbles:true}));
     const keyE=window.__readInput();
@@ -70,7 +83,7 @@ try {
     for (let i=0;i<40 && !S.lastCrash;i++) window.__sim(1/120,{bank:0.3, steer:0, lean:0, pedal:0, brake:0});
     const safe=S.lastCrash;
     const num=o=>({bank:+(o.bank||0).toFixed(2), steer:+(o.steer||0).toFixed(2), lean:+(o.lean||0).toFixed(2), pump:!!o.pumpHold, pop:!!o.pop, chord:!!o.wheelieChord, trick:o.trick||null, tweak:+(o.tweak||0).toFixed(2)});
-    return {right:num(right), left:num(left), dead:num(dead), down:num(down), downRight:num(downRight), up:num(up), steer:num(steer), both:num(both), lb:num(lb), keyE:num(keyE), keyQ:num(keyQ), emo,
+    return {right:num(right), left:num(left), dead:num(dead), down:num(down), downRight:num(downRight), upAlone:num(upAlone), up:num(up), steer:num(steer), forward:num(forward), both:num(both), back:num(back), lb:num(lb), keyE:num(keyE), keyQ:num(keyQ), emo,
       yaw:{into:+into.toFixed(3), against:+against.toFixed(3), straight:+straight.toFixed(3)}, slip:{good, bad}, bailed, safe};
   })()`);
   const help = readFileSync('/workspace/index.html','utf8');
@@ -80,9 +93,12 @@ try {
   check('horizontal deadzone', out.dead.bank === 0, JSON.stringify(out.dead));
   check('stick down still pumps and does not lean', out.down.pump && !out.down.pop && out.down.bank === 0 && !out.down.chord, JSON.stringify(out.down));
   check('down and sideways pumps and leans, no hop', out.downRight.pump && out.downRight.bank > 0.3 && !out.downRight.pop && !out.downRight.chord, JSON.stringify(out.downRight));
-  check('stick up still hops', out.up.pop && !out.up.pump && out.up.bank === 0, JSON.stringify(out.up));
-  check('left stick still steers', out.steer.steer > 0.4 && out.steer.bank === 0, JSON.stringify(out.steer));
-  check('both sticks down is still the wheelie, and a sideways right stick does not cancel it', out.both.chord && !out.both.pump && !out.both.pop && out.both.bank > 0.2, JSON.stringify(out.both));
+  check('stick up alone does not hop or wheelie', !out.upAlone.pop && !out.upAlone.chord && out.upAlone.bank === 0, JSON.stringify(out.upAlone));
+  check('down then up still hops and does not wheelie', out.up.pop && !out.up.pump && !out.up.chord, JSON.stringify(out.up));
+  check('left stick still steers', out.steer.steer > 0.4 && out.steer.bank === 0 && !out.steer.chord, JSON.stringify(out.steer));
+  check('left stick forward alone does not wheelie', out.forward.lean < -0.6 && !out.forward.chord && !out.forward.pop, JSON.stringify(out.forward));
+  check('both sticks up together is the wheelie, and a sideways right stick does not cancel it', out.both.chord && !out.both.pump && !out.both.pop && out.both.bank > 0.2 && out.both.lean < -0.6, JSON.stringify(out.both));
+  check('both sticks down is a pump, not a wheelie', !out.back.chord && out.back.pump && out.back.lean > 0.6, JSON.stringify(out.back));
   check('LB still takes the right stick for a trick', !!out.lb.trick && out.lb.bank === 0 && !out.lb.pump, JSON.stringify(out.lb));
   check('Q and E lean, and do not hop or tweak', out.keyE.bank > 0.5 && out.keyQ.bank < -0.5 && out.keyE.tweak === 0 && !out.keyE.pump, JSON.stringify({keyE:out.keyE, keyQ:out.keyQ}));
   check('emote wheel eats the lean', out.emo.wheel && out.emo.bank === 0 && !out.emo.pump && !out.emo.pop, JSON.stringify(out.emo));
