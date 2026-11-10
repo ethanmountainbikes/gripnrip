@@ -118,6 +118,9 @@ body.inshop #shop{left:auto;right:3vw;transform:translateY(-50%);width:min(500px
 .lbT{width:100%;border-collapse:collapse;font:600 15px/1.3 'Barlow Condensed',sans-serif;margin:4px 0}
 .lbT td{padding:2px 6px;border-bottom:1px solid rgba(255,255,255,.08)} .lbT td:first-child{width:28px;opacity:.7} .lbT td:last-child{text-align:right}
 .lbT tr.me td{color:#ffd27a;background:rgba(217,119,43,.25)}
+.nameRep{font:600 12px sans-serif;margin-left:6px;padding:0 5px;border:1px solid rgba(255,255,255,.3);border-radius:4px;background:transparent;color:#e9b;cursor:pointer;pointer-events:auto;opacity:.75} .nameRep:hover{opacity:1} .nameRep.done{border:0;color:#888;cursor:default}
+#mpAsk .mpNote.bad{color:#ffb37a}
+#mpAsk button:disabled{opacity:.5;cursor:default}
 .lbMe{font:600 14px 'Barlow Condensed',sans-serif;margin:4px 0 8px;color:#ffd27a}
 #lbPanel{position:fixed;right:14px;top:290px;z-index:58;width:300px;background:rgba(20,22,18,.82);border:2px solid #d9772b;border-radius:8px;padding:8px 12px;color:#f0e8d8;display:none}
 #lbPanel.on{display:block} #lbPanel h4{margin:0 0 4px;font:700 18px 'Bebas Neue',sans-serif;letter-spacing:1px}

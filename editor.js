@@ -241,6 +241,14 @@ export function createEditor(api){
     else toast(res.hidden ? 'Hidden pending review' : 'Reported');
   }
 
+  // level race board: your save code names the row (custom name when it is valid and not hidden, else the generated name).
+  // An older worker returns times without names; those rows just say Rider.
+  async function levelBoard(time){
+    const res = await post('/level/time', { code: doc.published, version: doc.version, time, device: device(), savecode: api.saveCode ? api.saveCode() || undefined : undefined });
+    const box = ui.querySelector('#edExtra'); if (!box || !res || res.offline || !res.ok || !Array.isArray(res.top)) return;
+    const cell = e => api.nameCell ? api.nameCell(e) : 'Rider';
+    box.innerHTML = `<div><b>${levelName(doc.name)} — race times</b></div><table class="lbT">` + res.top.slice(0, 10).map(e => `<tr class="${e.me ? 'me' : ''}"><td>${e.rank}</td><td>${cell(e)}</td><td>${e.v.toFixed(2)} s</td></tr>`).join('') + '</table>';
+  }
   function openEditor(){
     open = true; riding = false; group.visible = true; ui.style.display = '';
     const S = getS(); S.editor = true; S.editorRide = false; S.paused = true; S.state = 'riding'; S.run = null;
@@ -281,7 +289,7 @@ export function createEditor(api){
       const times = api.lsGet('trailDescent.levelTimes', {}) || {};
       const best = times[key];
       if (!(best <= raceT)) { times[key] = +raceT.toFixed(3); api.lsSet('trailDescent.levelTimes', times); toast('Race ' + raceT.toFixed(2) + 's'); }
-      if (doc.published) post('/level/time', { code: doc.published, version: doc.version, time: raceT, device: device() });
+      if (doc.published) levelBoard(raceT);
     } else if (first) toast('Level complete — racing unlocked');
     stopRide();
   }

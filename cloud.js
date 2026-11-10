@@ -1,7 +1,10 @@
 // Cloud save + leaderboards client. Local-first: everything lives in localStorage as before; the cloud copy is synced
-// (debounced) when online and merged so owned items / unlocks / best times are never lost. The only text a player can
-// type is a save code. Leaderboard names are the preset rider names.
+// (debounced) when online and merged so owned items / unlocks / best times are never lost. A player can type a save code
+// and, optionally, a custom rider name (checked here and again by the server with the same names.js filter).
+// Leaderboards show the custom name when the server says it is valid and not hidden, otherwise the generated preset name.
 import { MP_SERVER, NAME_A, NAME_B } from './net.js';
+import { checkName, nameKey, NAME_SAY } from './names.js';
+import { ALPHA as DEV_ALPHA } from './level.js';
 const ALPHA = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 export const fmtCode = c => (c || '').match(/.{1,4}/g)?.join('-') || '';
 export const cleanSaveCode = s => (s || '').toUpperCase().split('').filter(c => ALPHA.includes(c)).join('').slice(0, 16);
@@ -18,6 +21,12 @@ export const CATS = [
   {id:'trails', label:'Trails completed',           fmt:v => `${v}`},
   {id:'park',   label:'Dirt jump park best line',   fmt:v => `$${Math.round(v).toLocaleString()}`},
 ];
+// the same per-device id the level editor uses for likes / reports (16 chars of the level alphabet)
+export function deviceId(){ let id = J('trailDescent.device', '');
+  if (typeof id !== 'string' || id.length !== 16 || [...id].some(c => !DEV_ALPHA.includes(c))){ id = Array.from(crypto.getRandomValues(new Uint8Array(16)), x => DEV_ALPHA[x % DEV_ALPHA.length]).join(''); SETJ('trailDescent.device', id); }
+  return id; }
+// a route the deployed worker does not have yet answers 404 "not found"
+export const routeMissing = r => !!r && r.status === 404 && (!r.error || r.error === 'not found');
 const post = async (path, body, ms = 8000) => { const ac = new AbortController(), t = setTimeout(() => ac.abort(), ms);
   try { const r = await fetch(MP_SERVER + path, {method:'POST', body:JSON.stringify(body), signal:ac.signal, cache:'no-store'}); const j = await r.json().catch(() => ({})); return {status:r.status, ...j}; }
   finally { clearTimeout(t); } };
@@ -89,7 +98,32 @@ export function initCloud(g){   // g: {toast, worldIdx, onBoard(res), reload}
   setInterval(() => { if (Object.keys(st.queue).length) flushQueue(); }, 15000);
   const NB = (label, txt) => g.toast(`⭐ NEW BEST! ${label}: ${txt}`);
   function stat(cat, val, extra = {}){ const C = CATS.find(c => c.id === cat); if (!(val > 0)) return; if (!better(cat, val, false)) return; NB(C.label, C.fmt(val)); queue(cat, '/lb/stat', {cat, val, ...extra}); }
-  return { st, push, restore, wipe, on:f => st.listeners.add(f),
+  // ---- custom rider name. avail: null = not checked yet / offline, false = the worker has no name routes yet ("coming soon").
+  const NM = st.name = { custom: J('trailDescent.customName', null), avail: null, hidden: false, nextChange: 0, reported: new Set(J('trailDescent.nameReports', [])) };
+  const keepName = r => { NM.avail = true; NM.custom = r.name || null; NM.hidden = !!r.hidden; NM.nextChange = r.nextChange || 0; SETJ('trailDescent.customName', NM.custom); emit(); };
+  async function nameCall(path, body){ let r;
+    try { r = await post(path, {code:st.code, ...body}); } catch { NM.avail = NM.avail === true ? true : null; emit(); return {error:'offline', say:NAME_SAY.offline}; }
+    if (routeMissing(r)){ NM.avail = false; emit(); return {error:'offline', say:NAME_SAY.offline}; }
+    if (r.error === 'nosave' && await push()) r = await post(path, {code:st.code, ...body}).catch(() => ({error:'offline'}));
+    return r; }
+  async function refreshName(){ const r = await nameCall('/name/get', {}); if (r.ok) keepName(r); return r; }
+  async function setName(raw){ const c = checkName(raw); if (!c.ok) return c;
+    const r = await nameCall('/name/set', {name:c.name});
+    if (r.ok){ keepName(r); return {ok:true, name:r.name}; }
+    if (r.error === 'soon') NM.nextChange = r.nextChange || 0;
+    const say = r.say || NAME_SAY[r.error] || (r.error === 'nosave' ? NAME_SAY.nosave : r.status === 429 && !r.nextChange ? 'Slow down a little and try again' : NAME_SAY.word);
+    return {ok:false, reason:r.error, say, nextChange:r.nextChange}; }
+  async function clearName(){ const r = await nameCall('/name/clear', {}); if (r.ok){ keepName(r); return {ok:true}; } return {ok:false, reason:r.error, say:r.say || NAME_SAY.offline}; }
+  async function reportName(name){ const k = nameKey(name || '');
+    if (NM.reported.has(k)) return {ok:true, already:true};
+    let r; try { r = await post('/name/report', {device:deviceId(), name}); } catch { return {ok:false, say:'📡 Could not send the report. Try again later.'}; }
+    if (routeMissing(r)) return {ok:false, say:'Reporting names is coming soon'};
+    if (r.ok || r.error === 'missing'){ NM.reported.add(k); SETJ('trailDescent.nameReports', [...NM.reported].slice(-300)); emit(); }
+    return r.ok ? r : r.error === 'missing' ? {ok:true, gone:true} : {ok:false, say:'Could not send the report. Try again later.'}; }
+  setTimeout(refreshName, 4000);
+  // what a board shows for an entry: the custom name only when the server sent it and it passes the filter here too
+  const label = e => (e && e.custom && checkName(e.custom).ok) ? e.custom : e && Array.isArray(e.name) ? `${NAME_A[e.name[0]] || '?'} ${NAME_B[e.name[1]] || '?'}` : 'Rider';
+  return { st, push, restore, wipe, on:f => st.listeners.add(f), refreshName, setName, clearName, reportName, label, reported: n => NM.reported.has(nameKey(n || '')),
     jump(air, dist, tricks){ if (air > 0.35){ stat('air', +air.toFixed(3)); stat('dist', +dist.toFixed(2), {air:+air.toFixed(3)}); if (tricks > 0) stat('tricks', tricks, {air:+air.toFixed(3)}); } },
     speed(kmh){ stat('speed', +kmh.toFixed(1)); },
     park(score, dur, layout){ if (!(score > 0)) return; const key = layout ? 'park:' + layout : 'park'; if (!better(key, Math.round(score), false)) return; NB(CATS.find(c => c.id === 'park').label, CATS.find(c => c.id === 'park').fmt(score)); queue(key, '/lb/stat', {cat:'park', val:Math.round(score), dur:+dur.toFixed(2)}); },

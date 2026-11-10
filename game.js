@@ -5,6 +5,7 @@ import { spawnRagdoll, stepRagdoll, ragdollReport } from './ragdoll.js';
 import { longAccel, pumpAccel, gripRate, landingCall, wheelieStep, axleXZ, supportPitch, bodyPoint, BODY_POINTS, fakieAim, WHEEL_R } from './ridephys.js';
 import { initNet, NAME_A, NAME_B, EMOTES, cleanCode } from './net.js';
 import { initCloud, CATS as LB_CATS, fmtCode, cleanSaveCode } from './cloud.js';
+import { checkName, NAME_SAY, NAME_MAX } from './names.js';
 import { makeTextures, triplanar } from './textures.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -1604,7 +1605,7 @@ const PAGES = {
     {label:'Drone camera tilt', value:(SETTINGS.droneTilt||12) + '°', adj:d => { SETTINGS.droneTilt = Math.max(0, Math.min(35, (SETTINGS.droneTilt||12) + d*3)); saveSettings(); }},
     {label:'Follow distance', value:(SETTINGS.droneDist||8) + ' m', adj:d => { SETTINGS.droneDist = Math.max(4, Math.min(18, (SETTINGS.droneDist||8) + d)); saveSettings(); }},
     {label:'Follow height', value:(SETTINGS.droneHeight||4) + ' m', adj:d => { SETTINGS.droneHeight = Math.max(2, Math.min(12, (SETTINGS.droneHeight||4) + d)); saveSettings(); }},
-    {label:'Rider name', value:(() => { const n = mpName(); return `${NAME_A[n[0]]} ${NAME_B[n[1]]}`.toUpperCase(); })(), sub:'Preset words only. ← → changes it. No typing. Friends see it next time you join a room.', adj:d => { const n = mpName(), k = (n[0]*NAME_B.length + n[1] + d*7 + NAME_A.length*NAME_B.length) % (NAME_A.length*NAME_B.length); LS.set('trailDescent.mpName', [Math.floor(k/NAME_B.length), k % NAME_B.length]); }, act:() => { LS.set('trailDescent.mpName', [Math.floor(Math.random()*NAME_A.length), Math.floor(Math.random()*NAME_B.length)]); }},
+    ...nameRows(),
     {label:'Rider look', value:legacyRider ? 'CLASSIC' : 'ATHLETIC', sub:'Athletic is the lean rider. Classic is the original. Reloads.', act:() => { LS.set('trailDescent.legacyRider', !legacyRider); toast(legacyRider ? 'Athletic rider — reloading…' : 'Classic rider — reloading…'); setTimeout(() => location.reload(), 500); }},
     {label:'Controls', sub:'Rebind every keyboard and controller action', act:() => go('controls')},
     {label:'Controls / help', value:$('help').classList.contains('hidden') ? 'SHOW' : 'HIDE', act:() => $('help').classList.toggle('hidden')},
@@ -1619,7 +1620,7 @@ const PAGES = {
       if (host) items.push({label:'Lock room', value:ON(st.locked), sub:'When locked, nobody new can join', adj:() => NET.lock(!st.locked), act:() => NET.lock(!st.locked)});
       if (host) for (const p of st.peers.values()) items.push({label:`Remove ${p.label}`, sub:'Kick this rider from the room', act:() => NET.kick(p.id)});
       items.push({label:'Leave room', act:() => { NET.leave(); renderMenu(); }}); }
-    items.push({label:'Your rider name', value:`${NAME_A[nm[0]]} ${NAME_B[nm[1]]}`.toUpperCase(), sub:'Preset names only · ← → to change' + (inRoom ? ' (applies next time you join)' : ''), adj:d => { const k = (nm[0]*NAME_B.length + nm[1] + d*7 + NAME_A.length*NAME_B.length) % (NAME_A.length*NAME_B.length); LS.set('trailDescent.mpName', [Math.floor(k/NAME_B.length), k % NAME_B.length]); }, act:() => { const n = [Math.floor(Math.random()*NAME_A.length), Math.floor(Math.random()*NAME_B.length)]; LS.set('trailDescent.mpName', n); }});
+    items.push({label:'Your rider name', value:`${NAME_A[nm[0]]} ${NAME_B[nm[1]]}`.toUpperCase(), sub:'Rooms use your generated name · ← → to change' + (inRoom ? ' (applies next time you join)' : ''), adj:d => { const k = (nm[0]*NAME_B.length + nm[1] + d*7 + NAME_A.length*NAME_B.length) % (NAME_A.length*NAME_B.length); LS.set('trailDescent.mpName', [Math.floor(k/NAME_B.length), k % NAME_B.length]); }, act:() => { const n = [Math.floor(Math.random()*NAME_A.length), Math.floor(Math.random()*NAME_B.length)]; LS.set('trailDescent.mpName', n); }});
     items.push({label:'‹ Back', act:back});
     return {title:'MULTIPLAYER', html:'<p class="mpNote">Private rooms only — no chat, preset names and emotes. Your rider position and look are shared with the room while you are in it; nothing is stored.</p>', items}; },
   cloud: () => { const c = CLOUD && CLOUD.st; return {title:'CLOUD SAVE', html:`<p class="mpNote">Your progress (DOLLAHS, bikes, skins, unlocks, best times) is saved on this device and backed up online.<br>Use your <b>save code</b> to get it back on another browser. Keep it secret — anyone with the code can load your save.</p>`, items:[
@@ -1631,6 +1632,8 @@ const PAGES = {
   boards: () => { const C = LB_CATS[LBV.cat], tl = trails, html = LBV.res === undefined ? '<p class="mpNote">Loading…</p>' : !LBV.res || !LBV.res.ok ? '<p class="mpNote">📡 Leaderboards are offline right now.</p>' : boardHtml(LBV.res, C);
     const items = [{label:'Category', value:C.label.toUpperCase(), sub:PT('{LB} / {RB} (Q / E) or ← →'), adj:d => lbMove(d, 0)}];
     if (C.per === 'trail'){ items.push({label:'World', value:RAMP ? 'RAMPAGE' : 'MOUNTAIN', sub:'Switching world reloads the game', adj:() => switchWorld()}); items.push({label:'Trail', value:(tl[LBV.trail] || {}).name || '', adj:d => { LBV.trail = (LBV.trail + d + tl.length) % tl.length; lbLoad(); }}); }
+    const rep = reportable(LBV.res); if (rep.length){ LBV.rep = ((LBV.rep || 0) % rep.length + rep.length) % rep.length;
+      items.push({label:'Report a name', value:rep[LBV.rep], sub:'← → picks a name. Select to report it for review.', adj:d => { LBV.rep += d; }, act:() => reportName(rep[LBV.rep])}); }
     items.push({label:'‹ Back', act:back});
     return {title:'LEADERBOARDS', html, items}; },
   credits: () => ({title:'CREDITS', html:`<div class="credits"><p><b>Grip 'N Rip</b> — an open-world mountain bike game in the browser.</p>
@@ -2088,7 +2091,12 @@ function endParkLine(){ if (S.parkLine && CLOUD) CLOUD.park(S.parkLine.pts, Math
 // ---------- multiplayer (net.js): private rooms, remote riders; stays solo if the server can't be reached ----------
 // ---------- cloud save + leaderboards (cloud.js) ----------
 let cloudShow = false, cloudDel = false; const LBV = {cat:0, trail:0, res:undefined, seq:0};
-function boardHtml(r, C){ const rows = r.top.map(e => `<tr class="${e.me ? 'me' : ''}"><td>${e.rank}</td><td>${CLOUD.nameOf(e.name)}${e.me ? ' (you)' : ''}</td><td>${C.fmt(e.v)}</td></tr>`).join('');
+// a board row's name: the custom name when it is valid and not hidden, else the generated one. Custom names (not your own)
+// get a report flag; one report per device per name.
+function nameCell(e){ const n = CLOUD ? CLOUD.label(e) : 'Rider', custom = !!(CLOUD && e.custom && n === e.custom);
+  const flag = custom && !e.me ? (CLOUD.reported(n) ? ' <span class="nameRep done" title="Reported">⚑</span>' : ` <button class="nameRep" data-name="${n}" title="Report this name">⚑</button>`) : '';
+  return n + (e.me ? ' (you)' : '') + flag; }
+function boardHtml(r, C){ const rows = r.top.map(e => `<tr class="${e.me ? 'me' : ''}"><td>${e.rank}</td><td>${nameCell(e)}</td><td>${C.fmt(e.v)}</td></tr>`).join('');
   const mine = r.me ? `<p class="lbMe">You: <b>#${r.me.rank}</b> of ${r.total} · ${C.fmt(r.me.v)}</p>` : `<p class="lbMe">${r.total ? r.total + ' riders ranked' : 'No times yet'} · you're not on this board yet</p>`;
   return `<table class="lbT">${rows || '<tr><td colspan=3>Be the first!</td></tr>'}</table>${mine}`; }
 async function lbLoad(){ const C = LB_CATS[LBV.cat], seq = ++LBV.seq; LBV.res = undefined; if (menu.open && menu.page === 'boards') renderMenu();
@@ -2100,6 +2108,39 @@ const lbPanel = document.createElement('div'); lbPanel.id = 'lbPanel'; document.
 function showFinishBoard(r){ if (!r || !r.top) return; const C = LB_CATS.find(c => c.id === (r.cat || 'time'));
   lbPanel.innerHTML = `<h4>🏁 ${r.label || ''} — LEADERBOARD</h4>` + boardHtml({...r, top:r.top.slice(0, 5)}, C) + (r.improved ? '<p class="lbMe">⭐ New personal best on the board!</p>' : '');
   lbPanel.classList.add('on'); clearTimeout(lbPanelT); lbPanelT = setTimeout(() => lbPanel.classList.remove('on'), 9000); }
+// ---- custom rider names (optional; the generated preset name stays the default and is what rooms show)
+const NAME_S = () => CLOUD && CLOUD.st.name;
+function genName(){ const n = mpName(); return `${NAME_A[n[0]]} ${NAME_B[n[1]]}`; }
+function nameRows(){ const N = NAME_S(), soon = !N || N.avail === false, wait = N && N.nextChange > Date.now() ? Math.ceil((N.nextChange - Date.now()) / 3600000) : 0;
+  const shown = N && N.custom && !N.hidden && !soon ? N.custom : genName();
+  const rows = [
+    {label:'Rider name', value:shown.toUpperCase(), sub:N && N.custom && N.hidden ? 'Your custom name is being checked. Boards show your generated name for now.' : N && N.custom ? 'Your custom name. Leaderboards show it. Rooms show your generated name.' : 'Your generated name. Leaderboards and rooms show it.', act:() => {}},
+    {label:'Generated name', value:genName().toUpperCase(), sub:'← → picks another. Rooms always use this one.', adj:d => { const n = mpName(), k = (n[0]*NAME_B.length + n[1] + d*7 + NAME_A.length*NAME_B.length) % (NAME_A.length*NAME_B.length); LS.set('trailDescent.mpName', [Math.floor(k/NAME_B.length), k % NAME_B.length]); }, act:() => { LS.set('trailDescent.mpName', [Math.floor(Math.random()*NAME_A.length), Math.floor(Math.random()*NAME_B.length)]); }},
+    {label:'Custom name', value:soon ? 'SOON' : N.custom ? N.custom.toUpperCase() : 'NONE', sub:soon ? NAME_S.soonText() : wait ? `${NAME_SAY.soon} (about ${wait} h)` : `Optional. 3-${NAME_MAX} letters and numbers. You can change it about once a day.`, act:() => { if (soon){ toast(NAME_S.soonText()); if (CLOUD) CLOUD.refreshName().then(() => menu.open && renderMenu()); } else askCustomName(); }}];
+  if (N && N.custom && !soon) rows.push({label:'Back to generated name', sub:'Stop using ' + N.custom + ' and show ' + genName() + ' again', act:() => CLOUD.clearName().then(r => { toast(r.ok ? 'Back to ' + genName() : r.say); if (menu.open) renderMenu(); })});
+  return rows; }
+NAME_S.soonText = () => NAME_SAY.offline;
+function askCustomName(){ const ov = document.createElement('div'); ov.id = 'mpAsk'; const N = NAME_S();
+  ov.innerHTML = `<div class="mpBox"><h3>CUSTOM RIDER NAME</h3><input id="mpName" maxlength="${NAME_MAX}" autocomplete="off" spellcheck="false" placeholder="${genName().replace(' ', '')}" style="width:340px;letter-spacing:2px;text-transform:none;font-size:30px"><p class="mpNote" id="mpNameSay">3-${NAME_MAX} letters and numbers. No spaces.</p><div><button id="mpGo">Use this name</button> <button id="mpNo">Cancel</button></div></div>`;
+  document.body.appendChild(ov); const inp = ov.querySelector('#mpName'), say = ov.querySelector('#mpNameSay'), goB = ov.querySelector('#mpGo'); inp.value = N && N.custom || ''; inp.focus();
+  let busy = false;
+  const live = () => { const c = checkName(inp.value); say.textContent = inp.value === '' ? `3-${NAME_MAX} letters and numbers. No spaces.` : c.ok ? '✓ Looks good' : c.say; say.className = 'mpNote' + (c.ok || inp.value === '' ? '' : ' bad'); goB.disabled = !c.ok || busy; return c; };
+  const close = () => { ov.remove(); if (menu.open) renderMenu(); };
+  const submit = async () => { const c = live(); if (!c.ok || busy) return; busy = true; goB.disabled = true; say.textContent = 'Checking…';
+    const r = await CLOUD.setName(c.name); busy = false;
+    if (r.ok){ toast('You are now ' + r.name + ' on the leaderboards'); close(); return; }
+    say.textContent = r.say; say.className = 'mpNote bad'; goB.disabled = false; };
+  // the field only keeps ASCII letters and digits (drops spaces, symbols, emoji, accents and invisible characters)
+  inp.addEventListener('input', () => { const v = inp.value.replace(/[^A-Za-z0-9]/g, '').slice(0, NAME_MAX); if (v !== inp.value) inp.value = v; live(); });
+  inp.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') submit(); if (e.key === 'Escape') close(); }); inp.addEventListener('keyup', e => e.stopPropagation());
+  goB.onclick = submit; ov.querySelector('#mpNo').onclick = close; live(); }
+async function reportName(name, btn){ if (!CLOUD) return;
+  const r = await CLOUD.reportName(name);
+  if (btn){ const sp = document.createElement('span'); sp.className = 'nameRep done'; sp.title = 'Reported'; sp.textContent = '⚑'; btn.replaceWith(sp); }
+  toast(r.ok ? (r.already ? 'You already reported ' + name : 'Thanks. ' + name + ' was reported.') : r.say); if (menu.open && menu.page === 'boards') renderMenu(); }
+document.addEventListener('click', e => { const b = e.target.closest && e.target.closest('button.nameRep'); if (b){ e.preventDefault(); e.stopPropagation(); reportName(b.dataset.name, b); } }, true);
+// names on the open board a pad / keyboard player can report from the menu
+function reportable(res){ return res && res.ok && Array.isArray(res.top) ? [...new Set(res.top.filter(e => !e.me && e.custom && CLOUD && CLOUD.label(e) === e.custom && !CLOUD.reported(e.custom)).map(e => e.custom))] : []; }
 function askSaveCode(){ const ov = document.createElement('div'); ov.id = 'mpAsk';
   ov.innerHTML = `<div class="mpBox"><h3>RESTORE SAVE</h3><input id="mpCode" maxlength="19" autocomplete="off" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX" style="width:420px;letter-spacing:3px;font-size:28px"><div><button id="mpGo">Restore</button> <button id="mpNo">Cancel</button></div></div>`;
   document.body.appendChild(ov); const inp = ov.querySelector('#mpCode'); inp.focus();
@@ -2131,6 +2172,7 @@ editorApi = createEditor({
   THREE, scene, toast, getS: () => S, placeAt, updateChunks,
   lsGet: (k, d) => LS.get(k, d), lsSet: (k, v) => LS.set(k, v),
   hit: hitBind, bindLabel: id => keyLabel(kbBind(id)), padLabel: code => padLabel(code),
+  saveCode: () => CLOUD ? CLOUD.st.code : null, nameCell: e => nameCell(e),
   closeMenu, mainMenu: () => { S.paused = false; S.state = 'menu'; openMenu('main'); },
   camera: () => camera, view: () => renderer.domElement.getBoundingClientRect(),
 });
