@@ -1640,6 +1640,7 @@ const PAGES = {
     <p><b>Game, code, world, rider and bike models, textures:</b> made procedurally for this project (Three.js r160).</p>
     <p><b>Sound:</b> synthesized in the browser with Web Audio. No music tracks. Bike, wind, birds, leaves and creek are procedural.</p>
     <p><b>Fonts:</b> Bebas Neue & Barlow Condensed (SIL Open Font License, Google Fonts).</p>
+    <p><b>Name filter word list:</b> List of Dirty, Naughty, Obscene, and Otherwise Bad Words by Shutterstock (LDNOOBW), CC BY 4.0.</p>
     <p><b>Trick references:</b> Red Bull slopestyle trick dictionary, X Games BMX Tricktionary, riding.guide.</p>
     <p><b>Graphics Medium/High/Max:</b> CC0 textures & HDRIs from Poly Haven (polyhaven.com): sparse_grass, brown_mud_leaves_01, aerial_rocks_02, bark_brown_02, gravel, aerial_sand, red_dirt_mud_01, dry_riverbed_rock; skies pizzo_pernice_puresky (Mountain), quarry_01_puresky (Rampage).</p>
     <p><b>Engine:</b> three.js (MIT).</p></div>`, items:[{label:'‹ Back', act:back}]}),
