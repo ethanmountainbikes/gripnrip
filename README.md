@@ -24,6 +24,8 @@ A low-poly open-world mountain-bike game in the browser, inspired by Descenders 
 | Reset camera | X | Square | X |
 | Pause | Menu | Options | P / Esc |
 | Help panel | View | Share | H |
+| Wheelie (both sticks down together, then balance with the left stick; brake cancels) | Both sticks ↓, then left stick | Both sticks ↓, then left stick | K while rolling. Space does not hop while K is held |
+| Fakie (land a level 180, roll backward) | Left stick ← → in the air | Left stick ← → | A / D in the air |
 | Teleport to previous / next spot | D-pad ← / → | D-pad ← / → | [ / ] (or , / .), 1–9 and 0 jump straight to spots 1–10 |
 | Start / restart (menus) | A | Cross | Enter / Space |
 
@@ -31,9 +33,13 @@ This follows Descenders' published default controller bindings. The camera actio
 
 Controller support has been checked against an Xbox One pad's layout in Chrome, Edge and Firefox, including Firefox's non-standard layout where the triggers are axes. Press any button after loading so the browser detects the pad.
 
+Nintendo Switch pads (Nintendo, PowerA, PDP, HORI) are detected from the gamepad id. When the browser does not map one to the standard layout, `pad.js` remaps it by physical position, so the bottom face button does what Xbox A does, and a d-pad reported as a hat on axis 9 works. Button prompts follow the controller in use: Xbox letters, PlayStation symbols, or Nintendo letters in Nintendo positions (B bottom, A right, Y left, X top, L/R/ZL/ZR, +/−).
+
+Any controller that is not on the standard layout gets a setup offer the first time it connects. It is also in Settings → Controls → Set up controller. The setup asks for each button and stick in turn, with skip, redo, dead zone and stick inversion. It works with the keyboard and mouse too, and it is saved per controller on this device. Custom binds in Settings → Controls apply on top of it. Tests: `node tests/pad.test.mjs` and `node tests/pad-ui.mjs`.
+
 ## Riding physics
 - **Weight and momentum:** speed comes from gravity, with pedalling, drag and grass rolling resistance on top. The rider shifts visibly fore and aft, and the suspension compresses on landings and when you preload.
-- **Pumping:** compress (right stick ↓) on backsides and extend over faces to gain speed. Bad timing costs speed. Counter-pumping (right stick ↑) keeps you on the ground over rollers.
+- **Pumping:** compress (right stick ↓) on backsides and extend over faces to gain speed. Bad timing costs speed. Counter-pumping (right stick ↑) keeps you on the ground over rollers. A bunny hop is that compress then a pop; the pop adds upward speed and is not pulled into a dive by the lip falling away. Climbing a lip only pays the slope once (gravity). A rock or a step still costs extra. Coasting plays a soft freehub tick. Tire roll and wind stay quiet and follow speed and surface.
 - **Carving and slides:** the lean angle comes from your actual cornering force. Braking while steering breaks rear traction, so the bike drifts (the heading leads the travel direction), throws dust and scrubs off speed.
 - **Air:** the left stick spins and flips with rotational inertia. The right stick whips and tweaks the bike in proportion to how far you push it. Laying the bike over at takeoff (a scrub) flattens the trajectory and keeps your speed.
 - **Landings:** your velocity is projected onto the real terrain surface, on or off the trail. Within the tolerance, the bike's orientation is damped smoothly to the ground and there's no rebound or bounce.
@@ -138,16 +144,15 @@ Each park roll-in has a 12% pedal-up ramp at its back.
 - Quality Low / Med / High (High adds SSAO + bloom) under Settings.
 - Main menu with 3D flyover: Ride, Trails, Bike Shop, Settings, Credits; works with controller (D-pad/stick + A/B) and keyboard/mouse. Pause → Main Menu.
 
-## Sound effects
-All sound effects (chain clicks following pedal cadence, tyre roll by speed and surface, wind, landing thuds scaled by impact, skids, crashes, chairlift hum) are synthesized live with the Web Audio API in `sfx.js`. No sample files are used, so there is nothing to license. Adjust them with **Sound volume** in the settings menu (0% = mute).
+## Sound
+There is no music. Bike sounds and the nature bed are synthesized in the browser with the Web Audio API (`sfx.js`). No recorded samples are used, so there is nothing to license.
 
-## Music
-NCS was considered, but its FAQ says: *"Q. Can I use NCS music in my game? … Please get in touch via our commercial licensing form"*, so CC0 tracks from OpenGameArt are used instead:
-- "Action Track" and "Simple Action Beat": LushoGames (CC0)
-- "Rock Theme 3": Umplix (CC0)
-- "Fast Song": annandistance (CC0)
+- Soft freehub tick while coasting, quieter pedal ticks, tire roll that follows speed and surface, and a light wind that comes up with speed.
+- Birds are short random chirps, panned in stereo, and they happen more often near trees. Leaves rustle a little whenever you are moving, more so in the trees.
+- A very quiet creek is heard only in the lowest valley pockets. The mountain has no water, so this follows terrain height rather than a stream line.
+- **Sound volume** is the bike. **Ambience volume** is birds, leaves and the creek. Either can be set to 0%.
 
-Tracks play shuffled once you first press a key or button. Settings has music on/off and volume, and Skip Song is in the pause menu.
+Old saves that stored a music volume use that number as the ambience volume. Music on/off and Skip song are gone.
 
 ## Cosmetic skins (Bike Shop)
 The shop has tabs: Bikes, Paint, Jersey, Pants, Helmet and Goggles. Switch tabs with LB/RB, ←/→ or Q/E. The highlighted item shows live on a slowly orbiting 3D view of your rider.
@@ -206,12 +211,12 @@ Settings → **Graphics**: Low / Medium / High / Max. The setting is saved, and 
 
 ## Multiplayer (private rooms)
 Main menu (or pause menu) → **Multiplayer** → *Create room* gives a 6-character code; friends choose *Join with code* and type it.
-Up to 8 riders see each other ride (smoothed), with their bikes/skins and preset name tags. 4 emotes (👍 🔥 ⏳ 🏁) while stopped or on a lift: keyboard **T + 1–4**, controller **D-pad** (up/right/down/left); 1–6 stay teleports.
+Up to 8 riders see each other ride (smoothed), with their bikes/skins and preset name tags. 4 emotes (👍 🔥 ⏳ 🏁) while stopped or on a lift: hold **T** or **D-pad Up**, then **1–4** or the right stick. A short D-pad Up tap still shifts up a gear. Number keys stay teleports while the wheel is closed. Rooms show your generated rider name (two preset words, no typing), even if you set a custom leaderboard name.
 There is no chat: names and emotes are presets, rooms are private by code, the host can lock the room or remove riders, and
 nothing is stored. If the server can't be reached the game just stays single-player. The server lives in `server/` (see its README).
 
 ## Cloud save + leaderboards
 - On first launch the game makes a private **save code** (`XXXX-XXXX-XXXX-XXXX`) and asks you to write it down. Settings → **Cloud Save** shows it again, syncs, restores with a code on another browser, or deletes your cloud data.
 - Local first: progress stays in the browser and syncs (debounced, and after trail finishes) when online. Merging never loses owned bikes/skins or unlocks; best times keep the fastest; DOLLAHS/settings come from the newest copy (or the restored save).
-- **Leaderboards** (main and pause menu; LB/RB or Q/E switch category, D-pad changes world/trail): fastest time per trail, trick combo per run per trail, most tricks in one jump, biggest airtime, longest jump, top speed, lifetime DOLLAHS, trails completed, dirt jump park best line. Top 20 + your rank; preset rider names only. "NEW BEST!" toasts on personal bests.
+- **Leaderboards** (main and pause menu; LB/RB or Q/E switch category, D-pad changes world/trail): fastest time per trail, trick combo per run per trail, most tricks in one jump, biggest airtime, longest jump, top speed, lifetime DOLLAHS, trails completed, dirt jump park best line. Top 20 + your rank. Boards show your generated name, or your custom name if you set one (Settings → Custom name: 3-12 letters and numbers, filtered in the game and on the server, unique, about one change a day, Back to generated name any time). The ⚑ next to someone's custom name reports it (once per device); after 3 reports it is hidden until reviewed. Until the worker in `server/` is deployed, the game says "Custom names coming soon". "NEW BEST!" toasts on personal bests.
 - Server checks (see `server/README.md`): trail times need every checkpoint in order and each split under the 30 m/s physics cap; airtime ≤ 4 s; jump distance ≤ 30 m/s × airtime; tricks bounded by airtime; top speed ≤ 108 km/h; combo/park scores bounded by duration; lifetime DOLLAHS growth bounded by time; rate limits. Save codes are stored only as salted SHA-256 hashes; no personal data.

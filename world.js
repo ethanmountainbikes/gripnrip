@@ -6,6 +6,8 @@ export const W = 3.6;                 // trail half width (same as the original 
 export const HALF = RAMP ? 760 : 1380;             // world is 2.76 km x 2.76 km (7.6 km², ~32% more than the original 2.4 km)
 const CORE = RAMP ? 640 : 1200;                    // original map half-size: trail/lift layout stays inside it so nothing moves
 const BLEND = W + 7;                  // trail bench blends back into the hillside over this distance
+const PADS = [];                       // level pads under the shop and lift stations; filled once those spots exist
+let editorOn = false;                  // level-editor pad. Off during normal play, so the mountain is unchanged.
 
 // ---------- noise ----------
 function mulberry(a){ return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
@@ -156,6 +158,12 @@ export const trails = TRAIL_DEFS.map((def, id) => {
     for (let i = 0; i < n; i++){ let a = 0, c = 0; for (let j = Math.max(0, i-3); j <= Math.min(n-1, i+3); j++){ const w = 4 - Math.abs(i-j); a += dev[j]*w; c += w; } h[i] += a/c; }   // soften the kinks (no crest launches)
     for (let i = 1; i < n; i++) h[i] = Math.min(h[i], h[i-1] - 0.04);   // never climbs
   }
+  // Round off the sharpest crests: a slope that steepens by more than 0.035 per 2 m sample is shaved down.
+  // A hill top this tight throws a fast rider off the ground, and on the 2 m terrain mesh it shows as a hard seam.
+  // Rampage lines (and hand-shaped pro lines) keep their raw ridges, cut chutes and ledges on purpose.
+  if (!RAMP && !def.shape) for (let pass = 0; pass < 24; pass++){ let moved = false;
+    for (let i = 1; i < n - 1; i++){ const dk = (2*h[i] - h[i-1] - h[i+1])/2; if (dk > 0.035){ h[i] -= dk - 0.034; moved = true; } }
+    if (!moved) break; }
   const yaw = pts.map((p,i) => { const a = pts[Math.max(0,i-1)], b = pts[Math.min(n-1,i+1)]; return Math.atan2(-(b[0]-a[0]), -(b[1]-a[1])); });
   return {...def, id, pts, h, yaw, len:(n-1)*2};
 });
@@ -177,6 +185,11 @@ const PROF = {
   roller: (H,L) => ({L, p: t => t>=0 && t<=L ? H*Math.sin(Math.PI*t/L)**2 : 0}),
   rocks:  (H,L,n) => ({L, rock:true, p: t => t>=0 && t<=L ? H*Math.sin(Math.PI*n*t/L)**2 * (0.7+0.3*Math.sin(t*2.3)) : 0}),
   drop:   (H,L1,deck) => ({L:L1+deck, p: t => t<0 ? 0 : t<=L1 ? H*Math.pow(t/L1,1.2) : t<=L1+deck ? H : 0, wood:true}),
+  // Rock ledge: ease onto a short deck, then a steep face that eases out onto the descending tread. Slow speed can roll it; the lip falls away at speed.
+  rockDrop: (H) => { const up = Math.max(5, H / 0.2), deck = 1.1, face = Math.max(3.2, H / 0.42), lip = up + deck, L = lip + face;
+    return { L, wood: false, rock: true, handLand: true, p: t => { if (t < 0 || t > L) return 0; if (t <= up){ const u = t / up; return H * u * u * (3 - 2 * u); } if (t <= lip) return H; const u = (t - lip) / face; return H * (1 - u) * (1 - u); } }; },
+  // Smooth slab. Zero slope at the crest and at both ends, so it rides down instead of launching.
+  rockRoll: (H, down) => { const up = Math.max(5.5, H * 4.2), L = up + down; return { L, wood: false, rock: true, p: t => { if (t < 0 || t > L) return 0; if (t <= up){ const u = t / up; return H * u * u * (3 - 2 * u); } const u = (t - up) / down; return H * (1 - u * u * (3 - 2 * u)); } }; },
 };
 // Rampage-scale features (sized for ~45-55 km/h, the speed riders carry down the face)
 // big dirt drop: run-up lip, short flat deck, a knuckle and a long steep landing transition (like the park's Big Drop)
@@ -206,41 +219,50 @@ for (const tr of trails){
   const n = tr.pts.length;
   // features match the trail type (spacing = run-out after each feature)
   if (tr.kind === 'mega' || tr.pro) continue;
-  const spacing = {rampage:62, dh:55, enduro:50, flow:40, flowg:45, xc:60, tech:28, freeride:60, drops:60, pump:6, jumps:24}[tr.kind];
-  let i = 40, k = 0;
+  const spacing = {rampage:46, dh:38, enduro:36, flow:28, flowg:32, xc:40, tech:22, freeride:42, drops:42, pump:1, jumps:16}[tr.kind];
+  let i = tr.kind === 'tech' ? 4 : 40, k = 0;
   const sp = (JUMP_SPEEDS[tr.name] || []).filter(Boolean).sort((a,b)=>a-b), vRef = sp.length ? sp[sp.length>>1] : 30;   // the trail's typical speed = current jump size
-  while (i < n-(tr.kind==='rampage' ? 45 : 30)){
+  while (i < n-(tr.kind==='tech' ? 6 : tr.kind==='rampage' ? 45 : 30)){
     const turn = Math.abs(Math.atan2(Math.sin(tr.yaw[i+12]-tr.yaw[i]), Math.cos(tr.yaw[i+12]-tr.yaw[i])));
     const sl = (tr.h[i]-tr.h[i+10])/20;
     const crowded = tr.kind === 'rampage' && trails.some(o => o !== tr && !o.pro && o.pts.some(p => Math.hypot(p[0]-tr.pts[i][0], p[1]-tr.pts[i][1]) < 34 || Math.hypot(p[0]-tr.pts[Math.min(n-1,i+14)][0], p[1]-tr.pts[Math.min(n-1,i+14)][1]) < 34));
-    if (!crowded && turn < 0.18 && sl > 0.04 || (tr.kind==='pump' || tr.kind==='xc' || tr.kind==='tech') && turn < 0.3){
+    if (!crowded && turn < 0.18 && sl > 0.04 || (tr.kind==='pump' || tr.kind==='xc') && turn < 0.3 || tr.kind==='tech' && turn < 0.6){
       const v = (JUMP_SPEEDS[tr.name] || [])[k], g = v ? Math.max(0.7, Math.min(GMAX[tr.diff], (v/vRef)**2)) : 1;
       const S_ = (kind, pr) => JUMPY.has(kind) ? scaleProf(pr, g) : pr;
       const [x,z] = tr.pts[i], yaw = tr.yaw[i+2], A = (kind, hw, pr) => { const f = addFeature(kind, x, z, yaw, hw, S_(kind, pr), tr.id); f.k = k; f.g = JUMPY.has(kind) ? g : 1; return f; };
       let f;
       const sz = {green:0.7, blue:0.9, black:1.1, dblack:1.3}[tr.diff];   // feature size by difficulty
-      const hip = (H) => { const f = addFeature('kicker', x, z, yaw + (k%2 ? 0.35 : -0.35), KW, S_('kicker', PROF.kicker(H, KL)), tr.id); f.k = k; f.g = g; return f; };   // angled takeoff (hip)
+      const hip = (H) => { const ang = 0.05 + (k % 3) * 0.025; const f = addFeature('kicker', x, z, yaw + (k % 2 ? ang : -ang), KW, S_('kicker', PROF.kicker(H, KL)), tr.id); f.k = k; f.g = g; f.hip = ang; return f; };
+      const bigTable = () => A('table', 2.8, PROF.table(1.5*sz, 5.5, 8, 7));
       switch (tr.kind){
-        case 'dh':       f = [() => A('kicker', KW, PROF.kicker(KH, KL)), () => A('rocks', 2.6, PROF.rocks(0.28, 10, 5)), () => A('drop', 1.8, PROF.drop(1.2*sz, 5, 2.5)),
-                              () => A('stepdown', 2.4, PROF.stepdown(1.5*sz, 4.5, 2, 1.0, 6)), () => A('rockdrop', 2.0, {...PROF.drop(1.0*sz, 3, 2), rock:true}), () => A('gap', 2.4, PROF.gap(1.6*sz, 5, 3, 6))][k%6](); break;      // fast: jumps, rock gardens, drops
-        case 'enduro':   f = [() => A('rocks', 2.6, PROF.rocks(0.3, 12, 6)), () => A('rockdrop', 2.0, {...PROF.drop(1.0, 4, 2), rock:true}), () => hip(1.3), () => A('stepdown', 2.4, PROF.stepdown(1.3, 4, 2, 0.9, 5))][k%4](); break;
-        case 'flow':     f = [() => A('roller', 2.6, PROF.roller(0.5, 9)), () => A('table', 2.4, PROF.table(1.2*sz, 4, 3, 4)), () => A('stepup', 2.4, PROF.stepup(1.0, 4, 1.5, 1.3, 3, 5)), () => A('stepdown', 2.4, PROF.stepdown(1.2, 4, 1.5, 0.8, 5))][k%4](); break;                                         // rollers + tables
-        case 'flowg':    f = k%3===2 ? A('table', 2.4, PROF.table(0.8, 3.5, 2.5, 3.5)) : A('roller', 2.6, PROF.roller(0.35, 9)); break;
-        case 'xc':       f = A('roller', 2.6, PROF.roller(0.3, 9)); break;                                                                                         // gentle rolling terrain
-        case 'tech':     f = k%3===2 ? A('rockdrop', 1.6, {...PROF.drop(0.8, 3, 2), rock:true}) : A('rocks', 2.4, PROF.rocks(0.3, 8, 4)); break;                                     // rock gardens, small ledges
-        case 'freeride': f = [() => A('drop', 1.8, PROF.drop(2.0, 6, 3)), () => A('gap', 2.6, PROF.gap(2.0, 5.5, 4, 7)), () => A('stepdown', 2.6, PROF.stepdown(1.9, 5, 2.5, 1.2, 7)), () => hip(2.0), () => A('rockdrop', 2.0, {...PROF.drop(1.8, 5, 3), rock:true})][k%5](); break;                                 // big drops and gaps
-        case 'drops':    f = A('drop', 1.8, PROF.drop(1.6+0.3*(k%3), 6, 3)); break;
-        case 'pump':     f = A('roller', 2.6, PROF.roller(0.4, 9)); break;                                                                                          // consecutive rollers
+        case 'dh':       f = [() => A('kicker', KW, PROF.kicker(KH, KL)), () => hip(1.5*sz), () => bigTable(), () => A('rocks', 2.6, PROF.rocks(0.28, 10, 5)), () => A('drop', 1.8, PROF.drop(1.2*sz, 5, 2.5)),
+                              () => A('stepdown', 2.4, PROF.stepdown(1.5*sz, 4.5, 2, 1.0, 6)), () => A('gap', 2.4, PROF.gap(1.6*sz, 5, 3, 6))][k%7](); break;
+        case 'enduro':   f = [() => A('rocks', 2.6, PROF.rocks(0.3, 12, 6)), () => hip(1.3), () => bigTable(), () => A('rockdrop', 2.0, {...PROF.drop(1.0, 4, 2), rock:true}), () => A('stepdown', 2.4, PROF.stepdown(1.3, 4, 2, 0.9, 5))][k%5](); break;
+        case 'flow':     f = [() => A('roller', 2.6, PROF.roller(0.5, 9)), () => A('table', 2.4, PROF.table(1.2*sz, 4, 3, 4)), () => hip(1.15*sz), () => bigTable(), () => A('stepup', 2.4, PROF.stepup(1.0, 4, 1.5, 1.3, 3, 5)), () => A('stepdown', 2.4, PROF.stepdown(1.2, 4, 1.5, 0.8, 5))][k%6](); break;
+        case 'flowg':    f = k%4===3 ? hip(0.85) : k%3===2 ? A('table', 2.4, PROF.table(0.8, 3.5, 2.5, 3.5)) : A('roller', 2.6, PROF.roller(0.35, 9)); break;
+        case 'xc':       f = k%4===1 ? A('table', 2.2, PROF.table(0.55, 3.2, 2.6, 3.2)) : k%4===3 ? hip(0.7) : A('roller', 2.6, PROF.roller(0.3, 9)); break;
+        case 'tech': {
+          // Rock Garden: almost the whole tread is rock. One slot in twelve is a short dirt run-out.
+          const slot = k % 12;
+          if (slot === 0){ k++; i += 2; continue; }
+          const ahead = Math.abs(Math.atan2(Math.sin(tr.yaw[Math.min(n - 1, i + 10)] - yaw), Math.cos(tr.yaw[Math.min(n - 1, i + 10)] - yaw)));
+          if ((slot === 2 || slot === 8) && ahead < 0.16){ const H = 0.6 + (Math.floor(k / 6) % 3) * 0.4; f = addFeature('rockdrop', x, z, yaw, 3.3, PROF.rockDrop(H), tr.id); f.k = k; f.rockDrop = H; }
+          else if (slot === 5 && ahead < 0.35){ f = A('roll', 3.2, PROF.rockRoll(0.9 + (k % 3) * 0.2, 10 + (k % 2) * 2)); f.rockRoll = true; }
+          else { f = A('rocks', 3.2, { L: 12 + (k % 2) * 4, rock: true, wood: false, p: () => 0 }); f.garden = true; }
+          break; }
+        case 'freeride': f = [() => A('drop', 1.8, PROF.drop(2.0, 6, 3)), () => bigTable(), () => A('gap', 2.6, PROF.gap(2.0, 5.5, 4, 7)), () => hip(2.0), () => A('stepdown', 2.6, PROF.stepdown(1.9, 5, 2.5, 1.2, 7))][k%5](); break;
+        case 'drops':    f = k%3===1 ? hip(1.5) : k%3===2 ? bigTable() : A('drop', 1.8, PROF.drop(1.6+0.3*(k%3), 6, 3)); break;
+        case 'pump':     f = k%8===7 ? hip(0.6) : k%7===6 ? A('table', 2.1, PROF.table(0.42, 2.8, 2.2, 2.8)) : A('roller', 2.2, PROF.roller(0.72, 5.5)); break;
         case 'rampage': { const kinds = trails[tr.id].feats, kk = kinds[k % kinds.length];
-          if (k >= kinds.length + 2){ f = A('roller', 2.6, PROF.roller(0.6, 10)); break; }
+          if (k >= kinds.length + 2){ f = k%2 ? hip(1.8) : bigTable(); break; }
           f = kk === 'bigdrop' ? A('drop', 2.8, bigDropP(3.4)) : kk === 'stratos' ? A('drop', 3.0, bigDropP(5.2)) :
               kk === 'wooddrop' ? A('drop', 2.0, PROF.drop(2.2, 6, 3)) : kk === 'goblin' ? A('stepdown', 2.8, PROF.stepdown(3.0, 7, 7, 2.2, 12)) :
               kk === 'stepdown' ? A('stepdown', 2.6, PROF.stepdown(2.2, 5.5, 4, 1.4, 9)) : kk === 'gap' ? A('gap', 2.6, PROF.gap(2.0, 5.5, 6, 8)) :
               (() => { const g = A('gap', 2.8, PROF.gap(2.4, 6, 12, 8)); CANYONS.push({x:g.x, z:g.z, dx:g.dx, dz:g.dz, t0:6, t1:18, w:g.hw+3, D:9}); g.canyon = true; return g; })();
           if (kk === 'goblin') f.goblin = true; if (kk === 'stratos') f.stratos = true; break; }
-        case 'jumps':    f = [() => A('table', 2.4, PROF.table(1.4, 4.5, 3.5, 4.5)), () => A('double', 2.4, PROF.double(1.5, 4.5, 2.2, 5)), () => A('stepup', 2.4, PROF.stepup(1.2, 4.5, 1.8, 1.6, 3, 5)), () => hip(1.4), () => A('gap', 2.4, PROF.gap(1.5, 4.5, 2.5, 6))][k%5](); break;                    // consecutive tables & doubles
+        case 'jumps':    f = [() => bigTable(), () => A('double', 2.4, PROF.double(1.5, 4.5, 2.2, 5)), () => hip(1.4), () => A('stepup', 2.4, PROF.stepup(1.2, 4.5, 1.8, 1.6, 3, 5)), () => A('gap', 2.4, PROF.gap(1.5, 4.5, 2.5, 6)), () => A('table', 2.4, PROF.table(1.4, 4.5, 3.5, 4.5))][k%6](); break;
       }
-      k++; i += Math.round(spacing/2) + Math.round((f.L0 || f.L)/2); continue;
+      k++; i += (tr.kind === 'tech' ? 0 : Math.round(spacing/2)) + Math.round((f.L0 || f.L)/2); continue;
     }
     i += 3;
   }
@@ -253,6 +275,8 @@ export const MEGA = [];
 for (const tr of trails){ if (tr.kind !== 'mega') continue;
   const PLAN = [{H:6, gap:20, HL:5.6}, {H:7, gap:24, HL:6.5}, {H:7.5, gap:22, HL:4, kind:'stepdown'}, {H:5, gap:18, HL:6.5, kind:'stepup'}, {H:7, gap:26, HL:6.5}, {H:6, gap:28, HL:1.5, finale:true}];
   const n = tr.pts.length; let i = 75, k = 0;   // 150 m flat-out run-in past the summit traverse before the first lip
+  if (n > 60){ const hf = addFeature('kicker', tr.pts[18][0], tr.pts[18][1], tr.yaw[20] + 0.45, 2.3, PROF.kicker(1.2, 5), tr.id); hf.hip = 0.45;
+    addFeature('table', tr.pts[46][0], tr.pts[46][1], tr.yaw[48], 2.6, PROF.table(1.7, 5.5, 8, 6.5), tr.id); }
   if (tr.megaStart){ let bd = 1e9, bi = 0; tr.pts.forEach((p, j) => { const d = Math.hypot(p[0]-tr.megaStart[0], p[1]-tr.megaStart[1]); if (d < bd){ bd = d; bi = j; } }); i = bi + 75; }
   for (const J of PLAN){ if (i >= n - 40) break;
     const s = Math.max(0.05, (tr.h[i] - tr.h[Math.min(n-1, i+30)])/60), v = ((MEGA_LIP[k] ?? 62)/3.6), g = 9.81, back = 3;
@@ -293,9 +317,9 @@ if (!RAMP) { const d = PARK.dir, yaw = Math.atan2(-d[0], -d[1]), sx = -d[1], sz 
   const spine = (H, L) => ({L, p: t => t>=0 && t<=L ? H*Math.pow(1 - Math.abs(2*t/L - 1), 1.4) : 0});
   const whale = (H, L1, L3) => ({L:L1+L3, p: t => t<0 ? 0 : t<=L1 ? H*Math.pow(t/L1, 2.2) : t<=L1+L3 ? H*Math.pow(1-(t-L1)/L3, 0.8) : 0});
   const lines = [
-    {off:-30, name:'Beginner Tables', diff:'green', roll:4.5, items:[k => ['table', PROF.table(0.7, 3.5, 2.5, 3.5)], k => ['roller', PROF.roller(0.35, 7)], k => ['table', PROF.table(0.8, 3.5, 3, 3.5)], k => ['roller', PROF.roller(0.35, 7)], k => ['table', PROF.table(0.8, 3.5, 3, 3.5)], k => ['table', PROF.table(0.7, 3.5, 2.5, 3.5)]]},
-    {off:-10, name:'Intermediate Doubles', diff:'blue', roll:6, items:[k => ['double', PROF.double(1.1, 3.8, 1.6, 4)], k => ['double', PROF.double(1.2, 4, 1.8, 4.5)], k => ['stepup', PROF.stepup(1.0, 4, 1.4, 1.3, 2.5, 4.5)], k => ['stepdown', PROF.stepdown(1.2, 4, 1.6, 0.8, 4.5)], k => ['double', PROF.double(1.2, 4, 1.8, 4.5)]]},
-    {off:12, name:'Pro Big Doubles', diff:'black', roll:8, items:[k => ['double', PROF.double(1.7, 4.5, 2.6, 5)], k => ['double', PROF.double(1.8, 4.6, 2.8, 5.2)], k => ['double', PROF.double(1.8, 4.6, 2.8, 5.2)], k => ['double', PROF.double(1.9, 4.8, 3.0, 5.4)]]},
+    {off:-30, name:'Beginner Tables', diff:'green', roll:4.5, items:[k => ['table', PROF.table(0.7, 3.5, 2.5, 3.5)], k => ['kicker', PROF.kicker(0.65, 4), 0.42], k => ['roller', PROF.roller(0.35, 7)], k => ['table', PROF.table(0.8, 3.5, 3, 3.5)], k => ['roller', PROF.roller(0.35, 7)], k => ['table', PROF.table(0.8, 3.5, 3, 3.5)]]},
+    {off:-10, name:'Intermediate Doubles', diff:'blue', roll:6, items:[k => ['table', PROF.table(1.55, 5, 8, 6)], k => ['kicker', PROF.kicker(1.15, 4.5), -0.48], k => ['double', PROF.double(1.1, 3.8, 1.6, 4)], k => ['double', PROF.double(1.2, 4, 1.8, 4.5)], k => ['stepdown', PROF.stepdown(1.2, 4, 1.6, 0.8, 4.5)]]},
+    {off:12, name:'Pro Big Doubles', diff:'black', roll:8, items:[k => ['table', PROF.table(2.0, 6, 10, 7)], k => ['kicker', PROF.kicker(1.6, 5), 0.5], k => ['double', PROF.double(1.7, 4.5, 2.6, 5)], k => ['double', PROF.double(1.8, 4.6, 2.8, 5.2)], k => ['double', PROF.double(1.9, 4.8, 3.0, 5.4)]]},
     {off:32, name:'Slopestyle Mix', diff:'black', roll:9, items:[k => ['kicker', PROF.kicker(1.3, 5), -0.3], k => ['spine', spine(1.4, 8)], k => ['kicker', whale(1.2, 3.2, 3)], k => ['table', PROF.table(1.3, 4, 4, 4)], k => ['kicker', PROF.kicker(1.3, 5), 0.3], k => ['roller', PROF.roller(0.4, 6)], k => ['roller', PROF.roller(0.4, 6)], k => ['berm', PROF.berm(1.6, 14, 1, 5)]]},
   ];
   PARK.lines = lines;
@@ -307,7 +331,7 @@ if (!RAMP) { const d = PARK.dir, yaw = Math.atan2(-d[0], -d[1]), sx = -d[1], sz 
     const deck = t => { if (pad === null) pad = terrainH(PARK.x, PARK.z); const k = Math.floor(t*4), f = t*4 - k; return Math.max(0, raw(k)*(1-f) + raw(k+1)*f); };
     const prof = {L: LIP+KN+LL, wood:true, p: t => t<0 ? 0 : t<=LIP ? deck(t) : t<=LIP+KN ? HK : t<=LIP+KN+LL ? (u => HK*(1 - u*u*(3-2*u)))((t-LIP-KN)/LL) : 0};
     const f = addFeature('drop', ox, oz, yaw, 2.4, prof, -1);
-    f.tower = true; PARK.drop = {x:f.x, z:f.z, dx:f.dx, dz:f.dz, L:prof.L, lip:LIP, h:HT, off, name:'Big Drop'}; }
+    f.tower = true; f.park = 'Big Drop'; PARK.drop = {x:f.x, z:f.z, dx:f.dx, dz:f.dz, L:prof.L, lip:LIP, h:HT, off, name:'Big Drop'}; }
   const rollin = (H) => ({L: 4 + 3 + 4*H, p: t => t<0 ? 0 : t<=4 ? H*t/4 : t<=7 ? H : t<=7+4*H ? H*0.5*(1+Math.cos(Math.PI*(t-7)/(4*H))) : 0});   // steep back, deck, long smooth roll-in
   // roll-in mound with a pedal-up access ramp at its back (12% grade, straight behind the mound on the line's own axis, away from every line):
   // the ramp climbs from the pad to the 3 m deck, then the long smooth roll-in drops into the line. Riding it backwards is a gentle 12% descent.
@@ -317,37 +341,89 @@ if (!RAMP) { const d = PARK.dir, yaw = Math.atan2(-d[0], -d[1]), sx = -d[1], sz 
       if (u < 4) return Math.max(0, deck - G*(4 - u) - base(ox + d[0]*u, oz + d[1]*u));
       return R.p(u); }}; };
   for (const ln of lines){ let t = -92; const ox = PARK.x + d[0]*t + sx*ln.off, oz = PARK.z + d[1]*t + sz*ln.off, pr = rollinRamp(ln.roll, ox, oz);
-    const r = addFeature('roller', ox - d[0]*pr.ramp, oz - d[1]*pr.ramp, yaw, 2.6, pr, -1); r.rollin = true; r.rampLen = pr.ramp; ln.start = t + 5.5; ln.rampFoot = {x: ox - d[0]*pr.ramp, z: oz - d[1]*pr.ramp};
+    const r = addFeature('roller', ox - d[0]*pr.ramp, oz - d[1]*pr.ramp, yaw, 2.6, pr, -1); r.rollin = true; r.rampLen = pr.ramp; r.park = ln.name; ln.start = t + 5.5; ln.rampFoot = {x: ox - d[0]*pr.ramp, z: oz - d[1]*pr.ramp};
     t += r.L - pr.ramp + 6;
-    for (let k = 0; k < ln.items.length && t < 62; k++){ const [kind, p, yo] = ln.items[k](k);
-      const f = addFeature(kind === 'spine' ? 'table' : kind, PARK.x + d[0]*t + sx*ln.off, PARK.z + d[1]*t + sz*ln.off, yaw + (yo || 0), kind === 'berm' ? 5 : 2.4, p, -1); f.park = ln.name;
+    for (let k = 0; k < ln.items.length && t < 62; k++){ const [kind, p] = ln.items[k](k);
+      if (kind === 'berm') continue;   // the linking berms are laid with the packed tread, aimed along the line
+      const f = addFeature(kind === 'spine' ? 'table' : kind, PARK.x + d[0]*t + sx*ln.off, PARK.z + d[1]*t + sz*ln.off, yaw, kind === 'berm' ? 5 : 2.4, p, -1); f.park = ln.name; f.hip = 0;
       t += p.L + (kind === 'roller' ? 1 : 9); } }
-  // pump-track loop: rollers around an oval with berms at both ends (ride it laps, no pedalling)
-  { const cx = PARK.x + sx*56, cz = PARK.z + sz*56, A = 26, B = 9;
-    for (let k = 0; k < 12; k++){ const a = k/12*Math.PI*2, x = cx + d[0]*A*Math.cos(a) + sx*B*Math.sin(a), z = cz + d[1]*A*Math.cos(a) + sz*B*Math.sin(a);
-      const tx = -d[0]*A*Math.sin(a) + sx*B*Math.cos(a), tz = -d[1]*A*Math.sin(a) + sz*B*Math.cos(a), ty = Math.atan2(-tx, -tz);
-      if (Math.abs(Math.cos(a)) > 0.85) addFeature('berm', x, z, ty, 4, PROF.berm(1.2, 8, Math.cos(a) > 0 ? -1 : 1, 4), -1).park = 'Pump Track';
-      else addFeature('roller', x, z, ty, 2.4, PROF.roller(0.45, 5), -1).park = 'Pump Track'; }
-    PARK.pump = {x:cx, z:cz}; } }
-// real 3D boulders replace the old sine-bump rock gardens. Small rocks (<= 0.45 m) are part of the ground: wheels roll
-// over their real dome shape (a jolt and some speed loss, never a launch). Big rocks (>= 0.6 m) are solid obstacles beside
-// the line: ride round them or hop them. A >= 2 m clear lane is always left down the middle of every garden.
+  // pump-track loop: one continuous packed oval. Rollers and berms rise out of the tread, so the surface never drops back to the flat pad.
+  { const cx = PARK.x + sx*56, cz = PARK.z + sz*56, A = 28, B = 10, N = 40;
+    const at = a => [cx + d[0]*A*Math.cos(a) + sx*B*Math.sin(a), cz + d[1]*A*Math.cos(a) + sz*B*Math.sin(a)];
+    for (let k = 0; k < N; k++){ const a0 = k/N*Math.PI*2, a1 = (k+1)/N*Math.PI*2, mid = (a0+a1)/2;
+      const [x, z] = at(a0), [x2, z2] = at(a1), chord = Math.hypot(x2-x, z2-z), yaw = Math.atan2(-(x2-x), -(z2-z));
+      const tight = Math.abs(Math.cos(mid)), peak = 0.16 + (1-tight)*0.62, bank = tight > 0.4 ? 0.2 + tight*1.25 : 0.06;
+      const fdx = -Math.sin(yaw), fdz = -Math.cos(yaw), side = ((fdz)*((x+x2)/2-cx) + (-fdx)*((z+z2)/2-cz)) >= 0 ? 1 : -1;
+      const len = chord + 1.2;
+      const f = addFeature('roller', x, z, yaw, 2.55, {L: len, p: (t, us) => { if (t < 0 || t > len) return 0; const u = Math.min(1, Math.max(0, t/chord));
+        return 0.14 + peak*Math.sin(Math.PI*u)**2 + bank*Math.max(0, Math.min(1, (side*us + 0.3)/2.3)); }}, -1);
+      f.park = 'Pump Track'; f.groom = true; f.pump = true; }
+    PARK.pump = {x:cx, z:cz, A, B}; } }
+// Rock shapes are the collision shapes. Small rocks are ground the wheels climb (a jolt and some speed loss, no launch).
+// Big rocks are solid: head-on is a crash, a glance pushes you off. Rock Garden is packed low angular slabs
+// across almost the whole tread, with the tall rocks kept off the riding line. Other gardens stay rounded.
 export const BOULDERS = [];
 const smallDome = (b, d) => d >= b.r ? 0 : b.h*0.5*(1 + Math.cos(Math.PI*d/b.r));
 const bigDome = (b, d) => d >= b.r ? 0 : b.h*Math.sqrt(1 - (d/b.r)**4);
 export const boulderH = (b, d) => b.big ? bigDome(b, d) : smallDome(b, d);
-for (const f of features){ if (!f.rock || f.kind !== 'rocks') continue;
-  const rnd = mulberry(Math.round(f.x*31 + f.z*17) + 7); f.p = () => 0; f.boulders = [];
+// Height of a boulder at a world point. Angular rocks are square pyramids (the mesh is the same pyramid).
+export function rockTop(b, x, z){
+  const dx = x - b.x, dz = z - b.z;
+  if (b.ang){ const c = Math.cos(b.rot || 0), s = Math.sin(b.rot || 0), lx = dx*c + dz*s, lz = -dx*s + dz*c;
+    const m = Math.max(Math.abs(lx), Math.abs(lz)) / b.r; return m >= 1 ? 0 : b.h * (1 - m); }
+  const d = Math.hypot(dx, dz); return d >= b.r ? 0 : (b.big ? bigDome(b, d) : smallDome(b, d));
+}
+// If (x,z) is inside a big rock, the push-out point and the horizontal normal. Null when clear.
+export function rockContact(b, x, z){
+  const dx = x - b.x, dz = z - b.z;
+  if (!b.ang){ const d = Math.hypot(dx, dz), R = b.r*0.95 + 0.12; if (d >= R) return null;
+    const nx = dx/(d || 1), nz = dz/(d || 1); return { nx, nz, x: b.x + nx*R, z: b.z + nz*R }; }
+  const c = Math.cos(b.rot || 0), s = Math.sin(b.rot || 0);
+  let lx = dx*c + dz*s, lz = -dx*s + dz*c;
+  if (Math.max(Math.abs(lx), Math.abs(lz)) >= b.r) return null;
+  const xFace = Math.abs(lx) >= Math.abs(lz), sign = Math.sign((xFace ? lx : lz) || 1), R = b.r;
+  if (xFace) lx = sign * R; else lz = sign * R;
+  const nx = xFace ? sign*c : -sign*s, nz = xFace ? sign*s : sign*c;
+  return { nx, nz, x: b.x + (lx*c - lz*s), z: b.z + (lx*s + lz*c) };
+}
+function fillGarden(f){
+  const rnd = mulberry(Math.round(f.x*31 + f.z*17) + 11); f.p = () => 0; f.boulders = [];
   const at = (t, us) => [f.x + f.dx*t + f.dz*us, f.z + f.dz*t - f.dx*us];
-  const nS = Math.round(f.L*1.4);
-  for (let i = 0; i < nS*3 && f.boulders.length < nS; i++){
-    const h = 0.12 + rnd()*0.33, r = h*2.4 + 0.25, t = 0.6 + rnd()*(f.L-1.2), us = (rnd()*2-1)*(f.hw-0.2);
-    if (f.boulders.some(b => Math.hypot(b.t-t, b.us-us) < (b.r + r)*0.75)) continue;
-    const [x, z] = at(t, us); const b = {x, z, t, us, h, r, big:false, rot:rnd()*6.28, f}; f.boulders.push(b); }
-  for (let k = 0, side = rnd() < 0.5 ? -1 : 1, NB = f.crash ? 6 : 3; k < NB; k++, side = -side){
-    const h = f.crash ? 1.1 + rnd()*0.7 : 0.65 + rnd()*0.4, r = f.crash ? 0.8 + rnd()*0.4 : 0.55 + rnd()*0.35, t = (k+0.5)/NB*f.L + (rnd()-0.5)*1.5, us = side*(1.0 + r + rnd()*0.6);
-    const [x, z] = at(t, us); f.boulders = f.boulders.filter(b => Math.hypot(b.t-t, b.us-us) > r + b.r*0.6);
-    f.boulders.push({x, z, t, us, h, r, big:true, rot:rnd()*6.28, f}); }
+  const stepT = 0.8, stepU = 0.8;
+  for (let t = 0.4; t < f.L - 0.4; t += stepT) for (let us = -f.hw + 0.3; us <= f.hw - 0.3; us += stepU){
+    if (rnd() < 0.02 && Math.abs(us) > 0.55) continue;
+    const tt = t + (rnd() - 0.5) * 0.16, uu = Math.abs(us) < stepU * 0.5 ? (rnd() - 0.5) * 0.12 : us + (rnd() - 0.5) * 0.16;
+    const edge = Math.min(1, Math.abs(uu) / f.hw);
+    const h = Math.abs(uu) < 1.35 ? 0.12 + rnd() * 0.08 : 0.18 + rnd() * 0.1 + edge * 0.06;
+    const r = Math.abs(uu) < 1.35 ? 0.85 + rnd() * 0.16 : 0.7 + rnd() * 0.16;
+    const [x, z] = at(tt, uu);
+    f.boulders.push({ x, z, t: tt, us: uu, h, r, big: false, ang: true, rot: rnd() * 6.28, f });
+  }
+  for (let k = 0, side = rnd() < 0.5 ? -1 : 1, NB = 5; k < NB; k++, side = -side){
+    const h = 0.55 + rnd() * 0.35, r = 0.5 + rnd() * 0.22;
+    const t = (k + 0.5) / NB * f.L, us = side * (f.hw + 3.6);
+    const [x, z] = at(t, us);
+    f.boulders.push({ x, z, t, us, h, r, big: true, ang: true, rot: rnd() * 1.57, f });
+  }
+  BOULDERS.push(...f.boulders);
+}
+for (const f of features){ if (!f.rock || f.kind !== 'rocks') continue;
+  if (f.garden){ fillGarden(f); continue; }
+  const rnd = mulberry(Math.round(f.x*31 + f.z*17) + 7); f.p = () => 0; f.boulders = [];
+  const garden = false;
+  const at = (t, us) => [f.x + f.dx*t + f.dz*us, f.z + f.dz*t - f.dx*us];
+  const nS = Math.round(f.L * (garden ? 2.8 : 1.4)), gapK = garden ? 0.48 : 0.75;
+  for (let i = 0; i < nS*4 && f.boulders.length < nS; i++){
+    const h = garden ? 0.16 + rnd()*0.5 : 0.12 + rnd()*0.33, r = garden ? 0.52 + rnd()*0.42 : h*2.4 + 0.25;
+    const t = 0.4 + rnd()*(f.L - 0.8), us = (rnd()*2 - 1) * (f.hw - (garden ? 0.05 : 0.2));
+    if (garden && Math.abs(us) < f.hw*0.2 && rnd() < 0.62) continue;   // dirt pockets in the tread
+    if (f.boulders.some(b => Math.hypot(b.t - t, b.us - us) < (b.r + r)*gapK)) continue;
+    const [x, z] = at(t, us); f.boulders.push({x, z, t, us, h, r, big:false, ang:garden, rot:rnd()*6.28, f}); }
+  for (let k = 0, side = rnd() < 0.5 ? -1 : 1, NB = f.crash ? 6 : garden ? 4 : 3; k < NB; k++, side = -side){
+    const h = f.crash ? 1.1 + rnd()*0.7 : garden ? 0.7 + rnd()*0.55 : 0.65 + rnd()*0.4, r = f.crash ? 0.8 + rnd()*0.4 : garden ? 0.62 + rnd()*0.28 : 0.55 + rnd()*0.35;
+    const t = (k + 0.5)/NB*f.L + (rnd() - 0.5)*1.5, us = side*(garden ? 0.85 + r*0.35 : 1.0 + r + rnd()*0.6);
+    const [x, z] = at(t, us); f.boulders = f.boulders.filter(b => Math.hypot(b.t - t, b.us - us) > r + b.r*0.55);
+    f.boulders.push({x, z, t, us, h, r, big:true, ang:garden, rot:rnd()*1.57, f}); }
   f.hw += 1.0; BOULDERS.push(...f.boulders); }
 features.forEach(f => { if (f.wood === undefined) f.wood = false; });
 export const DIFF = {green:{icon:'●', label:'Green', color:'#2fae4a'}, blue:{icon:'■', label:'Blue', color:'#2f6fff'}, black:{icon:'◆', label:'Black', color:'#111'}, dblack:{icon:'◆◆', label:'Double black', color:'#111'}, pro3:{icon:'◆◆◆', label:'PRO · Triple black', color:'#ff5a1f'}, pro:{icon:'PRO', label:'Pro line', color:'#ff7a00'}};
@@ -360,10 +436,178 @@ const segGrid = new Map(), featGrid = new Map();
 const put = (g, minx, maxx, minz, maxz, v) => { for (let i=Math.floor(minx/CELL); i<=Math.floor(maxx/CELL); i++) for (let j=Math.floor(minz/CELL); j<=Math.floor(maxz/CELL); j++){ const k = key(i,j); let a = g.get(k); if (!a) g.set(k, a = []); a.push(v); } };
 for (const tr of trails) for (let i=0;i<tr.pts.length-1;i++){ const a = tr.pts[i], b = tr.pts[i+1];
   put(segGrid, Math.min(a[0],b[0])-BLEND, Math.max(a[0],b[0])+BLEND, Math.min(a[1],b[1])-BLEND, Math.max(a[1],b[1])+BLEND, tr.id*100000 + i); }
+// Landings: a 30° downslope covering where a rider at slow, typical and fast speed touches down.
+// Tables keep their deck. Mega lips are already solved. Canyons stay open.
+function featRetarget(f){
+  f.minx = Math.min(f.x, f.x + f.dx*f.L) - f.hw - 2; f.maxx = Math.max(f.x, f.x + f.dx*f.L) + f.hw + 2;
+  f.minz = Math.min(f.z, f.z + f.dz*f.L) - f.hw - 2; f.maxz = Math.max(f.z, f.z + f.dz*f.L) + f.hw + 2;
+}
+const LAND_KIND = new Set(['kicker','table','double','gap','stepup','stepdown','drop','rockdrop']);
+const _near = [];
+export const landingFixes = [];
+export function parkLayoutTag(){
+  let h = 2166136261;
+  for (const f of features){ if (!(f.park || f.groom)) continue;
+    const s = `${f.park}|${f.kind}|${Math.round(f.x)}|${Math.round(f.z)}|${Math.round((f.L || 0) * 10)}|${f.groom ? 1 : 0}`;
+    for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619); }
+  return (h >>> 0).toString(36).slice(0, 6);
+}
+export function layoutTag(trailId){
+  let h = 2166136261;
+  for (const f of features){ if (f.trail !== trailId) continue;
+    const s = `${f.kind}|${Math.round(f.x)}|${Math.round(f.z)}|${Math.round((f.L||0)*10)}|${f.hip?1:0}|${f.landed?1:0}`;
+    for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619); }
+  return (h >>> 0).toString(36).slice(0, 6);
+}
+function approachMs(f){
+  const tr = trails[f.trail];
+  const km = tr && (JUMP_SPEEDS[tr.name] || [])[f.k];
+  if (km) return Math.max(6, Math.min(16, km/3.6));
+  if (f.mega) return 16;
+  return {green:8, blue:11, black:13, dblack:15, pro3:15}[tr && tr.diff] || (f.park ? 11 : 10);
+}
+for (const f of features){
+  if (f.mega || f.canyon || f.boulders || f.rollin || f.handLand || !LAND_KIND.has(f.kind)) continue;
+  const old = f.p, oldL = f.L, v = approachMs(f);
+  let lipT = 0, lipH = -1;
+  for (let i = 1; i <= 36; i++){ const t = oldL*i/36*0.8, h = old(t, 0); if (h >= lipH){ lipH = h; lipT = t; } }
+  if (lipH < 0.7) continue;
+  const face = Math.max(0.08, (old(lipT, 0) - old(Math.max(0, lipT - 0.5), 0))/0.5);
+  let grade = 0.08; { const tr = trails[f.trail]; if (tr){ let bi = 0, bd = 1e9; for (let i = 0; i < tr.pts.length; i += 3){ const d = (tr.pts[i][0]-f.x)**2 + (tr.pts[i][1]-f.z)**2; if (d < bd){ bd = d; bi = i; } }
+    const j = Math.min(tr.pts.length - 1, bi + 10); grade = Math.max(0, (tr.h[bi] - tr.h[j]) / Math.max(4, (j - bi)*2)); } }
+  let lo = 1e9, hi = 0;
+  for (const spd of [v*0.75, v, Math.min(17, v*1.2)]){
+    const vy = face*spd + 0.45;
+    let hit = lipT + spd*2.2;
+    for (let t = 0.1; t < 3.4; t += 0.02){
+      const dist = lipT + spd*t;
+      const y = lipH + vy*t - 0.5*9.81*t*t + grade*spd*t;
+      const gnd = dist <= oldL ? old(dist, 0) : 0;
+      if (y <= gnd + 0.05){ hit = dist; break; }
+    }
+    lo = Math.min(lo, hit); hi = Math.max(hi, hit);
+  }
+  let deckEnd = lipT;
+  for (let t = lipT; t < oldL; t += 0.35) if (old(t, 0) > lipH*0.72) deckEnd = t;
+  const drop = Math.tan(30*Math.PI/180);
+  // The ramp starts just before the shortest flight and is still descending at the longest one.
+  // A ramp that begins at the lip runs out of height in a couple of metres and the rider cases beyond it.
+  const start = Math.max(deckEnd + 0.3, lo - 1.5);
+  let end = Math.max(start + 4, hi + 2);
+  let h0 = Math.min(2.2, Math.max(1.1, drop * Math.min(8, end - start)));
+  end = Math.min(end, start + h0 / drop + 0.5);
+  if (end <= start + 1) continue;
+  f.p = (t, us) => {
+    const base = t <= oldL ? old(Math.min(Math.max(t, 0), oldL), us) : 0;
+    if (t <= deckEnd || t > end) return base;
+    // Ride up onto the landing over a few metres. A step would be a wall and the head would hit it.
+    if (t < start){ const u = Math.max(0, (t - (start - h0/0.55)) / (h0/0.55)); return Math.max(base, h0 * Math.min(1, u)); }
+    const ramp = Math.max(0, h0 - drop * (t - start));
+    return Math.max(base, ramp);
+  };
+  f.L = Math.max(oldL, end);
+  f.landed = true;
+  featRetarget(f);
+  landingFixes.push(f);
+}
+// Hips and long landings were aimed off the tread. Point every trail jump down the trail and cut it where the centreline leaves the corridor.
+function seatJumps(){
+  const angLim = 10 * Math.PI / 180, wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
+  for (const f of features){
+    if (!(f.trail >= 0) || f.mega || !LAND_KIND.has(f.kind)) continue;
+    const tr = trails[f.trail]; if (!tr) continue;
+    const near = (x, z) => { let bi = 0, bd = 1e9; for (let i = 0; i < tr.pts.length; i++){ const d = (tr.pts[i][0] - x) ** 2 + (tr.pts[i][1] - z) ** 2; if (d < bd){ bd = d; bi = i; } } return { d: Math.sqrt(bd), yaw: tr.yaw[bi] }; };
+    const o = near(f.x, f.z);
+    f.yaw = o.yaw; f.dx = -Math.sin(o.yaw); f.dz = -Math.cos(o.yaw); f.hip = 0;
+    let keep = 0;
+    for (let t = 0; t <= f.L + 1e-6; t += 0.5){
+      const n = near(f.x + f.dx * t, f.z + f.dz * t);
+      if (n.d > W + 0.15 || Math.abs(wrap(Math.atan2(-f.dx, -f.dz) - n.yaw)) > angLim * 0.92) break;
+      keep = t;
+    }
+    if (keep >= 3 && keep < f.L - 0.25){
+      // Cut at a bend, the ramp would stop mid-face as a cliff, and that edge rode like a lip.
+      // Ease the last couple of metres back down to the tread instead. If the cut took the real lip
+      // with it (the first crest is in the eased part or beyond), what is left is not a lip at all.
+      const old = f.p, cut = keep, fade = Math.min(3.2, Math.max(1.6, cut * 0.5));
+      let peak = 0, peakT = 0;
+      for (let i = 1; i <= 28; i++){ const t = f.L * i / 28, h = old(t, 0);
+        if (h + 0.02 >= peak){ if (h > peak){ peak = h; peakT = t; } } else if (peak > 0.12 && t > peakT + 0.5) break; }
+      if (peakT > cut - fade) f.cut = true;
+      f.p = (t, us) => {
+        if (t < 0 || t > cut) return 0;
+        const h = old(t, us);
+        if (t <= cut - fade) return h;
+        const u = (t - (cut - fade)) / fade;
+        return h * (1 - u * u * (3 - 2 * u));
+      };
+      f.L = cut;
+    }
+    featRetarget(f);
+  }
+}
+seatJumps();
+// Packed tread through the dirt-jump lines and the paths that join them. Heights are a max, so the ribbon shows in the gaps and the jumps stay on top of it.
+function groomPark(){
+  if (RAMP || !PARK.lines) return;
+  const d = PARK.dir, sx = -d[1], sz = d[0];
+  const along = (x, z) => (x - PARK.x) * d[0] + (z - PARK.z) * d[1];
+  const latOf = (x, z) => (x - PARK.x) * -d[1] + (z - PARK.z) * d[0];
+  const XZ = (t, lat) => [PARK.x + d[0] * t + sx * lat, PARK.z + d[1] * t + sz * lat];
+  const addGroom = (x, z, yaw, len, hw, name, bank) => {
+    const f = addFeature('roller', x, z, yaw, hw, { L: len, p: (t, us) => {
+      if (t < 0 || t > len) return 0;
+      const ae = Math.abs(us), lip = ae <= hw * 0.52 ? 0 : Math.min(1, (ae - hw * 0.52) / (hw * 0.48));
+      let h = 0.08 + 0.36 * lip * lip;
+      if (bank) h += bank.h * Math.max(0, Math.min(1, (bank.side * us + hw * 0.15) / hw));
+      return h;
+    } }, -1);
+    f.groom = true; f.park = name; f.tread = true; return f;
+  };
+  const lay = (pts, hw, name) => { for (let i = 0; i < pts.length - 1; i++){ const [x, z] = pts[i], [x2, z2] = pts[i + 1], len = Math.hypot(x2 - x, z2 - z); if (len < 0.35) continue;
+    addGroom(x, z, Math.atan2(-(x2 - x), -(z2 - z)), len + (i < pts.length - 2 ? 1.7 : 0.4), hw, name); } };
+  const samples = (t0, t1, lat, step) => { const pts = []; const n = Math.max(1, Math.ceil(Math.abs(t1 - t0) / step)), dir = t1 >= t0 ? 1 : -1;
+    for (let i = 0; i <= n; i++) pts.push(XZ(t0 + dir * Math.abs(t1 - t0) * i / n, lat)); return pts; };
+  const groups = new Map();
+  for (const f of features){ if (!f.park || f.groom || f.pump) continue; let g = groups.get(f.park); if (!g) groups.set(f.park, g = []); g.push(f); }
+  const lines = [];
+  for (const [name, fs] of groups){
+    const lat = fs.reduce((s, f) => s + latOf(f.x, f.z), 0) / fs.length;
+    let t0 = 1e9, t1 = -1e9;
+    for (const f of fs){ t0 = Math.min(t0, along(f.x, f.z)); t1 = Math.max(t1, along(f.x + f.dx * f.L, f.z + f.dz * f.L)); }
+    lines.push({ name, lat, t0, t1, wood: fs.every(f => f.wood) });
+  }
+  lines.sort((a, b) => a.lat - b.lat);
+  const dirt = lines.filter(l => l.name !== 'Big Drop');
+  for (const ln of lines){
+    if (ln.wood){ lay(samples(ln.t0 - 16, ln.t0 + 2, ln.lat, 6), 2.3, ln.name); continue; }
+    lay(samples(ln.t0 - 4, ln.t1 + 12, ln.lat, 7), 3.15, ln.name);
+  }
+  // A half-turn. bulge +1 swings downhill, -1 swings uphill, so the berms don't cut back through the jumps.
+  const turn = (t, lat0, lat1, bulge) => { const R = Math.abs(lat1 - lat0) / 2, n = 7, pts = [];
+    for (let i = 0; i <= n; i++){ const u = i / n; pts.push(XZ(t + bulge * R * Math.sin(Math.PI * u), lat0 + (lat1 - lat0) * u)); }
+    return pts; };
+  for (let i = 0; i < dirt.length - 1; i++){
+    const a = dirt[i], b = dirt[i + 1], mid = (a.lat + b.lat) / 2;
+    lay(turn(a.t1 + 12, a.lat, mid, 1), 2.3, a.name);
+    lay(samples(a.t1 + 12, b.t0, mid, 8), 2.2, 'Park link');
+    lay(turn(b.t0, mid, b.lat, -1), 2.3, b.name);
+  }
+  if (dirt.length){
+    const first = dirt[0], last = dirt[dirt.length - 1], north = last.lat + 12;
+    const barT = Math.min(...dirt.map(l => l.t0)) - 6;
+    lay(turn(last.t1 + 12, last.lat, north, 1), 2.2, last.name);
+    lay(samples(last.t1 + 12, barT, north, 8), 2.1, 'Park return');
+    const lats = [first.lat, ...dirt.map(l => l.lat), north];
+    lay([...new Set(lats)].sort((p, q) => p - q).map(lat => XZ(barT, lat)), 2.2, 'Park access');
+    if (PARK.pump){ const plat = latOf(PARK.pump.x, PARK.pump.z) - (PARK.pump.B || 10);
+      lay([XZ(-6, last.lat + 4), XZ(-6, plat), XZ(8, plat)], 2.2, 'Pump Track'); }
+  }
+}
+groomPark();
 for (const f of features) put(featGrid, f.minx, f.maxx, f.minz, f.maxz, f);
 
 // nearest point on each trail within reach: returns [{t, s, d, h}] (t = trail id, s = distance along, d = lateral distance, h = path height)
-const _near = [];
 export function nearTrails(x, z){
   _near.length = 0;
   const segs = segGrid.get(key(Math.floor(x/CELL), Math.floor(z/CELL))); if (!segs) return _near;
@@ -382,10 +626,27 @@ export function nearTrails(x, z){
 }
 export function trailDist(x,z){ let m = 1e9; for (const n of nearTrails(x,z)) m = Math.min(m, n.d); return m; }
 export function inPark(x,z){ return Math.hypot(x-PARK.x, z-PARK.z) <= PARK.r+6; }
-export function isDirt(x,z){ return trailDist(x,z) <= W+0.3 || inPark(x,z) || Math.hypot(x-PARK.x, z-PARK.z) <= PARK.r+35 || featH(x,z) > 0.05 || connDist(x,z) <= CW; }   // wooden decks and connector paths ride like trail
+export function isDirt(x,z){ return editorDirt(x, z) || trailDist(x,z) <= W+0.3 || inPark(x,z) || Math.hypot(x-PARK.x, z-PARK.z) <= PARK.r+35 || featH(x,z) > 0.05 || connDist(x,z) <= CW; }   // wooden decks and connector paths ride like trail
 
-// terrain without features: hillside with benched trails cut in, plus small off-trail bumps
-export function terrainH(x, z){
+// Level pads under the shop and the lift stations. Filled after those spots are chosen, from the raw hillside.
+function padWeight(dx, dz, p){
+  const lx = dx * p.c - dz * p.s, lz = dx * p.s + dz * p.c;
+  const ox = lx < p.x0 ? p.x0 - lx : lx > p.x1 ? lx - p.x1 : 0;
+  const oz = lz < p.z0 ? p.z0 - lz : lz > p.z1 ? lz - p.z1 : 0;
+  const outside = Math.hypot(ox, oz);
+  if (outside >= p.blend) return 0;
+  if (outside <= 0) return 1;
+  return 1 - smooth(0, p.blend, outside);
+}
+function addPad(x, z, yaw, x0, x1, z0, z1, blend){
+  const reach = Math.hypot(Math.max(Math.abs(x0), Math.abs(x1)), Math.max(Math.abs(z0), Math.abs(z1))) + blend;
+  PADS.push({ x, z, yaw, x0, x1, z0, z1, blend, h: terrainRaw(x, z).h, r2: reach * reach, c: Math.cos(yaw), s: Math.sin(yaw) });
+}
+// World point of a building-local offset. yaw is the three.js Y rotation (local -Z is the door / downhill of a lift).
+export function localXZ(x, z, yaw, lx, lz){
+  return [x + lx * Math.cos(yaw) + lz * Math.sin(yaw), z - lx * Math.sin(yaw) + lz * Math.cos(yaw)];
+}
+function terrainRaw(x, z){
   const b = base(x,z); let ws = 0, hs = 0, wmax = 0, dmin = 1e9;
   for (const n of nearTrails(x,z)){ const w = 1 - smooth(W+0.6, BLEND, n.d); if (w > 0){ const k = w**8; ws += k; hs += k*n.h; if (w > wmax) wmax = w; } if (n.d < dmin) dmin = n.d; }
   // the closest trail dominates (sharp weights), so a neighbouring trail's bench never tilts the one you're riding
@@ -393,16 +654,37 @@ export function terrainH(x, z){
   if (CANYONS.length) h += canyonCut(x, z);
   const rough = Math.min(1, Math.max(0, (dmin-W)/4)) * (1 - parkMask(x,z));
   if (rough > 0) h += rough*(0.22*Math.sin(x*0.13)*Math.sin(z*0.11) + 0.06*Math.sin(x*0.37+z*0.29));
-  return h;
+  return { h, dmin };
+}
+// terrain without features: hillside with benched trails cut in, plus a flat pad under each building
+export function terrainH(x, z){
+  if (editorOn && editorPad(x, z)) return EDITOR_BASE + sculptAt(x, z);
+  const raw = terrainRaw(x, z);
+  if (!PADS.length) return raw.h;
+  let acc = 0, wsum = 0, solid = 0;
+  for (let i = 0; i < PADS.length; i++){
+    const p = PADS[i], dx = x - p.x, dz = z - p.z;
+    if (dx * dx + dz * dz > p.r2) continue;
+    const w = padWeight(dx, dz, p);
+    if (w <= 0) continue;
+    if (w >= 1) solid = p.h;
+    acc += w * p.h; wsum += w;
+  }
+  // The flat footprint always wins, including a start deck that sits on a trail. The blend stays off the tread.
+  if (solid) return solid;
+  if (wsum <= 0 || raw.dmin < W + 2) return raw.h;
+  const w = wsum < 1 ? wsum : 1;
+  return raw.h * (1 - w) + (acc / wsum) * w;
 }
 function featHq(x, z, withRocks){
-  const fs = featGrid.get(key(Math.floor(x/CELL), Math.floor(z/CELL))); if (!fs) return 0; let h = 0;
+  const fs = featGrid.get(key(Math.floor(x/CELL), Math.floor(z/CELL))) || []; let h = 0;
   for (const f of fs){ if (x<f.minx||x>f.maxx||z<f.minz||z>f.maxz) continue;
     const rx = x-f.x, rz = z-f.z, t = rx*f.dx + rz*f.dz, us = rx*f.dz - rz*f.dx, u = Math.abs(us);
     if (t < 0 || t > f.L || u > f.hw + (f.wood ? 0 : 1.2)) continue;
-    if (f.boulders){ if (!withRocks) continue; for (const b of f.boulders){ if (b.big) continue; const d = Math.hypot(x-b.x, z-b.z); if (d < b.r){ const v = smallDome(b, d); if (v > h) h = v; } } continue; }
+    if (f.boulders){ if (!withRocks) continue; for (const b of f.boulders){ if (b.big) continue; const v = rockTop(b, x, z); if (v > h) h = v; } continue; }
     let v = f.p(t, us); if (!f.wood && u > f.hw) v *= 0.5*(1+Math.cos(Math.PI*(u-f.hw)/1.2));   // dirt jumps have rounded sides
     if (v > h) h = v; }
+  if (editorOn) h = Math.max(h, editorHeight(x, z));
   return h;
 }
 export const featH = (x, z) => featHq(x, z, true), featBase = (x, z) => featHq(x, z, false);
@@ -424,20 +706,47 @@ export const groundH = (x,z) => terrainH(x,z) + featH(x,z);
 // ---------- trees (deterministic per 100 m cell, cached) ----------
 export const TCELL = 100;
 const treeCache = new Map();
+function treeBlocked(x, z){
+  // Off the tread, and at least 2.5 m from a trail centre, a landing, a path, a lift, a gate, the shop or a spawn.
+  if (trailDist(x, z) < Math.max(2.5, W + 2.5)) return true;
+  if (featH(x, z) > 0.02 || featClear(x, z) < 2.5) return true;
+  if (connDist(x, z) < CW + 2.2) return true;
+  if (nearLiftStation(x, z, 16) || liftLineDist(x, z) < 8) return true;
+  if (Math.hypot(x - SHOP.x, z - SHOP.z) < 26 || Math.hypot(x + 150, z - 380) < 18) return true;
+  if (inPark(x, z) || Math.hypot(x - PARK.x, z - PARK.z) < PARK.r + 18) return true;
+  for (const s of spots) if (Math.hypot(x - s.x, z - s.z) < 14) return true;
+  return false;
+}
 export function treesInCell(ci, cj){
   const k = key(ci, cj); let a = treeCache.get(k); if (a) return a; a = [];
-  if (RAMP){ treeCache.set(k, a); return a; }   // desert: no trees (sparse scrub is drawn as bushes)
   const r = mulberry(ci*7919 + cj*104729 + 17);
-  for (let n=0;n<70;n++){
-    const x = (ci + r())*TCELL, z = (cj + r())*TCELL, hgt = 9 + r()*13, rot = r()*6, hue = r();
-    const forest = noise(x/260+40, z/260-12) + 0.25 + (Math.max(Math.abs(x), Math.abs(z)) > CORE-90 ? 0.3 : 0);   // denser forest in the new outer band
-    if (r() > forest*1.6) continue;
-    const b = base(x,z); if (b > PEAK.h*0.75 + 40) continue;                  // tree line
-    if (inPark(x,z) || Math.hypot(x-PARK.x, z-PARK.z) < PARK.r+38) continue;
-    if (Math.hypot(x-SHOP.x, z-SHOP.z) < 24 || Math.hypot(x+150, z-380) < 22) continue;   // bike shop clearing (+ base plaza clearing)
-    if (trailDist(x,z) < W+2.5 || featH(x,z) > 0) continue;
-    if (connDist(x,z) < CW+2 || nearLiftStation(x,z,16) || liftLineDist(x,z) < 16) continue;   // keep paths, stations and lift lines clear
-    a.push({x, z, y:terrainH(x,z)-0.2, h:hgt, rot, hue});
+  const x0 = ci*TCELL, z0 = cj*TCELL;
+  if (!RAMP){
+    for (let n=0;n<130;n++){
+      const x = (ci + r())*TCELL, z = (cj + r())*TCELL, hgt = 8 + r()*14, rot = r()*6, hue = r();
+      const forest = noise(x/220+40, z/220-12) + 0.45 + (Math.max(Math.abs(x), Math.abs(z)) > CORE-90 ? 0.25 : 0);
+      if (r() > forest*1.35) continue;
+      const b = base(x,z); if (b > PEAK.h*0.75 + 40) continue;
+      if (treeBlocked(x, z)) continue;
+      a.push({x, z, y:terrainH(x,z)-0.2, h:hgt, rot, hue, near: r() < 0.55});
+    }
+  }
+  // A corridor of trunks just outside the riding line, in both worlds. Desert lines are shorter scrub-trees.
+  for (const tr of trails){
+    for (let i = 4; i < tr.pts.length; i += 7){
+      const [x, z] = tr.pts[i];
+      if (x < x0 - 14 || x > x0 + TCELL + 14 || z < z0 - 14 || z > z0 + TCELL + 14) continue;
+      const yaw = tr.yaw[i], nx = Math.cos(yaw), nz = -Math.sin(yaw);
+      for (const side of [-1, 1]){
+        const d = 7.4 + ((i + side) % 3) * 1.5;
+        const tx = x + nx*side*d, tz = z + nz*side*d;
+        if (tx < x0 || tx >= x0 + TCELL || tz < z0 || tz >= z0 + TCELL) continue;
+        if (treeBlocked(tx, tz)) continue;
+        if (a.some(t => (t.x-tx)**2 + (t.z-tz)**2 < 20)) continue;
+        const hgt = RAMP ? 4.5 + (i%5) : 10 + (i%8);
+        a.push({x:tx, z:tz, y:terrainH(tx,tz)-0.2, h:hgt, rot:(i%6)*0.4, hue:(i%7)/7, near:true});
+      }
+    }
   }
   treeCache.set(k, a); return a;
 }
@@ -512,7 +821,11 @@ export const SHOP = (() => { let best = null;
     if (c >= 10 && Math.hypot(x-LIFTS[0].bx, z-LIFTS[0].bz) > 35) best = {x, z, yaw: Math.atan2(x - J[0], z - J[1])}; }   // door faces the junction
   return best; })();
 const shopDoor = [SHOP.x - Math.sin(SHOP.yaw)*12, SHOP.z - Math.cos(SHOP.yaw)*12], parkGate = [PARK.x + 100*Math.cos(2.88), PARK.z + 100*Math.sin(2.88)];
-spots.push({name:'Bike Shop', shop:true, x: SHOP.x - Math.sin(SHOP.yaw)*20, z: SHOP.z - Math.cos(SHOP.yaw)*20, yaw: SHOP.yaw + Math.PI});   // always-open teleport on the porch spur, facing the door
+spots.push({name:'Bike Shop', shop:true, x: SHOP.x - Math.sin(SHOP.yaw)*13, z: SHOP.z - Math.cos(SHOP.yaw)*13, yaw: SHOP.yaw + Math.PI});   // on the flat apron in front of the steps, facing the door
+// Flat pad under the cabin, porch, yard and the apron. Corners share one height; the rim blends back into the hill.
+addPad(SHOP.x, SHOP.z, SHOP.yaw, -12, 12, -18, 11, 8);
+for (const L of LIFTS){ addPad(L.bx, L.bz, L.yaw, -6.5, 6.5, -10, 6, 7); addPad(L.tx, L.tz, L.yaw, -6.5, 6.5, -10, 6, 7); }
+if (RAMP) for (const tr of trails){ const yaw = tr.yaw[0], [x, z] = tr.pts[0], bx = x + Math.sin(yaw) * 3.2, bz = z + Math.cos(yaw) * 3.2; addPad(bx, bz, yaw, -3.6, 3.6, -3.8, 3.8, 5); }
 // waypoints on a ring 105 m from the park centre so paths go around the pad and its jump lines, never through them
 const ring = (...degs) => degs.map(a => [PARK.x + 150*Math.cos(a*Math.PI/180), PARK.z + 105*Math.sin(a*Math.PI/180)]);
 const CONN_DEFS = RAMP ? [
@@ -537,13 +850,125 @@ export const connectors = CONN_DEFS.map(wp => { const pts = [];
     for (let i = (k ? 1 : 0); i <= n; i++){ const u = i/n; pts.push([ax + (bx-ax)*u, az + (bz-az)*u]); } }
   // gentle wiggle-free smoothing at the corners
   for (let it = 0; it < 6; it++) for (let i = 1; i < pts.length-1; i++){ pts[i] = [(pts[i-1][0]+2*pts[i][0]+pts[i+1][0])/4, (pts[i-1][1]+2*pts[i][1]+pts[i+1][1])/4]; }
-  return {pts}; });
+  return {pts, half: 1.3}; });
 export const CW = 1.3;   // connector half width
+// Unnamed exploration: narrow singletrack and a wider fire road. No gates, no timers.
+// They join a trail, a lift, or the shop, and bend off jump corridors.
+function exploreLine(wps, half){
+  const pts = [];
+  for (let k = 0; k < wps.length - 1; k++){
+    const [ax, az] = wps[k], [bx, bz] = wps[k + 1], n = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 2));
+    for (let i = k ? 1 : 0; i <= n; i++){
+      const u = i / n; let x = ax + (bx - ax) * u, z = az + (bz - az) * u;
+      if (featClear(x, z) < 10){ const a = Math.atan2(bz - az, bx - ax) + Math.PI / 2; x += Math.cos(a) * 16; z += Math.sin(a) * 16; }
+      pts.push([x, z]);
+    }
+  }
+  for (let it = 0; it < 4; it++) for (let i = 1; i < pts.length - 1; i++) pts[i] = [(pts[i - 1][0] + 2 * pts[i][0] + pts[i + 1][0]) / 4, (pts[i - 1][1] + 2 * pts[i][1] + pts[i + 1][1]) / 4];
+  connectors.push({ pts, half, explore: true });
+}
+{ const mids = trails.map(t => { const i = Math.floor(t.pts.length * 0.45); return { p: t.pts[i], q: t.pts[Math.floor(t.pts.length * 0.72)] }; });
+  mids.forEach((m, i) => {
+    let best = null, bd = 1e9;
+    for (const L of LIFTS){ const d = Math.hypot(m.p[0] - L.bx, m.p[1] - L.bz); if (d > 80 && d < bd && d < 700){ bd = d; best = [L.bx, L.bz]; } }
+    if (best){ const mx = (m.p[0] + best[0]) / 2, mz = (m.p[1] + best[1]) / 2, a = Math.atan2(best[1] - m.p[1], best[0] - m.p[0]) + Math.PI / 2;
+      exploreLine([m.p, [mx + Math.cos(a) * 55, mz + Math.sin(a) * 55], best], 1.15); }
+    if (i % 2 === 0 && mids[i + 1]){ const o = mids[i + 1].q, mx = (m.q[0] + o[0]) / 2, mz = (m.q[1] + o[1]) / 2;
+      if (Math.hypot(m.q[0] - o[0], m.q[1] - o[1]) < 900) exploreLine([m.q, [mx + 70, mz - 40], o], 1.15); }
+  });
+  const road = RAMP ? [[0, 385], [150, 330], [250, 200], [80, 80], [-40, 200]] : [valley, J, [PARK.x, PARK.z + PARK.r + 40], L_(1), L_(6)];
+  exploreLine(road, 3.4);
+}
+// Side trails, fire roads and connectors stay out of the jump park, the pump track and feature footprints.
+// A path that has to meet another path or a named trail does it along that line, not as an X of two ribbons.
+export let pathsRerouted = 0;
+function pathForbidden(x, z){
+  if (!RAMP && Math.hypot(x - PARK.x, z - PARK.z) < PARK.r + 4) return 'park';
+  if (PARK.pump){ const dx = x - PARK.pump.x, dz = z - PARK.pump.z, along = dx * PARK.dir[0] + dz * PARK.dir[1], lat = dx * -PARK.dir[1] + dz * PARK.dir[0];
+    if ((along / 36) ** 2 + (lat / 18) ** 2 < 1) return 'pump'; }
+  for (const f of features){ if (f.kind === 'berm' || f.rollin || f.groom) continue;
+    const t = (x - f.x) * f.dx + (z - f.z) * f.dz, u = Math.abs((x - f.x) * f.dz - (z - f.z) * f.dx);
+    if (t > 0.5 && t < (f.L || 0) - 0.5 && u < (f.hw || 2) + 1.2) return 'feat'; }
+  return '';
+}
+function pathEntry(x, z){
+  if (!PARK.lines) return false;
+  for (const ln of PARK.lines){ if (!ln.rampFoot) continue;
+    const dx = x - ln.rampFoot.x, dz = z - ln.rampFoot.z, back = -(dx * PARK.dir[0] + dz * PARK.dir[1]), lat = Math.abs(dx * -PARK.dir[1] + dz * PARK.dir[0]);
+    if (back > -6 && back < 26 && lat < 7) return true; }
+  return false;
+}
+function pushClear(x, z){
+  if (pathEntry(x, z)) return [x, z];
+  let px = x, pz = z;
+  if (!RAMP && Math.hypot(px - PARK.x, pz - PARK.z) < PARK.r + 6){
+    const a = Math.atan2(pz - PARK.z, px - PARK.x);
+    px = PARK.x + Math.cos(a) * (PARK.r + 14); pz = PARK.z + Math.sin(a) * (PARK.r + 14);
+  }
+  for (let it = 0; it < 3 && pathForbidden(px, pz); it++){
+    let best = null, bd = 1e9;
+    for (const f of features){ if (f.kind === 'berm' || f.rollin || f.groom) continue;
+      const t = (px - f.x) * f.dx + (pz - f.z) * f.dz; if (t < -2 || t > (f.L || 0) + 2) continue;
+      const lat = (px - f.x) * f.dz - (pz - f.z) * f.dx, d = Math.abs(lat);
+      if (d < bd){ bd = d; best = { f, lat }; } }
+    if (!best) break;
+    const sign = best.lat >= 0 ? 1 : -1, off = (best.f.hw || 2) + 6;
+    px += best.f.dz * sign * (off - best.lat * sign); pz -= best.f.dx * sign * (off - best.lat * sign);
+  }
+  return [px, pz];
+}
+{ const changed = new Set();
+  const mark = (c, i, x, z) => { const p = c.pts[i]; if (Math.hypot(x - p[0], z - p[1]) > 0.4){ c.pts[i] = [x, z]; changed.add(c); } };
+  for (const c of connectors){
+    const n = c.pts.length;
+    for (let i = 0; i < n; i++){
+      const p = c.pts[i]; if (pathEntry(p[0], p[1])) continue;
+      if (!pathForbidden(p[0], p[1])) continue;
+      const q = pushClear(p[0], p[1]); mark(c, i, q[0], q[1]);
+    }
+    if (changed.has(c)) for (let it = 0; it < 2; it++) for (let i = 2; i < n - 2; i++){
+      const a = c.pts[i - 1], b = c.pts[i], e = c.pts[i + 1];
+      let x = (a[0] + 2 * b[0] + e[0]) / 4, z = (a[1] + 2 * b[1] + e[1]) / 4;
+      if (pathForbidden(x, z) && !pathEntry(x, z)){ const q = pushClear(x, z); x = q[0]; z = q[1]; }
+      c.pts[i] = [x, z];
+    }
+  }
+  // A path that cuts another path in the middle steps aside so the ribbons do not pile up at an angle.
+  const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
+  const segCross = (a, b, c0, d0) => {
+    const r = [b[0] - a[0], b[1] - a[1]], s = [d0[0] - c0[0], d0[1] - c0[1]];
+    const den = r[0] * s[1] - r[1] * s[0]; if (Math.abs(den) < 1e-6) return null;
+    const q = [c0[0] - a[0], c0[1] - a[1]], t = (q[0] * s[1] - q[1] * s[0]) / den, u = (q[0] * r[1] - q[1] * r[0]) / den;
+    if (t <= 0.12 || t >= 0.88 || u <= 0.12 || u >= 0.88) return null;
+    const acute = Math.min(Math.abs(wrap(Math.atan2(r[1], r[0]) - Math.atan2(s[1], s[0]))), Math.PI);
+    const turn = Math.min(acute, Math.PI - acute);
+    return turn > 0.45 ? { nx: -s[1], nz: s[0] } : null;
+  };
+  for (let a = 0; a < connectors.length; a++){
+    const A = connectors[a];
+    for (let i = 2; i < A.pts.length - 2; i++){
+      for (let b = a + 1; b < connectors.length; b++){
+        const B = connectors[b];
+        for (let j = 2; j < B.pts.length - 2; j++){
+          const hit = segCross(A.pts[i - 1], A.pts[i], B.pts[j - 1], B.pts[j]);
+          if (!hit) continue;
+          const len = Math.hypot(hit.nx, hit.nz) || 1, gap = (A.half || 1.3) + (B.half || 1.3) + 1.6;
+          mark(A, i, A.pts[i][0] + hit.nx / len * gap, A.pts[i][1] + hit.nz / len * gap);
+        }
+      }
+    }
+  }
+  pathsRerouted = changed.size;
+}
+export function exploreStats(){
+  let m = 0, n = 0; for (const c of connectors) if (c.explore){ n++; for (let i = 1; i < c.pts.length; i++) m += Math.hypot(c.pts[i][0] - c.pts[i - 1][0], c.pts[i][1] - c.pts[i - 1][1]); }
+  return { segments: n, km: +(m / 1000).toFixed(2) };
+}
 const cGrid = new Map(), CG = 40;
 connectors.forEach((c, ci) => c.pts.forEach((p, i) => { const k = key(Math.floor(p[0]/CG), Math.floor(p[1]/CG)); let a = cGrid.get(k); if (!a) cGrid.set(k, a = []); a.push(ci*100000 + i); }));
 export function connDist(x, z){ let m = 1e9; const ci0 = Math.floor(x/CG), cj0 = Math.floor(z/CG);
   for (let di=-1; di<=1; di++) for (let dj=-1; dj<=1; dj++){ const a = cGrid.get(key(ci0+di, cj0+dj)); if (!a) continue;
-    for (const id of a){ const p = connectors[Math.floor(id/100000)].pts[id%100000]; const d = Math.hypot(x-p[0], z-p[1]); if (d < m) m = d; } }
+    for (const id of a){ const c = connectors[Math.floor(id/100000)], p = c.pts[id%100000]; const d = Math.hypot(x-p[0], z-p[1]) - ((c.half || CW) - CW); if (d < m) m = d; } }
   return m; }
 export const nearLiftStation = (x, z, r) => LIFTS.some(L => Math.hypot(x-L.bx, z-L.bz) < r || Math.hypot(x-L.tx, z-L.tz) < r);
 export function liftLineDist(x, z){ let m = 1e9; for (const L of LIFTS){ const u = Math.max(0, Math.min(L.len, (x-L.bx)*L.dx + (z-L.bz)*L.dz)); m = Math.min(m, Math.hypot(x-(L.bx+L.dx*u), z-(L.bz+L.dz*u))); } return m; }
@@ -578,7 +1003,7 @@ for (const L of LIFTS){
 // automated layout check: returns a list of problems (empty = OK)
 const jumpClear = (x, z) => { let m = 1e9; for (const f of features){ if (f.kind === 'roller' || f.kind === 'berm') continue; const L = f.L||0, u = Math.max(-2, Math.min(L, (x-f.x)*f.dx + (z-f.z)*f.dz)), d = Math.hypot(x-f.x-f.dx*u, z-f.z-f.dz*u) - (f.hw||2); if (d < m) m = d; } return m; };
 export function pathTrailProblems(){ const out = [];
-  connectors.forEach((c, i) => { const ends = [c.pts[0], c.pts[c.pts.length-1]];
+  connectors.forEach((c, i) => { if (c.explore) return; const ends = [c.pts[0], c.pts[c.pts.length-1]];
     for (const t of trails){ const tj = [t.pts[0], t.pts[t.pts.length-1]].filter(q => ends.some(e => Math.hypot(e[0]-q[0], e[1]-q[1]) < 30));
       let worst = 1e9, wp = null;
       const n = t.pts.length, jS = tj.includes(t.pts[0]), jE = tj.includes(t.pts[n-1]);
@@ -594,7 +1019,7 @@ export function liftLayoutProblems(){ const out = [];
       if (c - 3.2 < g + 2.0) out.push(`${L.name} chairs only ${(c-3.2-g).toFixed(1)} m above ground at ${dd} m`);
       if ((trailDist(x,z) < W + 3 || connDist(x,z) < CW + 3) && c - g < 8) out.push(`${L.name} cable only ${(c-g).toFixed(1)} m over a trail/path at ${dd} m`); } }
   // connector paths must stay >= 15 m clear of the park pad and of every jump corridor
-  connectors.forEach((c, i) => { let worst = 1e9, wp = null; for (const p of c.pts){ const d = Math.min(Math.hypot(p[0]-PARK.x, p[1]-PARK.z) - PARK.r, jumpClear(p[0], p[1])); if (d < worst){ worst = d; wp = p; } }
+  connectors.forEach((c, i) => { if (c.explore) return; let worst = 1e9, wp = null; for (const p of c.pts){ const d = Math.min(Math.hypot(p[0]-PARK.x, p[1]-PARK.z) - PARK.r, jumpClear(p[0], p[1])); if (d < worst){ worst = d; wp = p; } }
     if (worst < 15) out.push(`connector ${i} passes ${worst.toFixed(1)} m from the park/a jump at (${wp[0].toFixed(0)},${wp[1].toFixed(0)})`); });
   // connector paths never run along or across a trail: every path point stays >= 6 m from every trail centreline,
   // except within 30 m of the start gate / finish the path is deliberately joining
@@ -608,3 +1033,155 @@ export function liftLayoutProblems(){ const out = [];
   if (!RAMP) for (const t of trails){ let worst = 1e9, wp = null; for (const p of t.pts){ const d = Math.hypot(p[0]-PARK.x, p[1]-PARK.z) - PARK.r; if (d < worst){ worst = d; wp = p; } }
     if (worst < 15) out.push(`trail ${t.name} passes ${worst.toFixed(1)} m from the park at (${wp[0].toFixed(0)},${wp[1].toFixed(0)})`); }
   return out; }
+
+// ---------- level editor runtime (a flat pad the mountain never uses) ----------
+export const EDITOR_ORIGIN = { x: 2400, z: 2400 };
+const EDITOR_BASE = 48, EDITOR_R = 180, EDITOR_CELL = 4;
+const editorFeats = [];
+const editorTrees = [];
+let editorPaths = [];
+const sculpt = new Map();
+export function inEditorPad(x, z){ return editorOn && Math.hypot(x - EDITOR_ORIGIN.x, z - EDITOR_ORIGIN.z) < EDITOR_R; }
+function editorPad(x, z){ return Math.hypot(x - EDITOR_ORIGIN.x, z - EDITOR_ORIGIN.z) < EDITOR_R; }
+function sculptAt(x, z){
+  const ix = (x - EDITOR_ORIGIN.x) / EDITOR_CELL, iz = (z - EDITOR_ORIGIN.z) / EDITOR_CELL;
+  const i0 = Math.floor(ix), j0 = Math.floor(iz), fx = ix - i0, fz = iz - j0;
+  const g = (i, j) => sculpt.get(i + ',' + j) || 0;
+  return g(i0, j0) * (1 - fx) * (1 - fz) + g(i0 + 1, j0) * fx * (1 - fz) + g(i0, j0 + 1) * (1 - fx) * fz + g(i0 + 1, j0 + 1) * fx * fz;
+}
+function editorHeight(x, z){
+  let h = 0;
+  for (const f of editorFeats){
+    if (x < f.minx || x > f.maxx || z < f.minz || z > f.maxz) continue;
+    const rx = x - f.x, rz = z - f.z, t = rx * f.dx + rz * f.dz, us = rx * f.dz - rz * f.dx, u = Math.abs(us);
+    if (t < 0 || t > f.L || u > f.hw + 1.2) continue;
+    let v = f.p(t, us); if (u > f.hw) v *= 0.5 * (1 + Math.cos(Math.PI * (u - f.hw) / 1.2));
+    if (v > h) h = v;
+  }
+  return h;
+}
+function editorDirt(x, z){
+  if (!editorOn) return false;
+  for (const path of editorPaths) for (let i = 1; i < path.length; i++){
+    const a = path[i - 1], b = path[i], ex = b[0] - a[0], ez = b[1] - a[1], L2 = ex * ex + ez * ez || 1;
+    let u = ((x - a[0]) * ex + (z - a[1]) * ez) / L2; u = u < 0 ? 0 : u > 1 ? 1 : u;
+    if (Math.hypot(x - (a[0] + ex * u), z - (a[1] + ez * u)) < 3.2) return true;
+  }
+  return false;
+}
+export function editorTrunks(x, z){
+  if (!editorOn) return [];
+  return editorTrees.filter(t => Math.abs(t.x - x) < 2 && Math.abs(t.z - z) < 2);
+}
+function bounds(f){
+  f.minx = Math.min(f.x, f.x + f.dx * f.L) - f.hw - 2; f.maxx = Math.max(f.x, f.x + f.dx * f.L) + f.hw + 2;
+  f.minz = Math.min(f.z, f.z + f.dz * f.L) - f.hw - 2; f.maxz = Math.max(f.z, f.z + f.dz * f.L) + f.hw + 2;
+}
+// Same landing ramp the trail jumps get: a slope that is still descending where a normal speed lands.
+export function fitLanding(f, speed = 9){
+  if (!f || typeof f.p !== 'function' || !(f.L > 1)) return f;
+  const old = f.p, oldL = f.L, v = speed;
+  let lipT = 0, lipH = -1;
+  for (let i = 1; i <= 36; i++){ const t = oldL * i / 36 * 0.8, h = old(t, 0); if (h >= lipH){ lipH = h; lipT = t; } }
+  if (lipH < 0.55) return f;
+  const face = Math.max(0.08, (old(lipT, 0) - old(Math.max(0, lipT - 0.5), 0)) / 0.5);
+  const grade = 0.05;
+  let lo = 1e9, hi = 0;
+  for (const spd of [v * 0.75, v, Math.min(16, v * 1.15)]){
+    const vy = face * spd + 0.45; let hit = lipT + spd * 2.2;
+    for (let t = 0.1; t < 3.2; t += 0.02){
+      const dist = lipT + spd * t, y = lipH + vy * t - 0.5 * 9.81 * t * t + grade * spd * t;
+      const gnd = dist <= oldL ? old(dist, 0) : 0;
+      if (y <= gnd + 0.05){ hit = dist; break; }
+    }
+    lo = Math.min(lo, hit); hi = Math.max(hi, hit);
+  }
+  let deckEnd = lipT;
+  for (let t = lipT; t < oldL; t += 0.35) if (old(t, 0) > lipH * 0.72) deckEnd = t;
+  const drop = Math.tan(30 * Math.PI / 180);
+  const start = Math.max(deckEnd + 0.3, lo - 1.5);
+  let end = Math.max(start + 4, hi + 2);
+  let h0 = Math.min(2.2, Math.max(1.1, drop * Math.min(8, end - start)));
+  end = Math.min(end, start + h0 / drop + 0.5);
+  if (end <= start + 1) return f;
+  f.p = (t, us) => {
+    const base = t <= oldL ? old(Math.min(Math.max(t, 0), oldL), us) : 0;
+    if (t <= deckEnd || t > end) return base;
+    if (t < start){ const u = Math.max(0, (t - (start - h0 / 0.55)) / (h0 / 0.55)); return Math.max(base, h0 * Math.min(1, u)); }
+    return Math.max(base, Math.max(0, h0 - drop * (t - start)));
+  };
+  f.L = Math.max(oldL, end); f.landed = true; bounds(f); return f;
+}
+export function aimOnTrail(f, pts, halfW = 2.4){
+  if (!f || !pts || pts.length < 2) return f;
+  let bi = 0, bd = 1e9;
+  for (let i = 1; i < pts.length; i++){
+    const a = pts[i - 1], b = pts[i], ex = b[0] - a[0], ez = b[1] - a[1], L2 = ex * ex + ez * ez || 1;
+    let u = ((f.x - a[0]) * ex + (f.z - a[1]) * ez) / L2; u = u < 0 ? 0 : u > 1 ? 1 : u;
+    const d = Math.hypot(f.x - (a[0] + ex * u), f.z - (a[1] + ez * u));
+    if (d < bd){ bd = d; bi = i; }
+  }
+  if (bd > halfW + 1.5) return f;
+  const a = pts[Math.max(0, bi - 1)], b = pts[Math.min(pts.length - 1, bi + 1)];
+  f.yaw = Math.atan2(-(b[0] - a[0]), -(b[1] - a[1]));
+  f.dx = -Math.sin(f.yaw); f.dz = -Math.cos(f.yaw);
+  const near = (x, z) => { let m = 1e9, yaw = f.yaw; for (let i = 0; i < pts.length; i++){ const d = Math.hypot(pts[i][0] - x, pts[i][1] - z); if (d < m){ m = d; const p = pts[Math.max(0, i - 1)], q = pts[Math.min(pts.length - 1, i + 1)]; yaw = Math.atan2(-(q[0] - p[0]), -(q[1] - p[1])); } } return { d: m, yaw }; };
+  let keep = 0;
+  for (let t = 0; t <= f.L + 1e-6; t += 0.5){
+    const n = near(f.x + f.dx * t, f.z + f.dz * t);
+    const ang = Math.atan2(Math.sin(Math.atan2(-f.dx, -f.dz) - n.yaw), Math.cos(Math.atan2(-f.dx, -f.dz) - n.yaw));
+    if (n.d > halfW + 0.3 || Math.abs(ang) > 0.2) break;
+    keep = t;
+  }
+  if (keep >= 3 && keep < f.L - 0.25) f.L = keep;
+  bounds(f); return f;
+}
+function specFeature(o){
+  const s = Math.max(0.4, Math.min(2.4, o.size || 1));
+  const x = EDITOR_ORIGIN.x + o.x, z = EDITOR_ORIGIN.z + o.z;
+  let yaw = o.yaw || 0, kind, hw = 2.2 * Math.min(s, 1.6), prof;
+  if (o.kind === 'jump'){ kind = 'kicker'; prof = PROF.kicker(1.15 * s, 5 * s); prof = { ...prof, wood: false }; }
+  else if (o.kind === 'table'){ kind = 'table'; prof = PROF.table(1.05 * s, 4 * s, 3.2 * s, 4 * s); }
+  else if (o.kind === 'hip'){ kind = 'kicker'; yaw += 0.32; prof = PROF.kicker(1.1 * s, 5 * s); prof = { ...prof, wood: false }; }
+  else if (o.kind === 'drop'){ kind = 'drop'; prof = PROF.drop(1.3 * s, 3.5 * s, 2.2 * s); prof = { ...prof, wood: false }; }
+  else if (o.kind === 'ramp'){ kind = 'kicker'; prof = PROF.kicker(0.55 * s, 9 * s); prof = { ...prof, wood: false }; hw = 2.4; }
+  else if (o.kind === 'rock'){ kind = 'rocks'; const R = 1.5 * s; prof = { L: R * 2, p: (t, us) => { const d = Math.hypot(t - R, us); return d < R ? (R - d) * 0.65 : 0; } }; hw = R; }
+  else if (o.kind === 'log'){ kind = 'roller'; prof = { L: 5 * s, p: (t, us) => Math.abs(us) < 0.4 ? 0.42 * s : 0 }; hw = 0.7; }
+  else return null;
+  const f = { kind, x, z, yaw, dx: -Math.sin(yaw), dz: -Math.cos(yaw), hw, ...prof, trail: -1, editor: true, hip: o.kind === 'hip' };
+  bounds(f); return f;
+}
+function trailRibbon(pts){
+  const out = [];
+  for (let i = 1; i < pts.length; i++){
+    const a = pts[i - 1], b = pts[i], len = Math.hypot(b[0] - a[0], b[1] - a[1]); if (len < 0.4) continue;
+    const yaw = Math.atan2(-(b[0] - a[0]), -(b[1] - a[1])), hw = 3.1;
+    const f = { kind: 'roller', x: a[0], z: a[1], yaw, dx: -Math.sin(yaw), dz: -Math.cos(yaw), hw, L: len + 1.2, trail: -1, editor: true, groom: true,
+      p: (t, us) => { if (t < 0 || t > len + 1.2) return 0; const lip = Math.abs(us) <= hw * 0.55 ? 0 : Math.min(1, (Math.abs(us) - hw * 0.55) / (hw * 0.45)); return 0.07 + 0.28 * lip * lip; } };
+    bounds(f); out.push(f);
+  }
+  return out;
+}
+export function loadEditorLevel(level){
+  editorFeats.length = 0; editorTrees.length = 0; editorPaths = []; sculpt.clear(); editorOn = true;
+  const trails = level?.trails || [];
+  const worldPts = trails.map(tr => (tr.pts || []).map(p => [EDITOR_ORIGIN.x + p[0], EDITOR_ORIGIN.z + p[1]]));
+  editorPaths = worldPts;
+  for (const pts of worldPts) editorFeats.push(...trailRibbon(pts));
+  const allPts = worldPts.flat();
+  for (const o of level?.objects || []){
+    if (o.kind === 'tree'){ editorTrees.push({ x: EDITOR_ORIGIN.x + o.x, z: EDITOR_ORIGIN.z + o.z, h: 6 * (o.size || 1) }); continue; }
+    if (o.kind === 'start' || o.kind === 'finish') continue;
+    const f = specFeature(o); if (!f) continue;
+    if (o.kind !== 'hip') aimOnTrail(f, allPts);
+    if (o.kind === 'jump' || o.kind === 'table' || o.kind === 'hip' || o.kind === 'drop' || o.kind === 'ramp') fitLanding(f, 8 + (o.size || 1) * 2);
+    editorFeats.push(f);
+  }
+  for (const c of level?.sculpt || []){
+    if (!Array.isArray(c) || c.length < 3) continue;
+    sculpt.set(Math.round(c[0]) + ',' + Math.round(c[1]), Math.max(-6, Math.min(6, +c[2] || 0)));
+  }
+  return { features: editorFeats.length, trees: editorTrees.length };
+}
+export function clearEditorLevel(){ editorOn = false; editorFeats.length = 0; editorTrees.length = 0; editorPaths = []; sculpt.clear(); }
+export function editorActive(){ return editorOn; }

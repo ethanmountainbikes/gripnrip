@@ -1,7 +1,11 @@
 import * as THREE from 'three';
 import { buildBikeRider } from './rider.js';
+import { createDrone, stepDrone } from './drone.js';
+import { spawnRagdoll, stepRagdoll, ragdollReport } from './ragdoll.js';
+import { longAccel, pumpAccel, gripRate, landingCall, wheelieStep, axleXZ, supportPitch, bodyPoint, BODY_POINTS, fakieAim, WHEEL_R } from './ridephys.js';
 import { initNet, NAME_A, NAME_B, EMOTES, cleanCode } from './net.js';
 import { initCloud, CATS as LB_CATS, fmtCode, cleanSaveCode } from './cloud.js';
+import { checkName, NAME_SAY, NAME_MAX } from './names.js';
 import { makeTextures, triplanar } from './textures.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -9,8 +13,13 @@ import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featBase, featAxis, BOULDERS, boulderH, bigBouldersNear, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL, LIFTS, connectors, CW, SHOP, WORLD, RAMPAGE, trailDist } from './world.js';
-import { initSfx, setSfxVolume, updateSfx, sfxLand, sfxCrash, sfxLiftStart } from './sfx.js';
+import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featBase, featAxis, BOULDERS, boulderH, rockTop, rockContact, bigBouldersNear, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL, LIFTS, connectors, CW, SHOP, WORLD, RAMPAGE, trailDist, layoutTag, parkLayoutTag, editorTrunks, inEditorPad } from './world.js';
+import { readPad, padFamily, glyph, padText, needsSetup, loadProfiles, GLYPHS } from './pad.js';
+import { createPadWizard } from './padwiz.js';
+import { loadBinds, proposeBind, swapBind, conflict, keyLabel, padLabel as padLabelStd, actionLabel, ACTIONS, KB_DEFAULT, PAD_DEFAULT, spawnHold, clearSpawn, respawnChoice } from './binds.js';
+import { isRaceUnlocked, migrateCleared, advanceCheckpoint, checkpointsDone, shouldSubmit, clearKey } from './race.js';
+import { createEditor } from './editor.js';
+import { initSfx, setSfxVolume, setAmbience, updateSfx, sfxLand, sfxCrash, sfxLiftStart, musicPlaying } from './sfx.js';
 const RAMP = WORLD === 'rampage';   // Red Bull Rampage-inspired desert world
 
 const G = 9.81;
@@ -24,15 +33,33 @@ const BIKES = [
   {id:'bean',     name:'Buckle Bean',      price:5000, color:0x9a5a2e, scale:[1,1.02,1.06], drag:0.86, grip:1.15, pop:1.12, stab:1.15, desc:'The legendary bean bike. Brown frame, blue cape accents, gold buckle hardware.'},
 ];
 const LS = { get:(k,d)=>{ try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch(e){ return d; } }, set:(k,v)=>{ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} } };
+const WID = RAMP ? 1 : 0;
+const CLEAR_KEY = 'trailDescent.cleared';
+let cleared = migrateCleared(LS.get(CLEAR_KEY, {}), LS.get('trailDescent.pb', {}), WID, trails.map(tr => ({ id: tr.id, layout: layoutTag(tr.id) })));
+LS.set(CLEAR_KEY, cleared);
+function raceOpen(id){ const tr = trails[id]; return !!tr && isRaceUnlocked(cleared, LS.get('trailDescent.pb', {}), WID, tr.id, layoutTag(tr.id)); }
+function markCleared(id){ const tr = trails[id]; if (!tr) return; cleared[clearKey(WID, tr.id, layoutTag(tr.id))] = 1; LS.set(CLEAR_KEY, cleared); }
 const owned = new Set(LS.get('trailDescent.owned', ['hardtail'])); owned.add('hardtail');
 let BIKE = BIKES.find(b => b.id === LS.get('trailDescent.bike', 'hardtail') && owned.has(b.id)) || BIKES[0];
 const EARN = 0.15;   // DOLLAHS earn rate vs. the old REP values (~15%)
+// Surfaces you ride over but never launch from: their crests keep the speed you carry and add none.
+const NOT_LIP = new Set(['berm', 'rocks', 'roll', 'crashrocks', 'camber', 'rock', 'log', 'tree']);
 const G_AIR = 9.81*1.35;   // heavier feel in the air: realistic MTB airtime (~0.6-1.0 s off a kicker at 30 km/h)
 let seed = 7; const rnd = () => (seed = (seed*16807) % 2147483647) / 2147483647;
 
 // ---------- settings (quality, inverts, volume) ----------
-const SETTINGS = Object.assign({gfx:'low', tod:'noon', fpsOn:false, invertY:false, invertX:false, volume:0.8, musicOn:true, musicVol:0.5}, LS.get('trailDescent.settings', {}));
+const SETTINGS = Object.assign({gfx:'low', tod:'noon', fpsOn:false, fpsCap:60, invertY:false, invertX:false, volume:0.8, ambience:0.45, droneSpeed:12, droneTilt:12, droneDist:8, droneHeight:4, droneFly:'follow'}, LS.get('trailDescent.settings', {}));
+const FPS_OPTS = [30, 60, 90, 120, 144, 165, 0];
+if (!FPS_OPTS.includes(SETTINGS.fpsCap)) SETTINGS.fpsCap = 60;
+if (typeof SETTINGS.ambience !== 'number') SETTINGS.ambience = SETTINGS.musicOn === false ? 0 : (typeof SETTINGS.musicVol === 'number' ? SETTINGS.musicVol : 0.45);
+function fpsCap(){ return FPS_OPTS.includes(SETTINGS.fpsCap) ? SETTINGS.fpsCap : 60; }
+SETTINGS.binds = loadBinds(SETTINGS.binds);
 const saveSettings = () => LS.set('trailDescent.settings', SETTINGS);
+const kbBind = id => SETTINGS.binds.kb[id] || KB_DEFAULT[id];
+const padBind = id => SETTINGS.binds.pad[id] || PAD_DEFAULT[id];
+const KB_ALIAS = { steerLeft: ['ArrowLeft', 'KeyJ'], steerRight: ['ArrowRight', 'KeyL'], pedal: ['ArrowUp'], brake: ['ArrowDown'] };
+function keyDown(id){ if (keys[kbBind(id)]) return true; for (const a of KB_ALIAS[id] || []) if (keys[a]) return true; return false; }
+function hitBind(id, code){ return code === kbBind(id) || code === padBind(id); }
 const QUALITY = { low:{pr:0.75, shadow:0, tex:256, grassR:0, grassCell:2, post:false, rocks:10, bushes:10},
                   med:{pr:1.0, shadow:1024, tex:256, grassR:38, grassCell:1.0, post:false, rocks:22, bushes:26},
                   high:{pr:1.5, shadow:2048, tex:512, grassR:55, grassCell:0.75, post:true, rocks:34, bushes:40} };
@@ -50,17 +77,18 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
 document.body.prepend(renderer.domElement);
 const scene = new THREE.Scene();
+const FPV = createDrone(); scene.add(FPV.group);
 const SKY = RAMP ? 0x9cc4e4 : 0xa9cfe6;
 scene.background = new THREE.Color(SKY);
-scene.fog = new THREE.Fog(RAMP ? 0xe6d2b4 : 0xc4d7e0, RAMP ? 220 : 180, RAMP ? 3200 : 3800);   // fog fades into the sky's horizon colour (atmospheric haze)
+scene.fog = new THREE.Fog(RAMP ? 0xe7b48a : 0xf0b48c, RAMP ? 220 : 160, RAMP ? 3200 : 3400);   // warm horizon haze; Low has no post stack
 const camera = new THREE.PerspectiveCamera(68, innerWidth/innerHeight, 0.1, 6000);
 const TEX = makeTextures(Q.tex, RAMP);
-scene.add(new THREE.HemisphereLight(0xdff0ff, RAMP ? 0x9a5534 : 0x4a6030, 0.9));
+scene.add(new THREE.HemisphereLight(RAMP ? 0xf0c8a4 : 0xf0c4d4, RAMP ? 0x9a5534 : 0x3e5a32, 0.72));
 const SUN_DIR = new THREE.Vector3(0.45, 0.62, 0.3).normalize();
-const sun = new THREE.DirectionalLight(0xfff1d6, 2.6);
+const sun = new THREE.DirectionalLight(0xffe4b8, 2.85);
 sun.castShadow = Q.shadow > 0; sun.shadow.mapSize.set(Math.max(512, Q.shadow), Math.max(512, Q.shadow)); sun.shadow.radius = 3;
 Object.assign(sun.shadow.camera, {left:-40,right:40,top:40,bottom:-40,near:1,far:160});
-sun.shadow.bias = -0.0005; sun.shadow.normalBias = 0.06;   // no shadow acne / striping on the dirt
+sun.shadow.bias = -0.0008; sun.shadow.normalBias = 0.1;   // a little more bias so flat rock faces do not stripe
 scene.add(sun, sun.target);
 // post (High): SSAO + subtle bloom; Low/Med render directly
 let composer = null, GFX = null, NET = null, CLOUD = null;   // GFX: graphics upgrade (Medium/High/Max), loaded on demand from gfx.js
@@ -80,7 +108,7 @@ function setTod(d){ const i = TODS.indexOf(SETTINGS.tod || 'noon'), k = (i + d +
   const m = new THREE.ShaderMaterial({side:THREE.BackSide, depthWrite:false, fog:false, uniforms:{uSun:{value:SUN_DIR}},
     vertexShader:`varying vec3 p; void main(){p=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
     fragmentShader:`varying vec3 p; uniform vec3 uSun; void main(){ vec3 d=normalize(p); float h=d.y;
-      vec3 zen=vec3(.22,.45,.82), hor=vec3(.77,.84,.88); vec3 c=mix(hor,zen,pow(clamp(h*1.4,0.,1.),0.6));
+      vec3 zen=vec3(.52,.30,.62), hor=vec3(.98,.62,.28); vec3 c=mix(hor,zen,pow(clamp(h*1.15,0.,1.),0.55));
       float s=max(dot(d,uSun),0.); c+=vec3(1.,.85,.6)*(pow(s,8.)*0.25+pow(s,64.)*0.5) + vec3(1.,.97,.9)*smoothstep(.9994,.9997,s)*2.;
       c=mix(c,hor,smoothstep(0.08,-0.02,h)*0.9); gl_FragColor=vec4(c,1.);
       #include <tonemapping_fragment>
@@ -110,12 +138,13 @@ terrainMat.onBeforeCompile = sh => {
     .replace('#include <map_fragment>', `#include <map_fragment>
       vec4 w = vSplat / max(1e-3, vSplat.x + vSplat.y + vSplat.z + vSplat.w); vec2 P = vTWP.xz;
       vec3 alb = tex2(tG, P)*w.x + tex2(tD, P*1.3)*w.y + tex2(tR, P*0.6)*w.z + tex2(tS, P*0.5)*w.w;
-      diffuseColor.rgb *= alb*1.7;`)
+      diffuseColor.rgb *= alb*1.82;
+      diffuseColor.rgb *= mix(vec3(1.0), vec3(1.07, 0.98, 0.90), w.y);`)
     .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
       { vec4 w2 = vSplat / max(1e-3, vSplat.x + vSplat.y + vSplat.z + vSplat.w); vec2 P2 = vTWP.xz*0.33;
         vec2 tn = (texture2D(nG, P2).xy*w2.x + texture2D(nD, P2*1.3).xy*w2.y + texture2D(nR, P2*0.6).xy*w2.z + texture2D(nS, P2*0.5).xy*w2.w)*2.0 - 1.0;
         normal = normalize(normal + (viewMatrix*vec4(tn.x, 0.0, tn.y, 0.0)).xyz*0.7); }`)
-    .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(0.95, 0.55, vSplat.w);'); };
+    .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(0.94, 0.72, w.y);\nroughnessFactor = mix(roughnessFactor, 0.55, vSplat.w);'); };
 const chunkIndex = (() => { const idx = []; for (let r=0;r<NV-1;r++) for (let k=0;k<NV-1;k++){ const a=r*NV+k, b=a+1, e=a+NV, f=e+1; idx.push(a,e,b, b,e,f); } return new THREE.BufferAttribute(new Uint32Array(idx),1); })();
 const C_DIRT = new THREE.Color(RAMP ? 0xb07a52 : 0x8a6640), C_DIRT2 = new THREE.Color(RAMP ? 0x93603e : 0x6e4f30), C_GRASS = new THREE.Color(RAMP ? 0xb5603a : 0x5d8a32), C_GRASS2 = new THREE.Color(RAMP ? 0xc98552 : 0x7aa040),
       C_ROCK = new THREE.Color(RAMP ? 0x9c5136 : 0x857d72), C_SNOW = new THREE.Color(0xe9eef2), C_ALP = new THREE.Color(0x8c9a5a);
@@ -134,21 +163,53 @@ const mergeGeos = gs => { let n = 0; const ps = gs.map(g => g.index ? g.toNonInd
   const P = new Float32Array(n*3), N = new Float32Array(n*3), U = new Float32Array(n*2); let o = 0;
   for (const g of ps){ if (!g.attributes.normal) g.computeVertexNormals(); P.set(g.attributes.position.array, o*3); N.set(g.attributes.normal.array, o*3); if (g.attributes.uv) U.set(g.attributes.uv.array, o*2); o += g.attributes.position.count; }
   const r = new THREE.BufferGeometry(); r.setAttribute('position', new THREE.BufferAttribute(P,3)); r.setAttribute('normal', new THREE.BufferAttribute(N,3)); r.setAttribute('uv', new THREE.BufferAttribute(U,2)); return r; };
-const trunkG = new THREE.CylinderGeometry(0.16,0.34,1,8,1); trunkG.translate(0,0.5,0);
-// conifer: 5 layered, drooping tiers with ragged needle edges (spans y 0..1, radius 1)
-const coneG = (() => { const tiers = []; for (let k = 0; k < 5; k++){ const r = 1 - k*0.18, hgt = 0.34 - k*0.03, y0 = k*0.17;
-    const g = new THREE.ConeGeometry(r, hgt, 14, 2, true); const p = g.attributes.position;
-    for (let i = 0; i < p.count; i++){ const x = p.getX(i), y = p.getY(i), z = p.getZ(i), rad = Math.hypot(x, z); if (y < -hgt*0.45 && rad > 0.01){ const a = Math.atan2(z, x), jag = 1 + 0.16*Math.sin(a*7 + k) + 0.08*Math.sin(a*13 + k*2); p.setXYZ(i, x*jag, y - 0.05*r*(jag-0.9), z*jag); } }
-    g.translate(0, y0 + hgt/2, 0); g.computeVertexNormals(); tiers.push(g); }
-  tiers.push(new THREE.ConeGeometry(0.2, 0.25, 8).translate(0, 0.9, 0)); return mergeGeos(tiers); })();
-const trunkMat = new THREE.MeshStandardMaterial({map:TEX.bark.map, normalMap:TEX.bark.normal, roughness:0.95});
+const trunkG = new THREE.CylinderGeometry(0.11, 0.34, 1, 8, 4); trunkG.translate(0, 0.5, 0);
+const liftNormals = (g) => { const n = g.attributes.normal; if (!n) return g; for (let i = 0; i < n.count; i++) n.setY(i, n.getY(i) + 0.85); g.normalizeNormals(); return g; };
+// Needle card: a few strokes with a clear background, drawn once and shared by every branch.
+const needleMap = (() => { const cv = document.createElement('canvas'); cv.width = cv.height = 128; const c = cv.getContext('2d');
+  c.clearRect(0, 0, 128, 128);
+  for (let i = 0; i < 46; i++){ const x = 64 + (i % 9 - 4) * 7, y0 = 118 - (i % 5) * 3; c.strokeStyle = `rgba(${18 + (i % 4) * 14},${70 + (i % 5) * 18},${22 + (i % 3) * 10},0.92)`; c.lineWidth = 1.4;
+    c.beginPath(); c.moveTo(x, y0); c.quadraticCurveTo(x + (i % 2 ? 10 : -10), 60, 64 + (i % 7 - 3) * 4, 8); c.stroke(); }
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; return t; })();
+// Conifer crown (y 0..1, radius ~1): a soft core plus drooping branch cards, not a stack of flat cones.
+const coneG = (() => { const parts = [];
+  for (let k = 0; k < 4; k++){ const r = 0.92 - k * 0.18, y = 0.08 + k * 0.2, g = new THREE.ConeGeometry(r, 0.42, 9, 1, true);
+    g.translate(0, y + 0.12, 0); const p = g.attributes.position;
+    for (let i = 0; i < p.count; i++){ const yv = p.getY(i); if (yv < y + 0.05) p.setY(i, yv - 0.08 * r); }
+    g.computeVertexNormals(); parts.push(liftNormals(g)); }
+  parts.push(liftNormals(new THREE.ConeGeometry(0.16, 0.22, 7).translate(0, 0.96, 0)));
+  for (let k = 0; k < 5; k++){ const y = 0.12 + k * 0.16, rad = 0.78 - k * 0.12, n = 6;
+    for (let i = 0; i < n; i++){ const a = i / n * Math.PI * 2 + k * 0.4, g = new THREE.PlaneGeometry(rad * 0.95, 0.34);
+      g.translate(0, 0, 0); g.rotateX(0.55 + k * 0.04); g.rotateY(a); g.translate(Math.cos(a) * rad * 0.42, y, Math.sin(a) * rad * 0.42);
+      g.computeVertexNormals(); parts.push(g); } }
+  return mergeGeos(parts); })();
+// Broadleaf: a few leafy clumps on a shorter crown.
+const broadG = (() => { const parts = [];
+  const blob = (x, y, z, s) => { const g = new THREE.IcosahedronGeometry(s, 1); g.translate(x, y, z); g.computeVertexNormals(); parts.push(liftNormals(g)); };
+  blob(0, 0.62, 0, 0.46); blob(-0.28, 0.48, 0.12, 0.32); blob(0.26, 0.5, -0.1, 0.3); blob(0.05, 0.78, 0.08, 0.28);
+  return mergeGeos(parts); })();
+const trunkMat = new THREE.MeshStandardMaterial({map:TEX.bark.map, normalMap:TEX.bark.normal, roughness:0.86, color:0xc4a07a});
 TEX.bark.map.repeat.set(2, 5); TEX.bark.normal.repeat.set(2, 5);
-const folMat = new THREE.MeshStandardMaterial({map:TEX.needles.map, normalMap:TEX.needles.normal, roughness:0.85, side:THREE.DoubleSide});
+const folMat = new THREE.MeshStandardMaterial({map:needleMap, color:0xd6f0a4, roughness:0.55, emissive:0x1c4a16, emissiveIntensity:0.45, side:THREE.DoubleSide, alphaTest:0.35, transparent:false});
+const broadMat = new THREE.MeshStandardMaterial({map:TEX.needles.map, color:0xb7e07a, roughness:0.62, emissive:0x14380f, emissiveIntensity:0.28, side:THREE.DoubleSide});
+function windSway(mat, amp){
+  mat.onBeforeCompile = sh => { sh.uniforms.uTime = windU;
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime;\n').replace('#include <begin_vertex>', `#include <begin_vertex>
+      float swayH = max(0.0, position.y);
+      vec4 sw = modelMatrix * instanceMatrix * vec4(0.0, swayH, 0.0, 1.0);
+      float gust = sin(uTime*1.15 + sw.x*0.05 + sw.z*0.04);
+      transformed.x += gust * swayH * swayH * ${amp};
+      transformed.z += cos(uTime*0.85 + sw.z*0.06) * swayH * swayH * ${(amp * 0.65).toFixed(3)};`); };
+  mat.customProgramCacheKey = () => 'wind' + amp;
+}
+windSway(trunkMat, 0.04);
+windSway(folMat, 0.18);
+windSway(broadMat, 0.1);
 TEX.needles.map.repeat.set(6, 2); TEX.needles.normal.repeat.set(6, 2);
-const rockG = (() => { const g = new THREE.IcosahedronGeometry(1, 2), p = g.attributes.position;
+const rockG = (() => { const g = new THREE.IcosahedronGeometry(1, 1), p = g.attributes.position;
   for (let i = 0; i < p.count; i++){ const v = new THREE.Vector3().fromBufferAttribute(p, i), n = 1 + 0.18*Math.sin(v.x*3.1 + v.y*2.3) + 0.12*Math.sin(v.z*5.3 - v.x*1.7) + 0.07*Math.sin(v.y*9.1); v.multiplyScalar(n); v.y *= 0.7; p.setXYZ(i, v.x, v.y, v.z); }
   g.computeVertexNormals(); return g; })();
-const rockMat = triplanar(new THREE.MeshStandardMaterial({color:RAMP ? 0xd09070 : 0xb8b2a8, roughness:0.9, flatShading:true}), TEX.rock, 0.45, 0.9);
+const rockMat = triplanar(new THREE.MeshStandardMaterial({color:RAMP ? 0xd09070 : 0xb8b2a8, roughness:0.9, flatShading:true, polygonOffset:true, polygonOffsetFactor:-2, polygonOffsetUnits:-2}), TEX.rock, 0.45, 0.9);
 const bushG = (() => { const parts = []; for (let k = 0; k < 4; k++){ const g = new THREE.IcosahedronGeometry(0.55 + 0.2*Math.sin(k*2.1), 1); g.translate(Math.cos(k*1.9)*0.45, 0.35 + 0.15*(k%2), Math.sin(k*1.9)*0.45); parts.push(g); } return mergeGeos(parts); })();
 const bushMat = triplanar(new THREE.MeshStandardMaterial({color:RAMP ? 0xc8c79a : 0xffffff, roughness:0.9, flatShading:true}), TEX.needles, 1.2, 0.6);
 // wind-swayed grass: one instanced field of blade clumps that follows the rider (cells are world-anchored, so nothing swims)
@@ -207,12 +268,19 @@ function buildChunk(ci, cj){
   const ts = treesInCell(ci, cj);
   const M = new THREE.Matrix4(), q = new THREE.Quaternion(), sv = new THREE.Vector3(), p = new THREE.Vector3(), up = new THREE.Vector3(0,1,0);
   if (ts.length){
-    const trunk = new THREE.InstancedMesh(trunkG, trunkMat, ts.length), fol = new THREE.InstancedMesh(coneG, folMat, ts.length);
-    ts.forEach((t, i) => { const h = t.h, wv = 0.85 + ((t.hue*13.7)%1)*0.4, rr = h*0.2*wv; q.setFromAxisAngle(up, t.rot);
-      M.compose(p.set(t.x,t.y,t.z), q, sv.set(0.8+h*0.03, h*0.5, 0.8+h*0.03)); trunk.setMatrixAt(i,M);
-      M.compose(p.set(t.x,t.y+h*0.16,t.z), q, sv.set(rr, h*0.86, rr)); fol.setMatrixAt(i,M);
-      c.setHSL(0.27+t.hue*0.07, 0.35+((t.hue*3.3)%1)*0.2, 0.55+((t.hue*7)%1)*0.3); fol.setColorAt(i,c); });
-    for (const im of [trunk,fol]){ im.castShadow = true; im.receiveShadow = true; im.computeBoundingSphere(); grp.add(im); }
+    const broadIdx = [], firIdx = [];
+    ts.forEach((t, i) => (((t.hue * 5.1 + t.rot) % 1) > 0.78 ? broadIdx : firIdx).push(i));
+    const trunk = new THREE.InstancedMesh(trunkG, trunkMat, ts.length);
+    const fol = firIdx.length ? new THREE.InstancedMesh(coneG, folMat, firIdx.length) : null;
+    const brd = broadIdx.length ? new THREE.InstancedMesh(broadG, broadMat, broadIdx.length) : null;
+    let fi = 0, bi = 0;
+    ts.forEach((t, i) => { const h = t.h, broad = broadIdx.includes(i), wv = 0.85 + ((t.hue*13.7)%1)*0.35, rr = h*(broad ? 0.22 : 0.16)*wv;
+      q.setFromAxisAngle(up, t.rot);
+      M.compose(p.set(t.x, t.y, t.z), q, sv.set(0.7 + h*0.018, h*(broad ? 0.48 : 0.58), 0.7 + h*0.018)); trunk.setMatrixAt(i, M);
+      const crown = broad ? brd : fol, slot = broad ? bi++ : fi++;
+      M.compose(p.set(t.x, t.y + h*(broad ? 0.42 : 0.36), t.z), q, sv.set(rr, h*(broad ? 0.55 : 0.7), rr)); crown.setMatrixAt(slot, M);
+      c.setHSL(broad ? 0.28 : 0.26, 0.45, broad ? 0.42 : 0.5); crown.setColorAt(slot, c); });
+    for (const im of [trunk, fol, brd]) if (im){ im.castShadow = true; im.receiveShadow = true; im.computeBoundingSphere(); grp.add(im); }
   }
   // rocks and bushes (kept off trails, paths and jumps)
   { const r = (() => { let a = (ci*73856093 ^ cj*19349663) >>> 0 || 1; return () => (a = (a*16807) % 2147483647) / 2147483647; })();
@@ -265,42 +333,52 @@ const farU = { value: new THREE.Vector3(0,0,0) }; let FARMESH = null;
     const ha = terrainH(k*RES, r*RES), hb = terrainH((k+1)*RES, r*RES), he = terrainH(k*RES, (r+1)*RES);
     if (fx + fz <= 1) return ha + (hb-ha)*fx + (he-ha)*fz;
     const hf = terrainH((k+1)*RES, (r+1)*RES); return hf + (he-hf)*(1-fx) + (hb-hf)*(1-fz); };
-  const wv=[], wuv=[], wi=[], dv=[], dc=[], di=[]; const c = new THREE.Color();
-  for (const f of features){
+  const wv=[], wuv=[], wi=[], dv=[], dc=[], di=[], rv=[], ri=[]; const c = new THREE.Color();
+  const ribbon = (f, wood) => {
     const at = (t,u) => [f.x + f.dx*t + f.dz*u, f.z + f.dz*t - f.dx*u];
-    if (f.wood){
+    if (wood){
       const N = Math.max(8, Math.ceil(f.L/0.5)), b0 = wv.length/3, P = (t,u,top) => { const [x,z] = at(t,u), h = terrainH(x,z); wv.push(x, top ? h+f.p(Math.min(t,f.L-1e-3))+0.02 : h-0.3, z); wuv.push(u*0.5, t*0.8); return wv.length/3-1; };
       const tl=[], tr=[], bl=[], br=[];
       for (let i=0;i<=N;i++){ const t = i/N*f.L; tl.push(P(t,-f.hw,1)); tr.push(P(t,f.hw,1)); bl.push(P(t,-f.hw,0)); br.push(P(t,f.hw,0)); }
       for (let i=0;i<N;i++){ wi.push(tl[i],tr[i],tl[i+1], tr[i],tr[i+1],tl[i+1], bl[i],tl[i],bl[i+1], tl[i],tl[i+1],bl[i+1], tr[i],br[i],br[i+1], tr[i],br[i+1],tr[i+1]); }
       wi.push(tl[N],tr[N],bl[N], tr[N],br[N],bl[N]);
     } else {
-      const NT = Math.ceil(f.L/0.4), UW = f.hw+1.3, NU = Math.ceil(2*UW/0.4), b0 = dv.length/3;
+      const rockSkin = f.rock && !f.boulders;
+      const buf = rockSkin ? rv : dv, iv = rockSkin ? ri : di;
+      const NT = Math.ceil(f.L/0.4), UW = f.hw+1.3, NU = Math.ceil(2*UW/0.4), b0 = buf.length/3;
       for (let i=0;i<=NT;i++) for (let k=0;k<=NU;k++){ const t = i/NT*f.L, u = -UW + k/NU*2*UW, [x,z] = at(t,u), fh = featBase(x,z);
-        const edge = k === 0 || k === NU || i === 0 || i === NT;      // outer rim tucks just under the ground
-        dv.push(x, meshH(x,z) + fh + (edge ? -0.04 : 0.02), z);
-        c.copy(C_DIRT).lerp(C_DIRT2, 0.3 + 0.4*Math.sin(t*1.7+u)*Math.sin(u*2.1)); if (f.rock && !f.boulders && fh > 0.06) c.copy(C_ROCK).lerp(C_DIRT2, 0.2+0.3*Math.sin(t*3.1+u*2.7)); if (f.road && fh < 0.05 && Math.abs(u) < f.hw+0.6) c.setRGB(0.16,0.16,0.17); /* road in the gap */ if (fh < 0.05) c.lerp(C_GRASS, 0.0); dc.push(c.r,c.g,c.b); }
-      // wind triangles so faces point up (correct normals -> no black sides)
+        const edge = k === 0 || k === NU || i === 0 || i === NT;
+        buf.push(x, meshH(x,z) + fh + (edge ? -0.03 : 0.025), z);
+        if (!rockSkin){ c.copy(C_DIRT).lerp(C_DIRT2, 0.3 + 0.4*Math.sin(t*1.7+u)*Math.sin(u*2.1)); if (f.groom){ const e = Math.min(1, Math.abs(u)/(f.hw+0.2)); c.setRGB(0.20+0.16*(1-e), 0.10+0.07*(1-e), 0.045); } if (f.road && fh < 0.05 && Math.abs(u) < f.hw+0.6) c.setRGB(0.16,0.16,0.17); if (fh < 0.05) c.lerp(C_GRASS, 0.0); dc.push(c.r,c.g,c.b); } }
       const up = (() => { const [x0,z0] = at(0,-UW), [x1,z1] = at(0,UW), [x2,z2] = at(1,-UW); return ((x1-x0)*(z2-z0) - (z1-z0)*(x2-x0)) < 0; })();
-      for (let i=0;i<NT;i++) for (let k=0;k<NU;k++){ const a = b0+i*(NU+1)+k, b = a+1, e = a+NU+1, g = e+1; if (up) di.push(a,b,e, b,g,e); else di.push(a,e,b, b,e,g); }
+      for (let i=0;i<NT;i++) for (let k=0;k<NU;k++){ const a = b0+i*(NU+1)+k, b = a+1, e = a+NU+1, g = e+1; if (up) iv.push(a,b,e, b,g,e); else iv.push(a,e,b, b,e,g); }
     }
-  }
+  };
+  for (const f of features) ribbon(f, !!f.wood);
   const wg = new THREE.BufferGeometry(); wg.setAttribute('position', new THREE.Float32BufferAttribute(wv,3)); wg.setAttribute('uv', new THREE.Float32BufferAttribute(wuv,2)); wg.setIndex(wi); wg.computeVertexNormals();
   const wm = new THREE.Mesh(wg, woodMat); wm.castShadow = wm.receiveShadow = true; scene.add(wm);
   const dg = new THREE.BufferGeometry(); dg.setAttribute('position', new THREE.Float32BufferAttribute(dv,3)); dg.setAttribute('color', new THREE.Float32BufferAttribute(dc,3)); dg.setIndex(di); dg.computeVertexNormals();
-  const dm = new THREE.Mesh(dg, dirtMat); dm.castShadow = dm.receiveShadow = true; scene.add(dm); }
+  const dm = new THREE.Mesh(dg, dirtMat); dm.castShadow = dm.receiveShadow = true; scene.add(dm);
+  if (rv.length){ const rg = new THREE.BufferGeometry(); rg.setAttribute('position', new THREE.Float32BufferAttribute(rv,3)); rg.setIndex(ri); rg.computeVertexNormals();
+    const rm = new THREE.Mesh(rg, rockMat); rm.castShadow = rm.receiveShadow = true; scene.add(rm); } }
 
-// ---------- 3D boulders (rock gardens): each mesh is the exact collider shape (lathe of its height profile) + small surface detail
+// ---------- 3D boulders. Smooth rocks are a lathe of boulderH. Angular rocks are the same square pyramid rockContact uses.
 { const mk = big => { const pts = []; const b = {h:1, r:1, big}; for (let i = 0; i <= 10; i++){ const d = 1 - i/10; pts.push(new THREE.Vector2(d, boulderH(b, Math.min(d, 0.999)))); }
     pts[0].y = 0; const g = new THREE.LatheGeometry(pts, 11); g.translate(0, -0.02, 0); const p = g.attributes.position;
     for (let i = 0; i < p.count; i++){ const x = p.getX(i), z = p.getZ(i), y = p.getY(i), n = 1 + 0.06*Math.sin(x*7.1 + z*3.3) + 0.05*Math.sin(z*9.7 - x*4.1 + y*5);
       p.setXYZ(i, x*n, y > 0.05 ? y*(1 + 0.04*Math.sin(x*11 + z*6)) : y, z*n); }
     g.computeVertexNormals(); return g; };
-  const bmat = triplanar(new THREE.MeshStandardMaterial({color:0xa9a39a, roughness:0.85, flatShading:true}), TEX.rock, 0.6, 1.0);
-  for (const big of [false, true]){ const list = BOULDERS.filter(b => b.big === big); if (!list.length) continue;
-    const im = new THREE.InstancedMesh(mk(big), bmat, list.length), M = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
-    list.forEach((b, i) => { M.compose(new THREE.Vector3(b.x, terrainH(b.x, b.z) + 0.015, b.z), q.setFromEuler(e.set(0, b.rot, 0)), new THREE.Vector3(b.r, b.h, b.r)); im.setMatrixAt(i, M); });
-    im.castShadow = im.receiveShadow = true; im.computeBoundingSphere(); scene.add(im); } }
+  // Base sits under the trail ribbon. Each face has its own vertices so the normal stays perpendicular to that face.
+  // Apex second so each face is counter-clockwise from the outside. The old order pointed the normals into the ground, so the slabs were culled and the dirt showed through as black triangles.
+  const pyramid = () => { const y0 = -0.22, p = [-1,y0,-1, 0,1,0, 1,y0,-1,  1,y0,-1, 0,1,0, 1,y0,1,  1,y0,1, 0,1,0, -1,y0,1,  -1,y0,1, 0,1,0, -1,y0,-1];
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(p, 3)); g.computeVertexNormals(); return g; };
+  const bmat = triplanar(new THREE.MeshStandardMaterial({color:0xa9a39a, roughness:0.85, flatShading:true, polygonOffset:true, polygonOffsetFactor:-2, polygonOffsetUnits:-2}), TEX.rock, 0.55, 0.85);
+  const place = (geo, list) => { if (!list.length) return; const im = new THREE.InstancedMesh(geo, bmat, list.length), M = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+    list.forEach((b, i) => { M.compose(new THREE.Vector3(b.x, terrainH(b.x, b.z) + (b.ang ? 0.04 : 0.02), b.z), q.setFromEuler(e.set(0, b.rot, 0)), new THREE.Vector3(b.r, b.h, b.r)); im.setMatrixAt(i, M); });
+    im.castShadow = im.receiveShadow = true; im.computeBoundingSphere(); scene.add(im); };
+  place(mk(false), BOULDERS.filter(b => !b.ang && !b.big));
+  place(mk(true), BOULDERS.filter(b => !b.ang && b.big));
+  place(pyramid(), BOULDERS.filter(b => b.ang)); }
 // ---------- Rampage: finish corral fence + flags, wooden start platforms with scaffold towers ----------
 if (RAMP){ const C0 = RAMPAGE.corral, wood = new THREE.MeshStandardMaterial({color:0x9a7048, roughness:0.85}), steel = new THREE.MeshStandardMaterial({color:0x8d939a, roughness:0.4, metalness:0.7});
   const post = new THREE.CylinderGeometry(0.07, 0.07, 1.2, 6), rail = new THREE.BoxGeometry(0.06, 0.1, 1), flagG = new THREE.PlaneGeometry(0.9, 2.6);
@@ -354,13 +432,16 @@ const bike = new THREE.Group();          // position + heading yaw (+ spin)
 const pitchG = new THREE.Group(); bike.add(pitchG);
 const leanG = new THREE.Group(); pitchG.add(leanG);
 const rig = new THREE.Group(); leanG.add(rig);        // preload compression
-const BR = buildBikeRider(frameMat); rig.add(BR.root); const wheels = BR.wheels;   // detailed procedural bike + skeletal rider (rider.js)
+const legacyRider = LS.get('trailDescent.legacyRider', false) === true;
+function makeRider(mat){ try { return buildBikeRider(mat, { legacy: legacyRider }); } catch (e){ console.warn('rider fallback', e); return buildBikeRider(mat, { legacy: true }); } }
+const BR = makeRider(frameMat); rig.add(BR.root); const wheels = BR.wheels;   // athletic rider, or the original when the classic flag is on
+window.__riderStats = BR.stats;
 scene.add(bike);
 bike.traverse(o=>{ if(o.isMesh) o.castShadow=true; });
 
 // ---------- Input ----------
 const keys = {};
-addEventListener('keydown', e => { keys[e.code]=true; if(['Space','Tab','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault(); onPress(e.code); });
+addEventListener('keydown', e => { keys[e.code]=true; if(['Space','Tab','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault(); if (e.repeat && e.code === kbBind('spawn')) return; onPress(e.code); });
 addEventListener('keyup', e => { keys[e.code]=false; });
 // focus loss (alt-tab, clicking outside, Cmd-shortcuts) swallows keyup: clear every held key so W can't stay stuck and pedal forever
 const releaseKeys = () => { for (const k in keys) keys[k] = false; };
@@ -368,7 +449,7 @@ addEventListener('blur', releaseKeys); document.addEventListener('visibilitychan
 addEventListener('keyup', e => { if (e.key === 'Meta') releaseKeys(); });
 const toastEl = document.getElementById('toast'); let toastT;
 function toast(msg){ (window.__toastLog ||= []).push(msg); if (window.__toastLog.length > 50) window.__toastLog.shift(); toastEl.textContent = msg; toastEl.style.opacity = 1; clearTimeout(toastT); toastT = setTimeout(()=>toastEl.style.opacity=0, 2500); }
-addEventListener('gamepadconnected', e => { knownPads[e.gamepad.index]=true; toast('🎮 Controller connected: ' + e.gamepad.id.slice(0,40)); });
+addEventListener('gamepadconnected', e => { knownPads[e.gamepad.index]=true; setPadFamily(padFamily(e.gamepad)); toast('🎮 ' + GLYPHS[padFamily(e.gamepad)].name + ' connected: ' + e.gamepad.id.slice(0,40)); padSeen(e.gamepad); });
 addEventListener('gamepaddisconnected', e => { delete knownPads[e.gamepad.index]; toast('Controller disconnected'); });
 setTimeout(()=>{ if (!Object.keys(knownPads).length) toast(window.isSecureContext ? '🎮 Using a controller? Press any button on it to connect' : 'Controllers need https (or localhost)'); }, 800);
 const dz = (v, z=0.15) => Math.abs(v)<z ? 0 : (v - Math.sign(v)*z)/(1-z);
@@ -379,38 +460,32 @@ const knownPads = {};
 // axes 0,1 left stick; 2 LT; 3,4 right stick; 5 RT (triggers rest at -1, full at +1, sometimes 0 until first touched);
 // buttons 0 A, 1 B, 2 X, 3 Y, 4 LB, 5 RB, 6 View/Back, 7 Menu/Start, 8 LS, 9 RS.
 const trigSeenNeg = {};
-function trigAxis(gp, i){ const v = gp.axes[i]; if (v === undefined) return 0; const k = gp.index+'_'+i;
-  if (v < -0.05) trigSeenNeg[k] = true;
-  const t = trigSeenNeg[k] ? (v+1)/2 : v; return t < 0.04 ? 0 : Math.min(1, t); }
-// D-pad on non-standard layouts: a hat on axes 6/7 (Firefox on Linux/macOS), a single POV-hat axis (axis 9, DirectInput),
-// or plain buttons (the given left/right indices) when the pad has that many buttons.
-function dpadNS(gp, bv, li, ri){
-  let l = false, r = false, u = false, d = false;
-  if (gp.axes.length >= 8){ const h = gp.axes[6] || 0, v = gp.axes[7] || 0; if (h < -0.5) l = true; if (h > 0.5) r = true; if (v < -0.5) u = true; if (v > 0.5) d = true; }
-  if (gp.axes.length >= 10){ const p = gp.axes[9]; if (p !== undefined && p >= -1.05 && p <= 1.05 && Math.abs(p) > 0.05){ const dir = Math.round((p+1)/(2/7));   // 0 up .. 7 up-left
-      if (dir >= 1 && dir <= 3) r = true; if (dir >= 5 && dir <= 7) l = true; if (dir === 0 || dir === 1 || dir === 7) u = true; if (dir >= 3 && dir <= 5) d = true; } }
-  if (gp.buttons.length > ri){ if (bv(li) > 0.5) l = true; if (bv(ri) > 0.5) r = true; if (bv(li-2) > 0.5) u = true; if (bv(li-1) > 0.5) d = true; }
-  return {DL:l, DR:r, DU:u, DD:d};
+// Raw pad -> standard layout lives in pad.js: Chrome's 'standard' mapping, the Switch remap tables, saved setup-wizard maps
+// (per gamepad.id), and the old Firefox fallbacks. Custom binds then pick from the standard names on top of that.
+let PAD_PROFILES = loadProfiles(LS.get('trailDescent.padProfiles', {}));
+function savePadProfile(id, prof){ PAD_PROFILES = { ...PAD_PROFILES }; if (prof) PAD_PROFILES[id] = prof; else delete PAD_PROFILES[id]; LS.set('trailDescent.padProfiles', PAD_PROFILES); }
+function padMap(gp){ return readPad(gp, PAD_PROFILES, trigSeenNeg); }
+// Button names follow the last controller used (Xbox letters, PlayStation symbols, Nintendo letters in Nintendo spots).
+let padFam = 'xbox';
+const padLabel = code => code === 'LT' || code === 'RT' || code in GLYPHS.xbox ? glyph(code, padFam) : padLabelStd(code);
+const PT = s => padText(s, padFam);
+const padWiz = createPadWizard({ getPads: () => navigator.getGamepads ? navigator.getGamepads() : [], readStd: gp => padMap(gp),
+  saveProfile: (id, prof) => savePadProfile(id, prof), toast: m => toast(m), lsGet: LS.get, lsSet: LS.set,
+  onClose: () => { for (const k in prevBtn) prevBtn[k] = true; try { if (menu.open) renderMenu(); } catch(e){} } });
+window.__padWiz = padWiz; window.__padProfiles = () => PAD_PROFILES;
+// First time a pad that is not 'standard' shows up, offer the setup wizard (once per gamepad.id).
+function padSeen(gp){ if (!padWiz.open && needsSetup(gp, PAD_PROFILES) && !padWiz.isAsked(gp.id)) padWiz.offer(gp); }
+function connectedPad(){ const pads = navigator.getGamepads ? navigator.getGamepads() : []; for (const g of pads) if (g && g.connected) return g; return null; }
+function setupController(){ const g = connectedPad(); if (!g){ toast('🎮 Plug in a controller and press a button on it first'); return; } padWiz.start(g); }
+function refreshPadHints(){
+  const sh = document.getElementById('shopHint'); if (sh) sh.innerHTML = PT('<b>{LB}/{RB}</b> or ←/→ · Q/E: tab · D-pad ↑↓: choose (previews live) · <b>{A}</b> / Enter: buy or equip · <b>{B}</b> / Esc: close');
+  if (editorApi && editorApi.isOpen && editorApi.isOpen() && editorApi.refresh) editorApi.refresh();
 }
-function padMap(gp){
-  const bv = i => { const b = gp.buttons[i]; if (!b) return 0; if (typeof b !== 'object') return b; return (b.pressed && !b.value) ? 1 : b.value; };
-  const ax = i => gp.axes[i] || 0;
-  if (gp.mapping === 'standard'){
-    return { lx:ax(0), rx:ax(2), ry:ax(3), lt:bv(6), rt:bv(7),
-      ly:ax(1), btn:{A:bv(0)>0.5, B:bv(1)>0.5, X:bv(2)>0.5, Y:bv(3)>0.5, LB:bv(4)>0.5, RB:bv(5)>0.5, RS:bv(11)>0.5, Back:bv(8)>0.5, Start:bv(9)>0.5, DL:bv(14)>0.5, DR:bv(15)>0.5, DU:bv(12)>0.5, DD:bv(13)>0.5} };
-  }
-  if (gp.axes.length >= 6){   // Firefox XInput-style: triggers on axes 2 & 5
-    return { lx:ax(0), rx:ax(3), ry:ax(4), lt:trigAxis(gp,2), rt:trigAxis(gp,5),
-      ly:ax(1), btn:{A:bv(0)>0.5, B:bv(1)>0.5, X:bv(2)>0.5, Y:bv(3)>0.5, LB:bv(4)>0.5, RB:bv(5)>0.5, RS:bv(9)>0.5, Back:bv(6)>0.5, Start:bv(7)>0.5, ...dpadNS(gp, bv, 13, 14)} };
-  }
-  // other non-standard layouts: right stick on 2,3, triggers as buttons 6,7
-  return { lx:ax(0), rx:ax(2), ry:ax(3), lt:Math.max(bv(6), 0), rt:Math.max(bv(7), 0),
-    ly:ax(1), btn:{A:bv(0)>0.5, B:bv(1)>0.5, X:bv(2)>0.5, Y:bv(3)>0.5, LB:bv(4)>0.5, RB:bv(5)>0.5, RS:bv(11)>0.5, Back:bv(8)>0.5, Start:bv(9)>0.5, ...dpadNS(gp, bv, 14, 15)} };
-}
+function setPadFamily(f){ if (!f || f === padFam) return; padFam = f; window.__padFam = f; try { renderHelp(); refreshPadHints(); if (menu.open) renderMenu(); } catch(e){} }
 
 // Descenders default Xbox layout:
 // LS steer (x) / lean fwd-back (y) · RT pedal · LT brake · RS down = pump/preload, RS down->up = bunny hop,
-// RS up = counter-pump · RS left/right in air = tweak · LB + RS direction = trick · B respawn · Y switch camera
+// RS up = counter-pump · RS left/right = lean / carve · LB + RS direction = trick · B respawn · Y switch camera
 // X reset camera · Menu pause. (View toggles the help panel; A starts/restarts from menus.)
 let kbSpacePrev = false;
 // ---------- drivetrain: 1x12 (32T ring, 10-51T cassette), 29er wheel (2.3 m roll-out). Visual only: physics speed is untouched ----------
@@ -432,35 +507,66 @@ const DRV = (() => { const COGS = [51,45,39,33,28,24,21,18,16,14,12,10], RING = 
     const el = document.getElementById('gearVal'); if (el){ const t = `${D.gear}/12`; if (el.textContent !== t) el.textContent = t; el.classList.toggle('shifting', !!D.pending); } };
   return D; })();
 window.__drv = DRV;
+// Both-up wheelie vs down-then-up hop. ready means the sticks were centered together.
+const stickGate = { ready: true, downAt: 0 };
+window.__stickGate = stickGate;
 function readInput(){
-  const inp = {rsy:0, counter:false, steer:0, lean:0, pedal:0, brake:0, pumpHold:false, pop:false, tweak:0, trick:null, kbFlip:0, pressed:{}};
+  const inp = {rsy:0, ry:0, counter:false, steer:0, lean:0, pedal:0, brake:0, pumpHold:false, pop:false, tweak:0, bank:0, trick:null, kbFlip:0, pressed:{}, hold:{DU:false, DD:false, DL:false, DR:false, T:!!keys.KeyT}};
   const pads = navigator.getGamepads ? navigator.getGamepads() : [];
   for (const gp of pads){ if (!gp || !gp.connected) continue;
-    if (!knownPads[gp.index]){ knownPads[gp.index]=true; toast('🎮 Controller connected: ' + gp.id.slice(0,40)); }
-    const m = padMap(gp), rx = dz(m.rx), ry = dz(m.ry);
-    inp.steer += dz(m.lx); inp.lean += dz(m.ly);
-    inp.pedal = Math.max(inp.pedal, dz(m.rt, 0.12)); inp.brake = Math.max(inp.brake, dz(m.lt, 0.12));   // trigger deadzone: a resting trigger that reads 0.05-0.1 must not pedal
+    if (!knownPads[gp.index]){ knownPads[gp.index]=true; setPadFamily(padFamily(gp)); toast('🎮 ' + GLYPHS[padFamily(gp)].name + ' connected: ' + gp.id.slice(0,40)); }
+    padSeen(gp);
+    if (padWiz.open) break;   // the setup wizard reads the raw pad itself; nothing reaches the bike or menus meanwhile
+    const m = padMap(gp), sdz = m.dz, rx = dz(m.rx, sdz ?? 0.2), ry = dz(m.ry, sdz ?? 0.15);
+    inp.steer += dz(m.lx, sdz ?? 0.15); inp.lean += dz(m.ly, sdz ?? 0.15);
+    inp.lt = m.lt; inp.rt = m.rt; inp.lsHeld = !!m.btn.LS;
+    const brakePad = padBind('brake'), pedalPad = padBind('pedal');
+    inp.pedal = Math.max(inp.pedal, pedalPad === 'RT' ? dz(m.rt, 0.12) : pedalPad === 'LT' ? dz(m.lt, 0.12) : (m.btn[pedalPad] ? 1 : 0));
+    inp.brake = Math.max(inp.brake, brakePad === 'LT' ? dz(m.lt, 0.12) : brakePad === 'RT' ? dz(m.rt, 0.12) : (m.btn[brakePad] ? 1 : 0));
     if (m.btn.LB){ const mag = Math.hypot(rx,ry);   // LB + right stick: 8 directions (diagonals = tuck no-hander, X-up, nac-nac, tailwhip), RS click = barspin; stick amount = trick strength
       if (m.btn.RS){ inp.trick = 'bar'; inp.trickAmt = 1; }
       else if (mag > 0.35){ const sec = Math.round(Math.atan2(ry, rx)/(Math.PI/4)); inp.trick = {0:'right', 1:'dr', 2:'down', 3:'dl', 4:'left', '-4':'left', '-3':'ul', '-2':'up', '-1':'ur'}[sec]; inp.trickAmt = Math.min(1, (mag-0.35)/0.6); } }
-    else { if (ry > 0.5) inp.pumpHold = true; if (ry < -0.5){ inp.pop = true; inp.counter = true; } inp.tweak = rx; inp.rsy = ry; }
-    inp.dpx = (m.btn.DR?1:0) - (m.btn.DL?1:0); inp.dpy = (m.btn.DD?1:0) - (m.btn.DU?1:0); inp.lsx = dz(m.lx); inp.lsy = dz(m.ly);
-    for (const name of ['A','B','X','Y','Start','Back','DL','DR','DU','DD','LB','RB']){ const now=!!m.btn[name], key=gp.index+'_'+name; if(now && !prevBtn[key]) inp.pressed[name]=true; prevBtn[key]=now; }
+    else { if (ry > 0.5) inp.pumpHold = true; if (ry < -0.5) inp.counter = true; inp.bank = rx; inp.rsy = ry; inp.ry = ry; }
+    inp.dpx = (m.btn.DR?1:0) - (m.btn.DL?1:0); inp.dpy = (m.btn.DD?1:0) - (m.btn.DU?1:0); inp.lsx = dz(m.lx, sdz ?? 0.15); inp.lsy = dz(m.ly, sdz ?? 0.15);
+    inp.pad = m.btn;
+    inp.hold.DU = !!m.btn.DU; inp.hold.DD = !!m.btn.DD; inp.hold.DL = !!m.btn.DL; inp.hold.DR = !!m.btn.DR; inp.hold.Back = !!m.btn.Back;
+    for (const name of ['A','B','X','Y','Start','Back','DL','DR','DU','DD','LB','RB','LS','RS']){ const now=!!m.btn[name], key=gp.index+'_'+name; if(now && !prevBtn[key]) inp.pressed[name]=true; prevBtn[key]=now; }
+    if (Object.keys(inp.pressed).length || Math.abs(inp.steer) > 0.3 || inp.pedal > 0.3) setPadFamily(padFamily(gp));
     break; }
-  if (keys.KeyA||keys.ArrowLeft) inp.steer -= 1; if (keys.KeyD||keys.ArrowRight) inp.steer += 1;
-  if (keys.KeyW||keys.ArrowUp) inp.pedal = 1; if (keys.KeyS||keys.ArrowDown) inp.brake = 1;
-  if (keys.KeyI) inp.kbFlip -= 1; if (keys.KeyK) inp.kbFlip += 1;
-  if (keys.KeyJ) inp.steer -= 1; if (keys.KeyL) inp.steer += 1;
-  if (keys.ShiftLeft||keys.ShiftRight) inp.counter = true;
-  if (keys.KeyQ) inp.tweak -= 1; if (keys.KeyE) inp.tweak += 1;
-  if (keys.KeyC){ const u = keys.KeyI||keys.ArrowUp, d = keys.KeyK||keys.ArrowDown, l = keys.KeyJ||keys.ArrowLeft, r = keys.KeyL||keys.ArrowRight;
-    const t = keys.KeyU ? 'bar' : u && l ? 'ul' : u && r ? 'ur' : d && l ? 'dl' : d && r ? 'dr' : u ? 'up' : d ? 'down' : l ? 'left' : r ? 'right' : null; if (t){ inp.trick = t; inp.trickAmt = 1; } }
-  if (keys.Space) inp.pumpHold = true;
-  if (!keys.Space && kbSpacePrev) inp.pop = true;
-  kbSpacePrev = !!keys.Space;
+  if (padWiz.open){ inp.pressed = {}; if (window.__forceInp) Object.assign(inp, window.__forceInp, { pressed: {} }); return inp; }
+  if (keyDown('steerLeft')) inp.steer -= 1; if (keyDown('steerRight')) inp.steer += 1;
+  if (keyDown('pedal')) inp.pedal = 1; if (keyDown('brake')) inp.brake = 1;
+  if (keyDown('flipForward')) inp.kbFlip -= 1; if (keyDown('flipBack')) inp.kbFlip += 1;
+  if (keyDown('counter') || keys.ShiftRight) inp.counter = true;
+  if (keyDown('leanLeft')) inp.bank -= 1; if (keyDown('leanRight')) inp.bank += 1;
+  if (keyDown('trick')){ const u = keyDown('flipForward')||keys.ArrowUp, d = keyDown('flipBack')||keys.ArrowDown, l = keyDown('steerLeft'), r = keyDown('steerRight');
+    const t = keyDown('barspin') ? 'bar' : u && l ? 'ul' : u && r ? 'ur' : d && l ? 'dl' : d && r ? 'dr' : u ? 'up' : d ? 'down' : l ? 'left' : r ? 'right' : null; if (t){ inp.trick = t; inp.trickAmt = 1; } }
+  if (keyDown('pump')) inp.pumpHold = true;
+  if (!keyDown('pump') && kbSpacePrev) inp.pop = true;
+  kbSpacePrev = keyDown('pump');
+  inp.hold.T = keyDown('emote');
   inp.steer = THREE.MathUtils.clamp(inp.steer,-1,1); inp.lean = THREE.MathUtils.clamp(inp.lean + inp.kbFlip,-1,1);
-  inp.tweak = THREE.MathUtils.clamp(inp.tweak,-1,1);
-  if (SETTINGS.invertY) inp.lean = -inp.lean; if (SETTINGS.invertX) inp.tweak = -inp.tweak;   // Settings: invert options (input mapping only)
+  inp.bank = THREE.MathUtils.clamp(inp.bank || 0,-1,1); inp.tweak = THREE.MathUtils.clamp(inp.tweak,-1,1);
+  inp.lyRaw = inp.lean; inp.bankRaw = inp.bank;
+  if (SETTINGS.invertY) inp.lean = -inp.lean; if (SETTINGS.invertX) inp.bank = -inp.bank;   // Settings: invert options (input mapping only)
+  // Physical stick up is negative Y. A wheelie arms only when both sticks leave center
+  // together and stay up. A right-stick hop is down first, then up, and that up is not a wheelie.
+  // Left stick up on its own is just lean. The keyboard backflip key wheelies on the ground.
+  const lyS = inp.lsy || 0, ryS = inp.ry || 0, nowMs = performance.now();
+  const lsUp = lyS <= -0.62, rsUp = ryS <= -0.62, rsDown = ryS >= 0.5;
+  if (rsDown){ stickGate.downAt = nowMs; stickGate.ready = false; }
+  const recentDown = stickGate.downAt > 0 && (nowMs - stickGate.downAt) < 400;
+  if (Math.abs(lyS) <= 0.3 && Math.abs(ryS) <= 0.3 && !recentDown) stickGate.ready = true;
+  else if ((lsUp || rsUp) && !(lsUp && rsUp)) stickGate.ready = false;
+  if (rsUp && recentDown) inp.pop = true;
+  inp.wheelieChord = lsUp && rsUp && stickGate.ready && !recentDown && !inp.trick;
+  inp.kbWheelie = keyDown('flipBack') && !inp.trick;
+  const held = name => name === 'LT' ? (inp.lt || 0) > 0.45 : name === 'RT' ? (inp.rt || 0) > 0.45 : name === 'LS' ? !!inp.lsHeld : !!(inp.pad && inp.pad[name]);
+  inp.spawnClick = held(padBind('spawnClick'));
+  inp.spawnMod = held(padBind('spawnMod'));
+  inp.droneHeld = held(padBind('drone'));
+  if (inp.wheelieChord || inp.kbWheelie){ inp.pumpHold = false; inp.pop = false; inp.counter = false; }
+  if (window.__forceInp) Object.assign(inp, window.__forceInp);
   return inp;
 }
 
@@ -471,9 +577,54 @@ const S = { x:0,y:0,z:0, yaw:0, speed:0, vy:0, vx:0, vz:0, air:false, airT:0, pi
 const $ = id => document.getElementById(id);
 const trickEl = $('trick'), centerEl = $('center');
 function flash(msg, t=1.2){ centerEl.textContent = msg; centerEl.style.opacity = 1; S.flashT = t; }
+const rag = { on:false };
+let ragDetached = false;
+const _up = new THREE.Vector3(0, 1, 0), _fwd = new THREE.Vector3(0, 0, -1), _dir = new THREE.Vector3();
+const bailW = { ground: groundH, half: HALF, solids(x, z, out){
+  out.length = 0;
+  for (const t of nearTrees(x, z)){ out.push({ k:'cap', x:t.x, z:t.z, r:0.4, y0:t.y, y1:t.y + (t.h || 4) * 0.8 }); if (out.length >= 6) break; }
+  for (const b of bigBouldersNear(x, z)){ out.push({ k:'sph', x:b.x, y:terrainH(b.x, b.z) + b.h * 0.45, z:b.z, r:Math.min(b.r, b.h) * 0.6 }); if (out.length >= 8) break; }
+}};
+function eachPart(fn){ for (const k in BR.parts) fn(BR.parts[k]); }
+function detachParts(){ if (ragDetached) return; bike.updateWorldMatrix(true, true); eachPart(o => scene.attach(o)); ragDetached = true; }
+function attachParts(){ if (!ragDetached) return; eachPart(o => BR.root.attach(o)); ragDetached = false; }
+function beginRagdoll(){ if (rag.on) return; Object.assign(rag, spawnRagdoll(S)); rag.on = true; detachParts(); }
+function endRagdoll(){ if (!rag.on && !ragDetached) return; rag.on = false; attachParts(); }
+function segBetween(mesh, a, b){ mesh.position.set((a.x + b.x) * 0.5, (a.y + b.y) * 0.5, (a.z + b.z) * 0.5); _dir.set(b.x - a.x, b.y - a.y, b.z - a.z); if (_dir.lengthSq() < 1e-8) return; mesh.quaternion.setFromUnitVectors(_up, _dir.normalize()); }
+function segEnd(mesh, a, b){ mesh.position.set(b.x, b.y, b.z); _dir.set(b.x - a.x, b.y - a.y, b.z - a.z); if (_dir.lengthSq() < 1e-8) return; mesh.quaternion.setFromUnitVectors(_fwd, _dir.normalize()); }
+function applyBailPose(){
+  const P = rag.parts, M = BR.parts; if (!P || !M) return;
+  const b = rag.bike;
+  bike.position.set(b.x, b.y, b.z); bike.quaternion.set(b.q[0], b.q[1], b.q[2], b.q[3]);
+  pitchG.rotation.set(0, 0, 0); leanG.rotation.set(0, 0, 0);
+  M.torso.position.set(P.pelvis.x, P.pelvis.y, P.pelvis.z);
+  _dir.set(P.chest.x - P.pelvis.x, P.chest.y - P.pelvis.y, P.chest.z - P.pelvis.z);
+  if (_dir.lengthSq() > 1e-8) M.torso.quaternion.setFromUnitVectors(_up, _dir.normalize());
+  M.head.position.set(P.head.x, P.head.y, P.head.z);
+  _dir.set(P.head.x - P.chest.x, P.head.y - P.chest.y, P.head.z - P.chest.z);
+  if (_dir.lengthSq() > 1e-8) M.head.quaternion.setFromUnitVectors(_up, _dir.normalize());
+  segBetween(M.upperL, P.shL, P.elL); segBetween(M.foreL, P.elL, P.haL);
+  segBetween(M.upperR, P.shR, P.elR); segBetween(M.foreR, P.elR, P.haR);
+  segEnd(M.handL, P.elL, P.haL); segEnd(M.handR, P.elR, P.haR);
+  segBetween(M.thighL, P.hpL, P.knL); segBetween(M.shinL, P.knL, P.ftL);
+  segBetween(M.thighR, P.hpR, P.knR); segBetween(M.shinR, P.knR, P.ftR);
+  M.kneeL.position.set(P.knL.x, P.knL.y, P.knL.z); M.kneeL.quaternion.copy(M.shinL.quaternion);
+  M.kneeR.position.set(P.knR.x, P.knR.y, P.knR.z); M.kneeR.quaternion.copy(M.shinR.quaternion);
+  segEnd(M.footL, P.knL, P.ftL); segEnd(M.footR, P.knR, P.ftR);
+  M.head.visible = M.torso.visible = M.upperL.visible = M.upperR.visible = M.foreL.visible = M.foreR.visible = true;
+}
+function bailCamera(){
+  const p = rag.parts.pelvis, yaw = S.yaw || 0, hx = -Math.sin(yaw), hz = -Math.cos(yaw);
+  camera.position.set(p.x - hx * 4.4, Math.max(p.y, groundH(p.x, p.z)) + 2.1, p.z - hz * 4.4);
+  camera.up.set(0, 1, 0); camera.lookAt(p.x, p.y + 0.35, p.z);
+  if (Math.abs(camera.fov - 66) > 0.2){ camera.fov = 66; camera.updateProjectionMatrix(); }
+}
 function placeAt(x, z, yaw){
+  endRagdoll();
+  stickGate.ready = true; stickGate.downAt = 0;
   S.x = x; S.z = z; S.y = groundH(S.x,S.z); S.yaw = yaw;
-  S.speed = 0; S.vy = 0; S.air = false; S.travel = S.yaw; S.wYaw = S.wPitch = 0; S.nose = 0; S.susp = S.suspV = 0; S.pitch = 0; S.spin = 0; S.lean = 0; S.preload = 0; S.crashT = 0; S.tweak = 0; S.trick = null; S.landCool = 0.3;
+  S.prevHf = S.prevHr = undefined;   // wheel heights from before the move would read as a huge bump on the first frame
+  S.speed = 0; S.vy = 0; S.air = false; S.travel = S.yaw; S.wYaw = S.wPitch = 0; S.nose = 0; S.susp = S.suspV = 0; S.pitch = 0; S.spin = 0; S.lean = 0; S.preload = 0; S.crashT = 0; S.tweak = 0; S.trick = null; S.landCool = 0.3; S.fakie = false; S.wheelie = false; S.wheelieArm = 0; S.lipHop = null; S.hopWin = 0; S.jolt = 0;
 }
 function resetGame(){
   Object.assign(S,{lives:3,bestAir:0,totalAir:0,time:0,maxKmh:0,clean:0,spins:0,flips:0,finishes:0,parkClean:0,state:'riding',paused:false});
@@ -481,7 +632,7 @@ function resetGame(){
 }
 function crash(reason){ S.lastCrash = reason; sfxCrash(); endParkLine();
   if (S.crashT>0) return;
-  S.crashT = 2.0; S.air = false; trickEl.textContent = reason;
+  S.crashT = 2.6; S.air = false; beginRagdoll(); trickEl.textContent = reason;
   // health only counts during a trail run; in free roam a crash just respawns you
   if (S.run){ S.lives--;
     if (S.lives <= 0){ const tr = trails[S.run.t]; S.failedRun = S.run.t; S.run = null; flash('RUN OVER', 2); toast(`💀 Out of health — ${tr.name} run ended. Back to the start.`); }
@@ -490,40 +641,138 @@ function crash(reason){ S.lastCrash = reason; sfxCrash(); endParkLine();
 }
 function showOverlay(title,msg){ $('overlay').classList.remove('hidden'); $('overlayBox').querySelector('h1').textContent=title; $('overlayMsg').innerHTML=msg; }
 function togglePause(){ if (S.state!=='riding' || shopOpen || bigMap.open) return; S.paused=!S.paused; if (S.paused) openMenu('pause'); else closeMenu(); }
-let emoteArm = 0;
+let emoteWheel = null, duHold = 0, tHold = 0, duGearSent = false;
+const emoteEl = document.createElement('div'); emoteEl.id = 'emoteWheel'; emoteEl.hidden = true; document.body.appendChild(emoteEl);
+function emoteChoices(){ return EMOTES.map((e, i) => `${i + 1} ${e}`).join('   ·   '); }
+function openEmote(which){ if (emoteWheel) return; emoteWheel = which; emoteEl.hidden = false; emoteEl.textContent = `EMOTE  ·  ${emoteChoices()}  ·  right stick or 1–4`; }
+function closeEmote(){ emoteWheel = null; emoteEl.hidden = true; }
+function sendEmote(i){ if (NET && i >= 0 && i < EMOTES.length) NET.emote(i); closeEmote(); duHold = 0; tHold = 0; }
+function emoteFrame(dt, inp){
+  const slow = !!(S.lift || (S.speed || 0) * 3.6 < 3);
+  const can = NET && NET.st.status === 'in' && !menu.open && !bigMap.open && !shopOpen && S.state === 'riding' && !S.paused && slow;
+  const riding = S.state === 'riding' && !S.paused && !menu.open;
+  if (inp.hold && inp.hold.DU){ duHold += dt;
+    if (!emoteWheel && duHold >= 0.35 && !duGearSent && riding && !can){ DRV.manual(+1); duGearSent = true; } }
+  else {
+    if (duHold > 0.04 && duHold < 0.35 && !emoteWheel && riding) DRV.manual(+1);
+    duHold = 0; duGearSent = false; if (emoteWheel === 'du') closeEmote(); }
+  if (inp.hold && inp.hold.T) tHold += dt; else { tHold = 0; if (emoteWheel === 't') closeEmote(); }
+  if (!emoteWheel && can && duHold >= 0.35) openEmote('du');
+  if (!emoteWheel && can && tHold >= 0.35) openEmote('t');
+  if (emoteWheel && !can && !window.__forceEmote) closeEmote();
+  if (window.__forceEmote && !emoteWheel) openEmote(window.__forceEmote === true ? 'du' : window.__forceEmote);
+  if (emoteWheel){ inp.pumpHold = false; inp.pop = false; inp.counter = false;
+    const rx = inp.bank || inp.tweak || 0, ry = inp.rsy || 0;
+    if (ry < -0.55) sendEmote(0); else if (rx > 0.55) sendEmote(1); else if (ry > 0.55) sendEmote(2); else if (rx < -0.55) sendEmote(3);
+    inp.tweak = 0; inp.rsy = 0; inp.bank = 0; }
+  window.__emote = { wheel: !!emoteWheel, tHold: +tHold.toFixed(2), can: !!can };
+}
 function onPress(code){
-  if (NET && NET.st.status === 'in' && !menu.open && !bigMap.open && !shopOpen && (S.lift || (S.speed||0)*3.6 < 3)){   // emotes: only when (nearly) stopped or on a lift
-    if (code === 'KeyT'){ emoteArm = performance.now() + 2500; toast('Emote: 1 👍  2 🔥  3 ⏳  4 🏁'); return; }
-    if (/^Digit[1-4]$/.test(code) && (keys.KeyT || performance.now() < emoteArm)){ emoteArm = 0; NET.emote(+code.slice(5) - 1); return; }
-    if (['DU','DR','DD','DL'].includes(code)){ NET.emote({DU:0, DR:1, DD:2, DL:3}[code]); return; } }
+  if (padWiz.open){ padWiz.key(code); return; }
+  if (editorApi && editorApi.isOpen()){
+    if (editorApi.isRiding()){ if (code === 'Escape' || hitBind('editorTest', code) || code === 'Start'){ editorApi.stopRide(); return; } }
+    else { if (code === 'Start'){ editorApi.testRide(); return; } editorApi.onPress(code); return; }
+  }
+  if (emoteWheel){
+    if (/^Digit[1-4]$/.test(code)){ sendEmote(+code.slice(5) - 1); return; }
+    if (code === 'DR' || code === 'DD' || code === 'DL'){ sendEmote({ DR: 1, DD: 2, DL: 3 }[code]); return; }
+    if (code === 'DU' || code === 'KeyT') return; }
   if (S.lift){ if (code==='A'||code==='Enter'||code==='Space') S.lift.d = 1e9; return; }   // skip the chairlift ride
   if (shopOpen){ shopKey(code); return; }
   if (bigMap.open){ mapKey(code); return; }
   if (menu.open){ menuKey(code); return; }
-  if ((code==='Back'||code==='KeyM') && S.state==='riding' && !S.lift){ openMap(); return; }
-  if (code==='Y' && S.paused){ $('help').classList.toggle('hidden'); return; }   // help moved into the pause menu on the controller
-  if ((code==='X'||code==='KeyO') && (S.state==='menu' || S.paused)){ openShop(); return; }
-  if (code==='KeyO' && S.state==='riding'){ openShop(); return; }
+  if (hitBind('spawn', code) && S.state==='riding'){ trySetSpawn(); return; }
+  if ((code==='Enter' || code==='A') && S.state==='riding' && !S.paused && S.atStart >= 0 && !(S.countdown > 0)){ beginRace(S.atStart); return; }
+  if (hitBind('map', code) && S.state==='riding' && !S.lift && !bigMap.open){ openMap(); return; }
+  if (code==='Back' && bigMap.open){ closeMap(); return; }
+  if (hitBind('drone', code) && S.state==='riding' && !menu.open && !shopOpen && !bigMap.open){ toggleDrone(); return; }
+  if (hitBind('help', code) || (code==='Y' && S.paused)){ $('help').classList.toggle('hidden'); return; }
+  if (code === kbBind('shop') && (S.state==='menu' || S.paused || S.state==='riding')){ openShop(); return; }
+  if (code === padBind('shop') && (S.state==='menu' || S.paused)){ openShop(); return; }
   if (code==='Enter' || code==='A'){ if (S.state==='menu'||S.state==='over'||S.state==='finished'){ resetGame(); return; } }
   if (code==='Space' && (S.state==='menu'||S.state==='over'||S.state==='finished')) { resetGame(); return; }
-  if (code==='KeyP'||code==='Escape'||code==='Start') togglePause();
-  if (code==='KeyV'||code==='Y'){   // (C is the keyboard trick modifier, so the camera stays on V)
+  if (hitBind('pause', code) || code==='Escape' || code==='Start') togglePause();
+  if (hitBind('camera', code)){
   camMode = (camMode+1)%CAM_NAMES.length; LS.set('trailDescent.cam', camMode); camInit = false; drone.t = 0; toast('🎥 Camera: ' + CAM_NAMES[camMode]); }
-  if (code==='KeyX'||code==='X') camInit = false;
-  if (code==='KeyH') $('help').classList.toggle('hidden');
-  if ((code==='KeyR'||code==='B') && S.state==='riding' && !S.paused) { respawnSafe(); flash('RESPAWN',0.8); }
-  // teleport between spots: D-pad ← → on the controller, [ ] / , . or 1-8 on the keyboard
-  if (S.state==='riding' && !S.paused && (code==='DU'||code==='KeyG')) DRV.manual(+1);
-  if (S.state==='riding' && !S.paused && (code==='DD'||code==='KeyF')) DRV.manual(-1);
+  if (hitBind('camReset', code)) camInit = false;
+  if ((hitBind('respawn', code)) && S.state==='riding' && !S.paused) { if (respawnSafe() !== 'spawn') flash('RESPAWN',0.8); }
+  if (S.state==='riding' && !S.paused && hitBind('gearUp', code)) DRV.manual(+1);
+  if (S.state==='riding' && !S.paused && hitBind('gearDown', code)) DRV.manual(-1);
   if (S.state==='riding' && !S.paused){
-    if (code==='DL'||code==='BracketLeft'||code==='Comma') teleport(nextOpen(spotI,-1));
-    if (code==='DR'||code==='BracketRight'||code==='Period') teleport(nextOpen(spotI,1));
+    if (hitBind('spotPrev', code) || code==='Comma') teleport(nextOpen(spotI,-1));
+    if (hitBind('spotNext', code) || code==='Period') teleport(nextOpen(spotI,1));
     const m = /^Digit([0-9])$/.exec(code), num = m ? (+m[1]||10) + (keys.ShiftLeft||keys.ShiftRight ? 10 : 0) : 0; if (m && num <= spots.length){ const j = num-1; /* 1-9,0 = spots 1-10; Shift+1-5 = spots 11-15 */ if (isOpen(j)) teleport(j); else toast(`🔒 ${spots[j].name} is locked — ${lockMsg(spotTrail(j))}`); }
   } else if (S.state==='menu' && (code==='DL'||code==='DR'||code==='BracketLeft'||code==='BracketRight')){
     spotI = nextOpen(spotI, code==='DL'||code==='BracketLeft' ? -1 : 1); $('overlayMsg').innerHTML = menuMsg(); }
 }
 const CAM_NAMES = ['Chase', 'Far chase', 'Low chase', 'Helmet cam', 'GoPro chest', 'Side tracking', 'Trackside drone'];
-let camMode = Math.min(CAM_NAMES.length-1, LS.get('trailDescent.cam', 0) | 0); const drone = {t: 0, p: new THREE.Vector3()};
+const CAM_HELMET = 3;
+// No saved choice means helmet. A stored 0 is an explicit chase pick and stays chase.
+function savedCam(){
+  const v = LS.get('trailDescent.cam', null);
+  if (v === null || v === undefined || v === '') return CAM_HELMET;
+  const n = v | 0;
+  return Number.isFinite(n) ? Math.max(0, Math.min(CAM_NAMES.length - 1, n)) : CAM_HELMET;
+}
+let camMode = savedCam(); const drone = {t: 0, p: new THREE.Vector3()};
+let backHold = 0, backWas = false;
+function droneOpts(){
+  const num = (k, d, lo, hi) => { const v = SETTINGS[k]; return typeof v === 'number' && v >= lo && v <= hi ? v : d; };
+  return { speed: num('droneSpeed', 12, 6, 24), tilt: num('droneTilt', 12, 0, 35) * Math.PI/180, dist: num('droneDist', 8, 4, 18), height: num('droneHeight', 4, 2, 12), manual: SETTINGS.droneFly === 'manual' };
+}
+function toggleDrone(){
+  if (S.run || S.countdown > 0){ toast('Drone is off during a race'); return; }
+  if (S.lift || shopOpen || bigMap.open) return;
+  const D = FPV.state;
+  if (D.on){ D.on = false; FPV.group.visible = false; toast('Drone away'); return; }
+  D.on = true; D.manual = droneOpts().manual; D.yaw = S.yaw; D.pitch = 0; D.roll = 0; D.vx = D.vy = D.vz = 0;
+  const fx = -Math.sin(S.yaw), fz = -Math.cos(S.yaw);
+  D.x = S.x - fx * 3; D.z = S.z - fz * 3; D.y = Math.max(S.y + 3, groundH(D.x, D.z) + 2);
+  FPV.group.visible = true;
+  if (D.manual){ S.speed = 0; S.vx = S.vz = S.vy = 0; S.air = false; S.y = groundH(S.x, S.z); toast('FPV drone — manual. ' + keyLabel(kbBind('drone')) + ' or hold ' + padLabel(padBind('drone')) + ' to put it away'); }
+  else toast('FPV drone — following. ' + keyLabel(kbBind('drone')) + ' or hold ' + padLabel(padBind('drone')) + ' to put it away');
+}
+function flyDrone(dt, inp){
+  const D = FPV.state; if (!D.on){ FPV.group.visible = false; return; }
+  if (S.run || S.countdown > 0){ D.on = false; FPV.group.visible = false; toast('Drone is off during a race'); return; }
+  const opt = droneOpts(); D.manual = opt.manual;
+  // Left stick yaw is the stick only. Arrows also write into steer for the bike, and they are pitch/roll here.
+  let thr = -(inp.lyRaw || 0), yawIn = inp.lsx || 0, pitchIn = inp.rsy || 0, rollIn = inp.bankRaw || 0;
+  if (D.manual){
+    if (keys.KeyW || keys.Space) thr = 1;
+    if (keys.KeyS || keys.ShiftLeft || keys.ShiftRight) thr = -1;
+    if (keys.KeyA) yawIn -= 1; if (keys.KeyD) yawIn += 1;
+    if (keys.ArrowUp) pitchIn = -1; if (keys.ArrowDown) pitchIn = 1;
+    if (keys.ArrowLeft) rollIn = -1; if (keys.ArrowRight) rollIn = 1;
+    yawIn = THREE.MathUtils.clamp(yawIn, -1, 1);
+    inp.steer = 0; inp.lean = 0; inp.bank = 0; inp.pedal = 0; inp.brake = 0; inp.pumpHold = false; inp.pop = false; inp.counter = false; inp.trick = null;
+    S.speed = 0; S.vx = S.vz = S.vy = 0; S.wheelie = false; S.lean = 0; S.pitch = 0; S.air = false; S.y = groundH(S.x, S.z);
+  }
+  stepDrone(D, dt, opt, { groundH, nearTrees, half: HALF }, { x:S.x, y:S.y, z:S.z, yaw:S.yaw || 0 }, { thr, yaw: yawIn, pitch: pitchIn, roll: rollIn });
+  FPV.group.visible = true;
+  FPV.group.position.set(D.x, D.y, D.z);
+  FPV.group.rotation.set(D.pitch, D.yaw, D.roll);
+  for (const p of FPV.props) p.rotation.y = D.spin;
+}
+function droneCamera(){
+  const D = FPV.state, opt = droneOpts();
+  const fx = -Math.sin(D.yaw), fz = -Math.cos(D.yaw);
+  if (D.manual){
+    const up = opt.tilt;
+    camera.position.set(D.x - fx * 0.42, D.y + 0.08, D.z - fz * 0.42);
+    camera.up.set(0, 1, 0);
+    camera.lookAt(D.x + fx * 8, D.y + Math.sin(up) * 8 + D.pitch * 4, D.z + fz * 8);
+  } else {
+    const look = new THREE.Vector3(S.x, S.y + 1.05, S.z);
+    const back = new THREE.Vector3(D.x - look.x, 0, D.z - look.z);
+    if (back.lengthSq() < 0.01) back.set(fx, 0, fz);
+    back.normalize();
+    camera.position.set(D.x + back.x * 2.05, D.y + 0.55, D.z + back.z * 2.05);
+    camera.up.set(0, 1, 0);
+    camera.lookAt(look);
+  }
+  if (camera.fov !== 82){ camera.fov = 82; camera.updateProjectionMatrix(); }
+}
 // ---------- open world: spots, safe respawn, trail runs ----------
 // teleport unlocks: a trail's spot unlocks after you finish that trail once. Flow Line, the park and the meadow are always open.
 const UKEY = RAMP ? 'trailDescent.unlocked.rampage' : 'trailDescent.unlocked';
@@ -537,7 +786,7 @@ const lockMsg = tr => tr.unlockAny ? `finish any other Rampage line to unlock ${
 const nextOpen = (from, dir) => { for (let k=1;k<=spots.length;k++){ const j = ((from + dir*k) % spots.length + spots.length) % spots.length; if (isOpen(j)) return j; } return from; };
 let spotI = 1;   // spawn at Flow Line
 const spotTag = i => { const tr = spots[i].trail !== undefined ? trails[spots[i].trail] : (spots[i].name.startsWith('Dirt') ? PARK : null); return tr ? ` ${DIFF[tr.diff].icon} ${DIFF[tr.diff].label} ${tr.type}` : ' free roam'; };
-const menuMsg = () => `<small>Press <b>X</b> / <b>O</b> for the 🚲 Bike Shop · $${S.score.toLocaleString()} DOLLAHS</small><br>Press <b>A</b> / <b>Enter</b> to drop in at <b>${spots[spotI].name}</b> <small>(${spotTag(spotI).trim()})</small><br><small>D-pad ← → / [ ] to pick a spot</small>`;
+const menuMsg = () => `<small>Press <b>${padLabel('X')}</b> / <b>O</b> for the 🚲 Bike Shop · $${S.score.toLocaleString()} DOLLAHS</small><br>Press <b>${padLabel('A')}</b> / <b>Enter</b> to drop in at <b>${spots[spotI].name}</b> <small>(${spotTag(spotI).trim()})</small><br><small>D-pad ← → / [ ] to pick a spot</small>`;
 function teleport(i, quiet){
   if (S.lift){ S.lift = null; $('liftRide').style.display = 'none'; myChair.visible = false; }
   spotI = (i + spots.length) % spots.length; const s = spots[spotI];
@@ -546,11 +795,41 @@ function teleport(i, quiet){
   if (!quiet){ flash(s.name, 1.6); } toast(`📍 ${spotI+1}/${spots.length} ${s.name} ·${spotTag(spotI)}  ·  ${spots.filter((_,j)=>isOpen(j)).length} spots unlocked  ·  D-pad ← → to teleport`);
 }
 const OOB = HALF - 60, inside = (x,z) => Math.max(Math.abs(x), Math.abs(z)) < OOB - 90;
+const SPAWN_KEY = 'trailDescent.spawn';
+let spawn = LS.get(SPAWN_KEY, null);
+if (!spawn || ![spawn.x, spawn.z, spawn.yaw].every(Number.isFinite)) spawn = null;
+try { localStorage.removeItem('trailDescent.marker'); } catch (e) {}
+const spawnState = { point: spawn, latch: false };
+const SPAWN_WHY = { air:'Land first', lift:'Not on the lift', speed:'Stop or slow down', blocked:'Not inside a rock or tree', ground:'Get onto rideable ground', timed:'Off during a timed run' };
+function spawnBlocked(x, z){
+  for (const t of nearTrees(x, z)) if ((t.x - x)**2 + (t.z - z)**2 < 0.56) return true;
+  for (const b of bigBouldersNear(x, z)) if (rockContact(b, x, z)) return true;
+  return false;
+}
+function riderForSpawn(){
+  return { x:S.x, z:S.z, yaw:S.yaw || 0, speed:S.speed || 0, air:!!S.air || S.crashT > 0, lift:!!S.lift, blocked:spawnBlocked(S.x, S.z), rideable:!S.air && !S.lift && S.crashT <= 0, timed:!!S.run };
+}
+function saveSpawn(){ spawn = spawnState.point; LS.set(SPAWN_KEY, spawn); }
+function applySpawnResult(r){
+  if (r.event === 'set'){ saveSpawn(); flash('RESPAWN POINT', 1.1); toast('↩ Respawn point set. Pause to clear it, or press it again while standing on it.'); }
+  else if (r.event === 'clear'){ saveSpawn(); flash('CLEARED', 0.8); toast('↩ Respawn point cleared. Bails use checkpoints again.'); }
+  else if (r.event === 'reject') toast('↩ ' + (SPAWN_WHY[r.reason] || 'Cannot set that here'));
+}
+function trySetSpawn(){ const r = spawnHold(spawnState, true, riderForSpawn()); spawnState.latch = false; applySpawnResult(r); }
+function spawnFrame(inp){ const r = spawnHold(spawnState, !!inp.spawnClick && !!inp.spawnMod, riderForSpawn()); if (r.event && r.event !== 'held') applySpawnResult(r); }
+function clearSpawnPoint(){ applySpawnResult(clearSpawn(spawnState)); }
 function respawnSafe(){
+  const prefer = savedCam(); if (prefer !== camMode){ camMode = prefer; camInit = false; }
   if (S.failedRun !== undefined && S.failedRun !== null){ const tr = trails[S.failedRun]; S.failedRun = null;   // failed run: back to just above that trail's START arch
-    placeAt(tr.pts[0][0], tr.pts[0][1], tr.yaw[0]); S.crumbs = []; S.crumbT = 0; camInit = false; return; }
-  if (S.run){ const tr = trails[S.run.t], cp = S.run.cp != null ? tr.cps[S.run.cp] : {x:tr.pts[3][0], z:tr.pts[3][1], yaw:tr.yaw[3]};   // run: last checkpoint (or the start), timer keeps going
-    updateChunks(cp.x, cp.z, 1e9, 160); placeAt(cp.x, cp.z, cp.yaw); S.speed = 3.5; S.crumbs = []; S.crumbT = 0; camInit = false; return; }
+    placeAt(tr.pts[0][0], tr.pts[0][1], tr.yaw[0]); S.crumbs = []; S.crumbT = 0; camInit = false; return 'start'; }
+  if (spawn && !S.run){ const choice = respawnChoice(spawn, { x:S.x, z:S.z, yaw:S.yaw }, false);
+    updateChunks(choice.x, choice.z, 1e9, 160); placeAt(choice.x, choice.z, choice.yaw); S.crumbs = []; S.crumbT = 0; camInit = false;
+    flash('RESPAWN POINT', 1.2);
+    return 'spawn'; }
+  if (!S.run && S.free && S.free.cp >= 0){ const tr = trails[S.free.t], cp = tr && tr.cps[S.free.cp];
+    if (cp){ updateChunks(cp.x, cp.z, 1e9, 160); placeAt(cp.x, cp.z, cp.yaw); S.speed = 3.5; S.crumbs = []; S.crumbT = 0; camInit = false; return 'checkpoint'; } }
+  if (S.run){ const tr = trails[S.run.t], cp = S.run.cp != null && S.run.cp >= 0 ? tr.cps[S.run.cp] : {x:tr.pts[3][0], z:tr.pts[3][1], yaw:tr.yaw[3]};   // race: last checkpoint, never the personal point. Timer keeps going.
+    updateChunks(cp.x, cp.z, 1e9, 160); placeAt(cp.x, cp.z, cp.yaw); S.speed = 3.5; S.crumbs = []; S.crumbT = 0; camInit = false; return 'checkpoint'; }
   // inside the dirt jump park: back to the top of the roll-in of the line you were on (nearest by lateral offset), facing down it, stopped
   if (!RAMP && PARK.lines && inPark(S.x, S.z)){ const d = PARK.dir, sx = -d[1], sz = d[0], lat = (S.x-PARK.x)*sx + (S.z-PARK.z)*sz;
     const opts = [...PARK.lines.map(l => ({off:l.off, t:l.start})), ...(PARK.drop ? [{off:PARK.drop.off, x:PARK.drop.x + PARK.drop.dx*3, z:PARK.drop.z + PARK.drop.dz*3}] : [])];
@@ -565,7 +844,40 @@ function respawnSafe(){
   else placeAt(S.x, S.z, S.travel ?? S.yaw);
   S.crumbs = []; S.crumbT = 0;
 }
+function armCountdown(id){
+  if (FPV.state.on){ FPV.state.on = false; FPV.group.visible = false; toast('Drone is off for the race'); }
+  S.countdown = 3; S.countShow = -1; S.countTrail = id; S.run = null;
+  S.speed = 0; S.vx = S.vz = S.vy = 0; S.air = false;
+}
+function tickCountdown(dt){
+  S.speed = 0; S.vx = S.vz = S.vy = 0;
+  S.countdown -= dt;
+  const n = Math.ceil(Math.max(0, S.countdown));
+  if (n !== S.countShow){ S.countShow = n; flash(n > 0 ? String(n) : 'GO', 0.9); }
+  if (S.countdown <= 0){ const id = S.countTrail, tr = trails[id];
+    S.countdown = 0; S.free = null; S.lives = 3; S.atStart = -1;
+    S.run = { mode:'race', t:id, start:S.time, s:0, cp:-1, cpt:[], cpCount:(tr.cps || []).length };
+    trickEl.textContent = `⏱ ${tr.name} — race on`; S.trickMsgT = 2; }
+}
+function beginRace(id){
+  if (!raceOpen(id)){ toast('Complete this trail to unlock racing'); flash('RACE LOCKED', 1.2); return; }
+  const tr = trails[id]; if (!tr) return;
+  if (bigMap.open) closeMap();
+  if (menu.open) closeMenu();
+  const i0 = Math.min(3, tr.pts.length - 1), x = tr.pts[i0][0], z = tr.pts[i0][1];
+  updateChunks(x, z, 1e9, 160); placeAt(x, z, tr.yaw[i0]);
+  S.state = 'riding'; S.paused = false;
+  armCountdown(id);
+}
+let gateEl = null;
+function gatePrompt(){
+  if (!gateEl){ gateEl = document.createElement('div'); gateEl.id = 'gatePrompt'; gateEl.style.cssText = 'position:fixed;left:50%;bottom:16%;transform:translateX(-50%);z-index:28;padding:8px 16px;background:rgba(12,16,12,.82);color:#f3e9d2;font:700 18px/1.3 "Barlow Condensed",sans-serif;letter-spacing:.04em;border-radius:6px;pointer-events:none;display:none;text-align:center'; document.body.appendChild(gateEl); }
+  const show = S.state === 'riding' && !S.paused && !menu.open && !bigMap.open && !shopOpen && !(S.countdown > 0) && !(S.run && S.run.mode === 'race') && S.atStart >= 0;
+  gateEl.style.display = show ? '' : 'none';
+  if (show) gateEl.textContent = raceOpen(S.atStart) ? PT('FREE RIDE  ·  Enter / {A} to RACE') : 'Complete this trail to unlock racing';
+}
 function trackWorld(dt){
+  if (S.crashT > 0) return;
   // breadcrumbs for respawn (only while rolling cleanly on the ground)
   S.crumbT = (S.crumbT||0) + dt;
   if (!S.air && S.crashT <= 0 && S.crumbT > 0.25){ S.crumbT = 0; (S.crumbs ||= []).unshift({x:S.x, z:S.z, yaw:S.travel ?? S.yaw, t:S.time}); if (S.crumbs.length > 16) S.crumbs.pop(); }
@@ -573,22 +885,34 @@ function trackWorld(dt){
   const near = nearTrails(S.x, S.z); let cur = null;
   for (const n of near) if (n.d <= W+1.5 && (!cur || n.d < cur.d)) cur = n;
   S.onTrailName = cur ? trails[cur.t].name : inPark(S.x,S.z) ? 'Dirt Jump Park' : '';
+  S.atStart = -1;
   if (cur){ const tr = trails[cur.t];
-    if (cur.s < 18 && (!S.run || S.run.t !== cur.t)) { S.run = {t:cur.t, start:S.time, s:cur.s}; S.lives = 3; trickEl.textContent = `⏱ ${tr.name} — run started`; S.trickMsgT = 2; }
-    if (S.run && S.run.t === cur.t){ S.run.s = Math.max(S.run.s, cur.s);
-      const cps = tr.cps || []; while ((S.run.cp ?? -1) + 1 < cps.length && cur.s >= cps[(S.run.cp ?? -1) + 1].s - 2 && cur.s < cps[(S.run.cp ?? -1) + 1].s + 25){ S.run.cp = (S.run.cp ?? -1) + 1; (S.run.cpt ||= [])[S.run.cp] = S.time - S.run.start; toast(`🚩 Checkpoint ${S.run.cp+1}/${cps.length} · ${tr.name}`); flash('CHECKPOINT', 1.0); }
-      if (cur.s > tr.len - 8){ const time = S.time - S.run.start, bonus = Math.round((1000 + tr.len/2)*EARN);
-        S.finishes++; S.score += bonus; flash('FINISH!', 2.5); trickEl.textContent = `${tr.name} in ${fmtTime(time)}  +$${bonus}`; S.trickMsgT = 3.5;
-        S.best ||= {}; if (!S.best[tr.name] || time < S.best[tr.name]){ S.best[tr.name] = time; LS.set('trailDescent.best.' + WORLD, S.best); toast(`⭐ NEW BEST! ${tr.name}: ${fmtTime(time)}`); }
-        { const cps = tr.cps || [], cpt = S.run.cpt || [];
-          if (CLOUD && cps.length === cpt.filter(x => x != null).length) CLOUD.trail(RAMP ? 1 : 0, S.run.t, tr.name, time, cpt, S.run.combo || 0);
-          else if (CLOUD) setTimeout(() => toast('Leaderboard: missed a checkpoint, so this time is not ranked'), 2500); }
+    if (cur.s < 18 && !(S.run && S.run.t === cur.t) && !(S.countdown > 0)) S.atStart = cur.t;
+    const prog = S.run && S.run.t === cur.t ? S.run : (S.free && S.free.t === cur.t ? S.free : null);
+    if (cur.s < 18 && !S.run && !prog && !(S.countdown > 0)) S.free = { t: cur.t, cp: -1, s: cur.s };
+    const active = S.run && S.run.t === cur.t ? S.run : (S.free && S.free.t === cur.t ? S.free : null);
+    if (active){ active.s = Math.max(active.s || 0, cur.s);
+      const cps = tr.cps || []; let guard = 0;
+      while (guard++ < cps.length + 1){ const next = advanceCheckpoint(active.cp, cur.s, cps); if (next === (active.cp ?? -1)) break; active.cp = next; if (active === S.run) (active.cpt ||= [])[next] = S.time - active.start; toast(`🚩 Checkpoint ${next+1}/${cps.length} · ${tr.name}`); flash('CHECKPOINT', 1.0); }
+      if (cur.s > tr.len - 8){ const racing = active === S.run, time = racing ? S.time - active.start : 0, bonus = Math.round((1000 + tr.len/2)*EARN);
+        S.finishes++; S.score += bonus; flash('FINISH!', 2.5);
+        const done = checkpointsDone(active.cp, cps.length);
+        if (!racing){ trickEl.textContent = `${tr.name}  +$${bonus}`; S.trickMsgT = 3.5;
+          if (done){ markCleared(cur.t); toast(raceOpen(cur.t) ? `${tr.name} complete — racing unlocked` : `${tr.name} complete`); }
+          else toast('Missed a checkpoint — race stays locked'); }
+        else { trickEl.textContent = `${tr.name} in ${fmtTime(time)}  +$${bonus}`; S.trickMsgT = 3.5;
+          S.run.cpCount = cps.length;
+          S.best ||= {}; if (shouldSubmit(S.run, FPV.state.on) && (!S.best[tr.name] || time < S.best[tr.name])){ S.best[tr.name] = time; LS.set('trailDescent.best.' + WORLD, S.best); toast(`⭐ NEW BEST! ${tr.name}: ${fmtTime(time)}`); }
+          if (shouldSubmit(S.run, FPV.state.on)){ markCleared(cur.t); if (CLOUD) CLOUD.trail(RAMP ? 1 : 0, S.run.t, tr.name, time, S.run.cpt || [], S.run.combo || 0, layoutTag(tr.id)); }
+          else if (FPV.state.on) toast('Drone was out — this race is not ranked');
+          else if (!done) toast('Missed a checkpoint — this race is not ranked');
+          else toast('This race is not ranked'); }
         if (!unlocked.has(tr.name)){ const pro = trails.find(o => o.unlockAny && o !== tr), wasPro = pro && anyOtherDone(pro); unlocked.add(tr.name); saveUnlocks(); setTimeout(()=>toast(`🔓 Unlocked: ${tr.name} — teleport there any time`), 1200);
           if (pro && !wasPro && anyOtherDone(pro)) setTimeout(()=>toast(`☠ ${pro.name} UNLOCKED — the hardest line on the mountain. PRO only.`), 4200); }
-        S.run = null; } } }
+        if (racing) S.run = null; else S.free = null; } } }
   // map boundary: warning as you approach, then a bail + respawn at your last safe spot inside (counts as a crash only during a trail run)
   const edge = Math.max(Math.abs(S.x), Math.abs(S.z));
-  if (S.crashT <= 0){
+  if (S.crashT <= 0 && !inEditorPad(S.x, S.z)){
     if (edge > OOB){ S.oob = true; crash('Out of bounds!'); }
     else if (edge > OOB - 70){ if ((S.oobWarnT||0) <= 0){ flash('⚠ OUT OF BOUNDS — TURN BACK', 1.2); S.oobWarnT = 1.5; } }
   }
@@ -597,23 +921,43 @@ function trackWorld(dt){
 const wrapA = a => Math.atan2(Math.sin(a), Math.cos(a));
 
 const INP0 = {steer:0, lean:0, pedal:0, brake:0, pumpHold:false, pop:false, counter:false, tweak:0, rsy:0, trick:null};
-// big boulders are solid: head-on = crash, glancing = deflect off with a speed loss; hop high enough and you clear them
-function hitBoulders(){ for (const b of bigBouldersNear(S.x, S.z)){
-    const dx = S.x - b.x, dz = S.z - b.z, d = Math.hypot(dx, dz), R = b.r*0.95 + 0.12;
-    if (d >= R) continue; const top = terrainH(b.x, b.z) + boulderH(b, Math.min(d, b.r*0.999));
-    if (S.y > top - 0.05) continue;                                             // above the rock (hopped / rolled onto it from the air)
-    const nxv = dx/(d||1), nzv = dz/(d||1), vx = -Math.sin(S.travel), vz = -Math.cos(S.travel), into = -(vx*nxv + vz*nzv);   // 1 = straight at it
-    if (into > 0.75 && S.speed > 3){ S.x = b.x + nxv*R; S.z = b.z + nzv*R; S.y = groundH(S.x, S.z); S.air = false; crash('Hit a boulder!'); return true; }
-    // glance: slide round the rock, lose some speed
-    const tx = -nzv, tz = nxv, s = Math.sign(vx*tx + vz*tz) || 1; S.travel = Math.atan2(-tx*s, -tz*s); S.yaw = S.travel + wrapA(S.yaw - S.travel)*0.3;
-    S.speed *= into > 0 ? 0.75 - 0.3*into : 0.95; S.x = b.x + nxv*R; S.z = b.z + nzv*R; if (!S.air) S.y = groundH(S.x, S.z);
+// big boulders are solid. The test uses the same shape as the mesh (dome or pyramid). Head-on crashes, a glance deflects.
+function hitBoulders(){
+  const ax = axleXZ(S.x, S.z, S.yaw);
+  const probes = [[S.x, S.z], [ax.fx, ax.fz], [ax.rx, ax.rz]];
+  for (const b of bigBouldersNear(S.x, S.z)){
+    let hit = null;
+    for (const [x, z] of probes){ const c = rockContact(b, x, z); if (!c) continue;
+      const top = terrainH(b.x, b.z) + rockTop(b, x, z); if (S.y > top - 0.05) continue; hit = c; break; }
+    if (!hit) continue;
+    const vx = -Math.sin(S.travel), vz = -Math.cos(S.travel), into = -(vx*hit.nx + vz*hit.nz);
+    if (into > 0.75 && S.speed > 3){ S.x = hit.x; S.z = hit.z; S.y = groundH(S.x, S.z); S.air = false; crash('Hit a boulder!'); return true; }
+    const tx = -hit.nz, tz = hit.nx, s = Math.sign(vx*tx + vz*tz) || 1; S.travel = Math.atan2(-tx*s, -tz*s); S.yaw = S.fakie ? wrapA(S.travel + Math.PI) : S.travel + wrapA(S.yaw - S.travel)*0.3;
+    S.speed *= into > 0 ? 0.75 - 0.3*into : 0.95; S.x = hit.x; S.z = hit.z; if (!S.air) S.y = groundH(S.x, S.z);
     S.vx = -Math.sin(S.travel)*S.speed; S.vz = -Math.cos(S.travel)*S.speed; S.boulderHits = (S.boulderHits||0) + 1; return false; }
-  return false; }
+  return false;
+}
+// Head and chest bail on a hard impact. Bars bail on a rock or a tree. A wheel in the air is not a bail.
+function bodyHazards(){
+  if (S.crashT > 0 || S.speed < 2.2) return false;
+  const pts = BODY_POINTS.map(p => bodyPoint(S.x, S.y, S.z, S.yaw, S.pitch || 0, p));
+  for (const p of pts){ const gnd = groundH(p.x, p.z); if (p.y > gnd - 0.08) continue;
+    const stuffed = (S.pitch || 0) < -0.7 && S.speed > 3;
+    if (p.fatal || stuffed){ crash(p.name === 'head' ? 'Head hit!' : p.fatal ? 'Body hit!' : 'Cased the front!'); return true; } }
+  for (const t of nearTrees(S.x, S.z)){ for (const p of pts){
+    if ((t.x - p.x)**2 + (t.z - p.z)**2 < 0.2 && p.y < t.y + t.h*0.72 && p.y > t.y){ crash(p.fatal ? 'Body hit a tree!' : 'Hit a tree!'); return true; } } }
+  for (const b of bigBouldersNear(S.x, S.z)){ for (const p of pts){ if (!rockContact(b, p.x, p.z)) continue;
+    const top = terrainH(b.x, b.z) + rockTop(b, p.x, p.z); if (p.y > top + 0.15 || p.y < terrainH(b.x, b.z) - 0.2) continue;
+    if (p.fatal || S.speed > 4){ crash(p.name === 'head' ? 'Head hit a rock!' : p.fatal ? 'Body hit a rock!' : 'Hit a boulder!'); return true; } } }
+  return false;
+}
 function step(dt, inp){
   inp = Object.assign({}, INP0, inp);
   if (S.crashT > 0){ S.crashT -= dt;
-    S.speed *= Math.pow(0.2,dt); S.x += -Math.sin(S.yaw)*S.speed*dt; S.z += -Math.cos(S.yaw)*S.speed*dt; S.y = groundH(S.x,S.z);
-    S.lean = THREE.MathUtils.lerp(S.lean, 1.4, dt*4);
+    if (rag.on){ stepRagdoll(rag, dt, bailW);
+      const p = rag.parts.pelvis, h = Math.max(dt, 1e-4);
+      S.x = p.x; S.y = p.y; S.z = p.z; S.vx = (p.x - p.px) / h; S.vy = (p.y - p.py) / h; S.vz = (p.z - p.pz) / h;
+      S.speed = Math.hypot(S.vx, S.vz); S.air = false; S.lean = 0; }
     if (S.crashT <= 0 && S.state==='riding') respawnSafe();
     return; }
   const onTrail = isDirt(S.x, S.z);
@@ -625,50 +969,73 @@ function step(dt, inp){
     const tx_ = -Math.sin(S.travel), tz_ = -Math.cos(S.travel);
     const h0 = groundH(S.x,S.z), h1 = groundH(S.x+tx_*0.5, S.z+tz_*0.5);
     const slope = (h1-h0)/0.5; S.slope = slope;
-    let a = -G*slope/Math.sqrt(1+slope*slope);
-    // pedalling: ~2.5 m/s² from a standstill, fading to zero at 55 km/h (65 uphill); above that speed only comes from gravity and pumping
-    { const up = Math.max(0, slope), cap = 15.28 + 2.78*Math.min(1, up/0.05);   // 55 km/h on the flat, 65 km/h uphill
-      a += inp.pedal * (2.5 + Math.min(3.5, up*12)) * Math.max(0, 1 - S.speed/cap); }   // stronger stroke uphill so typical grades are climbable
-    a -= inp.brake * 9 * Math.min(1,S.speed);
-    a -= 0.0038*BIKE.drag*S.speed*S.speed + 0.2;
-    // (grass rolls like dirt: no off-trail speed penalty; grip off-trail is still lower)
-    // pumping: compress into backsides (downslope) and extend over faces (upslope) to gain speed; wrong timing costs speed
+    // A rising jump face is not a wheelie and not a pump-track compression. Preload there is
+    // visual plus a later pop. Spending speed or arming a wheelie on the face glues you to the lip.
+    const onFace = slope > 0.08 && featH(S.x, S.z) > 0.04;
+    if ((inp.wheelieChord || inp.kbWheelie) && !onFace){ inp.pumpHold = false; inp.pop = false; inp.counter = false; S.preload = 0; S.hopWin = 0; }
+    if (onFace){ inp.wheelieChord = false; inp.kbWheelie = false; }
     const prevPre = S.preload;
     if (inp.pumpHold) { S.preload = Math.min(1, S.preload + dt*2.2); S.hopWin = 0.35; }
     let pop = 0;
+    const hopNow = !inp.pumpHold && !!inp.pop && S.preload > 0.05 && (S.hopWin||0) > 0;
     if (!inp.pumpHold){ S.hopWin = (S.hopWin||0) - dt;
-      if (inp.pop && S.preload > 0.05 && S.hopWin > 0){ pop = (1.2 + S.preload*2.0)*BIKE.pop; /* bunny hop ~0.3-0.5 m */ S.preload = 0; }
+      if (hopNow){ pop = (1.2 + S.preload*2.0)*BIKE.pop; /* bunny hop ~0.3-0.5 m */ S.preload = 0; }
       else S.preload = Math.max(0, S.preload - dt*3); }
-    const cr = (S.preload - prevPre)/dt;           // >0 compressing, <0 extending
-    const pumpA = cr > 0 ? cr*(Math.max(0,-slope)*9 - Math.max(0,slope)*4) : -cr*(Math.max(0,slope)*3.5 - Math.max(0,-slope)*1.5);
-    a += THREE.MathUtils.clamp(pumpA, -4, 6); S.pumpGain = pumpA;
-    // slides: steering + braking breaks rear traction; the travel direction lags the bike heading
-    const sliding = inp.brake > 0.3 && Math.abs(inp.steer) > 0.35 && S.speed > 5;
-    const grip = sliding ? 1.4 + Math.abs(S.slip||0)*3 : (onTrail ? 11 : 5)*BIKE.grip;
-    const turn = 1.9 * Math.min(1, 0.25 + S.speed/8) / (1 + S.speed*0.03) * (sliding ? 1.7 : 1) * (1 + 0.15*Math.max(0,-inp.lean));
-    S.yaw -= inp.steer * turn * dt;
-    const slipPrev = S.travel; S.travel += wrapA(S.yaw - S.travel) * Math.min(1, grip*dt);
-    const slip = wrapA(S.yaw - S.travel);
+    const cr = (inp.pumpHold || (inp.counter && !hopNow) || S.preload > 0) ? (S.preload - prevPre)/dt : 0;
+    // Holding preload on the face only compresses the suspension. It does not scrub the speed the lip needs.
+    const pumpA = (onFace && inp.pumpHold) ? 0 : pumpAccel(cr, slope); S.pumpGain = pumpA;
+    let a = longAccel({ slope, speed: S.speed, pedal: inp.pedal, brake: inp.brake, drag: BIKE.drag, weight: S.weight || 0, pumpA, fakie: !!S.fakie });
+    const gInfo = gripRate({ brake: inp.brake, steer: inp.steer, speed: S.speed, onTrail, bikeGrip: BIKE.grip, slip: S.slip || 0, weight: S.weight || 0, bank: inp.bank || 0 });
+    const sliding = gInfo.sliding, grip = gInfo.grip;
+    const agree = THREE.MathUtils.clamp((inp.steer || 0) * (inp.bank || 0), -1, 1);
+    // A drift from the brake still yaws faster. Leaning the wrong way must not: that slide widens the turn.
+    const slideBoost = sliding && agree > -0.2 ? 1.7 : 1;
+    const turn = 1.9 * Math.min(1, 0.25 + S.speed/8) / (1 + S.speed*0.03) * slideBoost * (1 + 0.15*Math.max(0,-inp.lean)) * (1 + 0.22*agree);
+    const steer = S.fakie ? -inp.steer : inp.steer;
+    S.yaw -= steer * turn * dt;
+    const aim = S.fakie ? fakieAim(S.yaw) : S.yaw;
+    const slipPrev = S.travel; S.travel += wrapA(aim - S.travel) * Math.min(1, grip*dt);
+    if (S.fakie && S.speed < 0.45){ S.fakie = false; S.travel = S.yaw; }
+    const slip = wrapA(aim - S.travel);
     a -= Math.abs(Math.sin(slip)) * S.speed * 2.2;
     S.slip = slip; S.sliding = Math.abs(slip) > 0.12;
-    S.speed = Math.max(0, S.speed + a*dt);
+    S.speed = (typeof window.__holdSpeed === 'number') ? window.__holdSpeed : Math.max(0, S.speed + a*dt);
     // carve lean from actual cornering (v * yaw-rate / g)
     const yawRate = wrapA(S.travel - slipPrev)/dt;
-    S.lean = THREE.MathUtils.lerp(S.lean, THREE.MathUtils.clamp(Math.atan(-yawRate*S.speed/G), -0.85, 0.85), Math.min(1,dt*8));
+    const stickLean = (inp.bank || 0) * 0.62;
+    S.lean = THREE.MathUtils.lerp(S.lean, THREE.MathUtils.clamp(Math.atan(-yawRate*S.speed/G)*0.35 + stickLean, -0.75, 0.75), Math.min(1,dt*8));
     S.weight = THREE.MathUtils.lerp(S.weight||0, THREE.MathUtils.clamp(inp.lean + inp.brake*0.5 - inp.pedal*0.2, -1, 1), Math.min(1, dt*6));
     S.vx = -Math.sin(S.travel)*S.speed; S.vz = -Math.cos(S.travel)*S.speed;
     let nx = S.x + S.vx*dt, nz = S.z + S.vz*dt, ng = groundH(nx,nz);
     // jump collision: only a feature's ramp face (along its forward axis) adds launch speed. Its sides are climbed
     // (rounded dirt) or block/deflect you with a speed loss (steep / wooden walls), never launch you.
-    let vyFeat = null, backFeat = false;
-    { const fa = featAxis(nx, nz) || featAxis(S.x, S.z);
+    let vyFeat = null, backFeat = false, lipInfo = null;
+    { const faAt = featAxis(S.x, S.z), fa = faAt || featAxis(nx, nz);
+      if (fa && fa.p && fa.L > 0){ // first crest only, so a landing ramp is not mistaken for the lip
+        let peak = 0, peakT = 0; const n = 28;
+        for (let i = 1; i <= n; i++){ const t = fa.L * i / n, h = fa.p(t, 0);
+          if (h + 0.02 >= peak){ if (h > peak){ peak = h; peakT = t; } }
+          else if (peak > 0.12 && t > peakT + 0.5) break; }
+        // Lip speed belongs to the face under the wheels. A lip further down the feature must not lend its speed
+        // to a hillside crest back here, and a ramp cut off at a bend (fa.cut) or a berm / rock / tread is not a lip.
+        const tHere = ((faAt ? S.x : nx) - fa.x) * fa.dx + ((faAt ? S.z : nz) - fa.z) * fa.dz;
+        const hereH = fa.p(Math.max(0, Math.min(fa.L, tHere)), 0);
+        const onLip = !NOT_LIP.has(fa.kind) && !fa.groom && !fa.cut && peakT - tHere <= 1.8 && tHere <= peakT + 0.8 && hereH >= peak * 0.42;
+        if (peak > 0.08 && onLip){
+          let t0 = 0, faceGrade = 0.12;
+          for (let i = 0; i <= n; i++){ const t = peakT * i / n; if (fa.p(t, 0) < peak * 0.18) t0 = t; }
+          // Steepest half-metre on the way UP. The half-metre under the wheels at the lip already sees the downslope and would clamp the launch to nothing.
+          for (let t = 0.35; t <= peakT + 0.01; t += 0.35){ const g = (fa.p(t, 0) - fa.p(Math.max(0, t - 0.5), 0)) / 0.5; if (g > faceGrade) faceGrade = g; }
+          lipInfo = { h: peak, face: Math.max(0.4, peakT - t0), faceGrade };
+        } }
       if (fa) backFeat = (S.vx*fa.dx + S.vz*fa.dz) < -0.2*S.speed;   // riding a jump the wrong way (up a landing / over the back of a lip)
       if (fa){ const mx = nx - S.x, mz = nz - S.z, dA = mx*fa.dx + mz*fa.dz;
-        const ax = S.x + fa.dx*dA, az = S.z + fa.dz*dA, f0 = featH(S.x, S.z), fAlong = featH(ax, az), f1 = featH(nx, nz);
+        // Ribbon only. Boulder tops live in featH and are climbed as rocks; treating a slab edge as a wall yaws the bike ninety degrees.
+        const ax = S.x + fa.dx*dA, az = S.z + fa.dz*dA, f0 = featBase(S.x, S.z), fAlong = featBase(ax, az), f1 = featBase(nx, nz);
         const latRise = f1 - fAlong, latLen = Math.hypot(mx - fa.dx*dA, mz - fa.dz*dA) + 1e-6;
         const rise = f1 - f0, moveLen = Math.hypot(mx, mz) + 1e-6;
         if (rise > 0.06 && rise/moveLen > 2.5){   // a vertical face (back of a wooden jump, front of a step-down deck): a wall, not a ramp
-          S.speed *= 0.3; S.travel += Math.PI*0.5*Math.sign(wrapA(S.travel - Math.atan2(-fa.dx,-fa.dz)) || 1); S.yaw = S.travel;
+          S.speed *= 0.3; S.travel += Math.PI*0.5*Math.sign(wrapA(S.travel - Math.atan2(-fa.dx,-fa.dz)) || 1); S.yaw = S.fakie ? wrapA(S.travel + Math.PI) : S.travel;
           S.vx = -Math.sin(S.travel)*S.speed; S.vz = -Math.cos(S.travel)*S.speed; nx = S.x; nz = S.z; ng = groundH(nx, nz); vyFeat = 0; S.sideHits = (S.sideHits||0) + 1;
         } else if (latRise > 0.06 && latRise/latLen > 1.2){
          // wall-steep side face: bounce off sideways, lose speed
@@ -680,56 +1047,116 @@ function step(dt, inp){
         } else if (!backFeat) vyFeat = (fAlong - f0)/dt; } }   // backwards: no ramp lip speed, it's just a hill
     // vertical speed from ground-following never exceeds slope x horizontal speed along the travel direction
     const fdx = -Math.sin(S.travel), fdz = -Math.cos(S.travel), g0 = groundH(S.x, S.z);
-    const gradeF = Math.max(0, (groundH(S.x + fdx*0.5, S.z + fdz*0.5) - g0)/0.5, (g0 - groundH(S.x - fdx*0.5, S.z - fdz*0.5))/0.5, (ng - g0)/Math.max(0.05, S.speed*dt));
+    const stepG = Math.max(0, (ng - g0)/Math.max(0.05, S.speed*dt));
+    const faceG = Math.max(0, (groundH(S.x + fdx*0.5, S.z + fdz*0.5) - g0)/0.5, (g0 - groundH(S.x - fdx*0.5, S.z - fdz*0.5))/0.5);
+    const gradeF = Math.max(faceG, stepG);
     let vyG = vyFeat === null ? (ng - S.y)/dt : (terrainH(nx,nz) - (S.y - featH(S.x,S.z)))/dt + vyFeat;
-    vyG = Math.max(-1.5*S.speed - 3, Math.min(vyG, (vyFeat !== null ? 1.5 : Math.min(1.0, gradeF))*S.speed + 0.3));   // ramp faces keep their full lip speed
+    // A one-frame feature sample can jump far more than the ground you are actually on.
+    // The old ramp ceiling was 1.5× speed, so that spike left the lip at a cannon angle.
+    // The face grade over half a metre is the lip. A hop still adds its own pop later.
+    const upCap0 = (vyFeat !== null ? faceG * S.speed + 0.45 : Math.min(1, gradeF) * S.speed + 0.3);
+    // Only a genuinely small lip is capped (~1.3× its own height). A medium face that is short and steep is still a real jump.
+    const smallLip = lipInfo && lipInfo.h < 0.62;
+    const vySmall = smallLip ? Math.sqrt(2 * G_AIR * Math.max(0.12, lipInfo.h * 1.35)) : 1e9;
+    const faceCap = lipInfo ? lipInfo.faceGrade * S.speed + 0.55 : 0;
+    const upCap = Math.min(Math.max(upCap0, faceCap), vySmall);
+    vyG = Math.max(-1.5*S.speed - 3, Math.min(vyG, upCap));
     S.landCool = Math.max(0, (S.landCool||0) - dt);
     S.gf = (S.gf||0) + 1;
-    const crestG = inp.counter ? G*2.2 : G*1.15;   // counter-pump (RS up) keeps you glued over rollers
+    const crestG = (inp.counter && !hopNow) ? G*2.2 : G*1.15;   // counter-pump (RS up, and not the hop itself) keeps you glued over rollers
     // small boulders: wheels follow the real rock shape; each climb costs speed and jolts the bike, never launches
     const rockH = featH(nx, nz) - featBase(nx, nz), onRock = rockH > 0.005 || (featH(S.x, S.z) - featBase(S.x, S.z)) > 0.005;
     if (onRock){ const climb = Math.max(0, ng - S.y); S.speed = Math.max(0, S.speed - climb*(2.2 + S.speed*0.25)); S.suspV = (S.suspV||0) + climb*25; S.jolt = Math.min(1, (S.jolt||0) + climb*4);
       vyG = THREE.MathUtils.clamp(vyG, -2, 2); S.rockT = 0.25; }
     S.rockT = Math.max(0, (S.rockT||0) - dt);
-    let crest = S.gf > 3 && S.landCool <= 0 && (S.lastVyG - vyG)/dt > crestG && S.speed > 4 && S.rockT <= 0;
+    let crest = !S.wheelie && S.gf > 3 && S.landCool <= 0 && (S.lastVyG - vyG)/dt > crestG && S.speed > (onFace ? 2.2 : 4) && S.rockT <= 0;
     const edge = (ng - S.y) < -0.12 && (S.lastVyG - vyG)/dt > G_AIR*3 && S.speed > 1.5;   // rolling off a ledge/lip: the ground drops away faster than you can fall
     if (backFeat && !edge) crest = false;   // wrong-way over a jump: roll over it, never pop off its crest
     if (edge && !crest && S.rockT <= 0 && S.landCool <= 0) crest = true;   // never re-launch right after touching down (no landing bounce)
+    const atLip = !!lipInfo && !backFeat;
+    // Off a lip the bike only has the vertical speed it already carries: the grade it was just riding times its speed.
+    // The ground-follow speed alone can spike above that for a frame (wheel support catching up), and a crest
+    // must not turn that spike into a launch. A hillside crest gets nothing extra.
+    const pathVy = (g0 - groundH(S.x - fdx*0.6, S.z - fdz*0.6))/0.6 * S.speed + 0.3;
+    const carryVy = Math.min(S.lastVyG, pathVy);
     if (crest){ // only leave the ground if the ballistic path really clears the terrain (no micro-hops)
-      let clear = 0; for (let t=0.03; t<=0.18; t+=0.03){ const bx=S.x+S.vx*t, bz=S.z+S.vz*t, by=S.y+S.lastVyG*t-0.5*G_AIR*t*t; const gap_=by-groundH(bx,bz); if (t < 0.065 && gap_ < 0.03){ clear = 0; break; } clear=Math.max(clear, gap_); }   // must actually separate right away (no 1-frame micro-hops)
-      if (clear < 0.4) crest = false; }
+      const vyPred = atLip && !smallLip ? Math.max(S.lastVyG, lipInfo.faceGrade * S.speed * 0.85) : carryVy;
+      let clear = 0; for (let t=0.03; t<=0.18; t+=0.03){ const bx=S.x+S.vx*t, bz=S.z+S.vz*t, by=S.y+vyPred*t-0.5*G_AIR*t*t; const gap_=by-groundH(bx,bz); if (t < 0.065 && gap_ < 0.03){ clear = 0; break; } clear=Math.max(clear, gap_); }
+      // A real lip still launches when the landing ramp is already inside that short window. Rollers do not.
+      if (clear < 0.4 && !(atLip && lipInfo.h >= 0.7)) crest = false; }
     if (pop > 0 || crest){
-      S.air = true; S.airT = 0; S.vy = (backFeat ? Math.min(S.lastVyG, 0.1*S.speed) : S.lastVyG) + pop; S.takeoffPitch = S.pitch; S.spin = 0; S.popped = pop > 0;
-      S.toX = S.x; S.toZ = S.z; S.tweakT = 0; S.tricksDone = new Set(); S.wYaw = 0; S.wPitch = 0; S.yaw = S.travel + slip*0.5; S.travel = S.yaw; S.nose = 0;
+      S.air = true; S.airT = 0; S.takeoffPitch = S.pitch; S.spin = 0;
+      // A charged hop adds height. Ground-follow can be largely negative where the lip
+      // falls away; that must not turn the hop into a dive. A plain crest keeps the ramp's own vertical speed.
+      const groundVy = backFeat ? Math.min(S.lastVyG, 0.1*S.speed) : S.lastVyG;
+      // Face grade, not the half-metre sample at the crest (that one is already the downslope and reads as zero).
+      const gradeVy = atLip ? lipInfo.faceGrade * S.speed * (smallLip ? 0.5 : 0.9) : 0;
+      // A crest that is not a lip keeps the speed you already had, downhill included. Swapping a downhill
+      // speed for zero was an upward kick that threw riders off hilltops and over the trees.
+      const lipVy = atLip ? Math.min(vySmall, Math.max(0, groundVy, gradeVy, onFace ? faceG * S.speed * 0.85 : 0))
+        : (pop > 0 ? Math.max(0, groundVy) : Math.min(groundVy, carryVy));
+      const popAdd = Math.min(pop, 2.0);
+      S.vy = lipVy + popAdd;
+      S.popped = pop > 0;
+      S.lipHop = pop > 0 ? null : ((S.preload||0) > 0.05 && (S.hopWin||0) > 0 ? { until: 0.12, pre: S.preload, used: false } : null);
+      S.toX = S.x; S.toZ = S.z; S.tweakT = 0; S.tricksDone = new Set(); S.wYaw = 0; S.wPitch = 0;
+      if (!S.fakie){ S.yaw = S.travel + slip*0.5; S.travel = S.yaw; } S.nose = 0;
       // scrub: laying the bike over (right stick sideways) at takeoff keeps you low and fast
       const lay = Math.abs(inp.tweak);
       S.scrub = S.vy > 2 ? lay : 0;
       if (S.scrub > 0.2){ S.vy *= 1 - 0.45*S.scrub; S.tweak = inp.tweak; S.speed *= 1.02; S.vx = -Math.sin(S.travel)*S.speed; S.vz = -Math.cos(S.travel)*S.speed; }
       S.x = nx; S.z = nz; S.y += S.vy*dt;
-    } else { S.x = nx; S.z = nz; S.y = ng; S.vy = vyG; S.lastVyG = vyG;
-      S.pitch = THREE.MathUtils.lerp(S.pitch, Math.atan(slope), Math.min(1,dt*12)); }
+    } else { S.x = nx; S.z = nz; S.vy = vyG; S.lastVyG = vyG;
+      const axw = axleXZ(nx, nz, S.yaw), hf = groundH(axw.fx, axw.fz), hr = groundH(axw.rx, axw.rz);
+      // Gravity already spends speed on the slope. Only a wheel rising *more* than that
+      // grade (a rock, a step) costs extra. Charging both full wheel rises on a lip
+      // was a second climb penalty and bled speed up every jump.
+      const expected = Math.max(0, slope) * S.speed * dt;
+      const extra = Math.max(0, hf - (S.prevHf ?? hf) - expected) + Math.max(0, hr - (S.prevHr ?? hr) - expected);
+      if (!onFace && extra > 0.004){ S.speed = Math.max(0, S.speed - extra * (1.6 + S.speed * 0.18)); S.jolt = Math.min(1, (S.jolt || 0) + extra * 3); S.suspV = (S.suspV || 0) + extra * 18; }
+      S.prevHf = hf; S.prevHr = hr;
+      const sup = supportPitch(hf, hr), drop = Math.min(hf, hr) < ng - 0.4;
+      if (inp.kbWheelie) S.wheelieArm = 1;
+      else if (inp.wheelieChord) S.wheelieArm = Math.min(1, (S.wheelieArm||0) + dt);
+      else if (!S.wheelie) S.wheelieArm = 0;
+      // Stick forward lifts the front. K still reports a positive lean and keeps the old balance.
+      const rawLean = typeof inp.lyRaw === 'number' ? inp.lyRaw : (inp.lean || 0);
+      const balance = inp.kbWheelie ? (inp.lean || 0) : ((inp.wheelieChord || S.wheelie) ? -rawLean : (inp.lean || 0));
+      const w = wheelieStep({ active: !!S.wheelie, pitch: S.pitch || 0, lean: balance, brake: inp.brake, speed: S.speed, dt, rearOnGround: hr < ng + 0.8, fakie: !!S.fakie, arm: (S.wheelieArm||0) >= 0.1 });
+      if (w.tip){ S.wheelie = false; crash('Looped out!'); return; }
+      S.wheelie = w.active;
+      if (w.active){ S.pitch = w.pitch; S.y = hr + Math.sin(S.pitch) * WHEEL_R; }
+      else if (!drop && Math.abs(sup.y - ng) < 0.45){ S.pitch = THREE.MathUtils.lerp(S.pitch, sup.pitch, Math.min(1, dt*10)); S.y = sup.y; }
+      else { S.y = ng; S.pitch = THREE.MathUtils.lerp(S.pitch, Math.atan(slope), Math.min(1, dt*12)); } }
     // came up short against a face too steep to roll up: that's a case, not a place to get stuck
     S.stuckT = (S.speed < 0.6 && slope > 0.25 && featH(S.x, S.z) > 0.05) ? (S.stuckT||0) + dt : 0;
     if (S.stuckT > 1.2 && S.crashT <= 0){ S.stuckT = 0; crash('Cased it!'); }
     S.spin *= Math.exp(-dt*12); S.tweak = (S.tweak||0)*Math.exp(-dt*10); S.nose = (S.nose||0)*Math.exp(-dt*10);
     S.dust = (S.sliding ? 1 : 0) + (inp.brake > 0.5 && S.speed > 6 ? 0.5 : 0) + (!onTrail && S.speed > 4 ? 0.6 : 0);
     if (hitBoulders()) return;
+    if (bodyHazards()) return;
     if (S.speed > 4) for (const t of nearTrees(S.x, S.z)) if ((t.x-S.x)**2 + (t.z-S.z)**2 < 0.55) { crash('Hit a tree!'); return; }
+    if (S.speed > 4) for (const t of editorTrunks(S.x, S.z)) if ((t.x-S.x)**2 + (t.z-S.z)**2 < 0.55) { crash('Hit a tree!'); return; }
   } else {
+    // One pop if the stick comes up just after the lip, while the preload was still charged. Not again after that.
+    if (S.lipHop && !S.lipHop.used && inp.pop && !inp.pumpHold && !(inp.wheelieChord || inp.kbWheelie) && S.airT <= S.lipHop.until){
+      S.vy = Math.max(S.vy, 0) + Math.min(2.0, (1.2 + S.lipHop.pre*2.0)*BIKE.pop); S.popped = true; S.lipHop.used = true; }
+    S.wheelieArm = 0;
     S.airT += dt; S.vy -= G_AIR*dt;
     S.x += S.vx*dt; S.z += S.vz*dt; S.y += S.vy*dt;
     if (hitBoulders()) return;
-    // left stick: analog spin / flip with rotational inertia
+    // Left stick Y is the flip. Stick down / back (positive lean, keyboard K) noses up: a backflip.
+    // Stick up / forward (negative lean, keyboard I) noses down: a frontflip. A wheelie cannot start in the air.
     const spinIn = inp.steer, ty = inp.lean;
     S.wYaw = (S.wYaw||0) + (spinIn*6.0 - (S.wYaw||0)) * Math.min(1, dt*7);
     S.wPitch = (S.wPitch||0) + (ty*5.5 - (S.wPitch||0)) * Math.min(1, dt*7);
     S.spin += S.wYaw*dt; S.pitch += S.wPitch*dt;
-    // right stick: proportional whip/tweak (x) and nose angle (y), sprung so it follows the stick
+    // Right stick down matches the left: nose up. The hop is still right-stick down, then up.
     S.tweak = THREE.MathUtils.lerp(S.tweak||0, inp.tweak, Math.min(1, dt*9));
-    S.nose = THREE.MathUtils.lerp(S.nose||0, -inp.rsy*0.6, Math.min(1, dt*8));
+    S.nose = THREE.MathUtils.lerp(S.nose||0, (inp.rsy || 0)*0.6, Math.min(1, dt*8));
     if (Math.abs(S.tweak) > 0.6) S.tweakT = (S.tweakT||0) + dt;
     if (inp.trick){ S.trick = inp.trick; S.trickAmt = inp.trickAmt ?? 1; S.trickT = (S.trickT||0) + dt; if (S.trickT > 0.3) S.tricksDone.add(inp.trick); } else { S.trick = null; S.trickT = 0; }
-    S.lean = THREE.MathUtils.lerp(S.lean, 0, dt*3); S.weight = THREE.MathUtils.lerp(S.weight||0, ty, dt*5);
+    S.lean = THREE.MathUtils.lerp(S.lean, (inp.bank || 0) * 0.7, Math.min(1, dt*5)); S.weight = THREE.MathUtils.lerp(S.weight||0, ty, dt*5);
     const gh = groundH(S.x,S.z), gs = (groundH(S.x+S.vx*0.05, S.z+S.vz*0.05)-gh)/(Math.hypot(S.vx,S.vz)*0.05+1e-3);
     const gp = Math.atan(gs);
     if (Math.abs(ty) < 0.2){ const e = wrapA(S.pitch-gp); if (Math.abs(e) < 1.3){ S.pitch -= e*Math.min(1,dt*2.5); } }
@@ -737,11 +1164,13 @@ function step(dt, inp){
     S.dust = 0;
     const gvy = Math.min((groundH(S.x+S.vx*dt, S.z+S.vz*dt) - gh)/dt, 1.5*Math.hypot(S.vx,S.vz) + 0.3);
     if (S.y <= gh) land(gh, gp);
+    else if (bodyHazards()) return;
     else if (!S.popped && S.airT < 0.25 && S.y - gh < 0.3 && S.vy - gvy < 1.5){ S.y = gh; S.air = false; S.lastVyG = gvy; S.gf = 0; S.spin = 0; S.pitch = gp; S.tweak = 0; S.nose = 0; S.trick = null; S.wYaw = S.wPitch = 0; }
   }
   // failsafe: no NaN/Inf, bounded velocities, never stuck in the air or under the ground
   if (S.air && !S.popped) S.vy = Math.min(S.vy, 25);
   if (!S.air) S.lastVyG = Math.min(S.lastVyG||0, 1.5*S.speed + 0.3);
+  S.jolt = Math.max(0, (S.jolt || 0) - dt * 2.5);
   S.speed = Math.min(S.speed, 30); S.vy = Math.max(-40, Math.min(40, S.vy||0));
   if (S.air){ const hs = Math.hypot(S.vx,S.vz); if (hs > 30){ S.vx *= 30/hs; S.vz *= 30/hs; } }
   if (![S.x,S.y,S.z,S.vx,S.vy,S.vz,S.speed,S.pitch,S.yaw].every(Number.isFinite) || (S.air && S.airT > 4)){ respawnSafe(); S.vy = 0; S.air = false; S.airT = 0; }
@@ -751,29 +1180,29 @@ function step(dt, inp){
 const _eY = new THREE.Euler(), _qT = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
 function land(gh, gp){
   S.y = gh; S.air = false;
-  S.air = false; const pe = wrapA(S.pitch + (S.nose||0)*0.5 - gp), se = wrapA(S.spin);
   S.wYaw = 0; S.wPitch = 0; S.travel = Math.atan2(-S.vx, -S.vz);
-  const flips = Math.round((S.pitch - S.takeoffPitch)/(Math.PI*2)), spins = Math.round(S.spin/(Math.PI*2));
+  const pe = wrapA(S.pitch + (S.nose||0)*0.5 - gp), se = wrapA(wrapA(S.yaw + S.spin) - S.travel);
+  const flips = Math.round((S.pitch - S.takeoffPitch)/(Math.PI*2)); let spins = Math.round(S.spin/(Math.PI*2));
   // project velocity onto the terrain tangent plane using the real terrain normal (works on and off trail)
   const e = 0.25, nx = -(groundH(S.x+e,S.z)-groundH(S.x-e,S.z))/(2*e), nz = -(groundH(S.x,S.z+e)-groundH(S.x,S.z-e))/(2*e);
   const nl = Math.hypot(nx,1,nz), n = [nx/nl, 1/nl, nz/nl];
   const vn = S.vx*n[0] + S.vy*n[1] + S.vz*n[2];
   const tvx = S.vx - vn*n[0], tvy = S.vy - vn*n[1], tvz = S.vz - vn*n[2];
-  const fwd = Math.hypot(tvx, tvz) * Math.max(0, Math.cos(wrapA(S.yaw - S.travel)));   // keep the along-heading part
-  S.speed = Math.max(0, fwd)*0.96;
-  { const gr = (groundH(S.x - Math.sin(S.yaw)*S.speed/120, S.z - Math.cos(S.yaw)*S.speed/120) - gh)*120; S.vy = Math.min(tvy, gr); S.lastVyG = S.vy; } S.gf = 0; S.landCool = 0.3;
-  const impact = -vn; S.suspV = (S.suspV||0) + Math.min(impact,15)*0.12; S.dustBurst = Math.min(1, impact/8); sfxLand(impact);
-  if (Math.abs(pe) > 0.75*BIKE.stab || Math.abs(se) > 0.85*BIKE.stab){ crash(Math.abs(se)>0.85*BIKE.stab ? 'Landed sideways!' : 'Over the bars!'); return; }
-  if (impact > 20){ crash('Too hard a landing!'); return; }
-  if (S.trick){ crash('Still mid-trick!'); return; }
-  if (Math.abs(S.tweak||0) > 0.6){ crash('Didn\'t straighten the tweak!'); return; }
-  // within tolerance: keep current orientation and let the ground solver damp it smoothly to the surface
-  S.spin = se; S.trick = null;
-  S.pitch = gp + wrapA(S.pitch - gp);   // drop whole flip turns so the bike settles by the shortest way (no unwinding a full loop)
+  const horiz = Math.hypot(tvx, tvz);
+  const impact = -vn; S.suspV = (S.suspV||0) + Math.min(Math.max(impact, 0),15)*0.12; S.dustBurst = Math.min(1, Math.max(impact,0)/8); sfxLand(Math.max(impact, 0));
+  const call = landingCall({ se, pe, stab: BIKE.stab, impact, trick: S.trick, tweak: S.tweak || 0, lean: S.lean || 0 });
+  if (!call.ok){ crash(call.reason); return; }
+  if (call.fakie){ S.yaw = wrapA(S.yaw + S.spin); S.spin = 0; S.fakie = true; S.wheelie = false; S.speed = horiz * 0.96; }
+  else { S.fakie = false; S.wheelie = !!call.wheelie; S.spin = se; S.speed = horiz * Math.max(0, Math.cos(wrapA(S.yaw - S.travel))) * 0.96; }
+  { const gr = (groundH(S.x - Math.sin(S.travel)*S.speed/120, S.z - Math.cos(S.travel)*S.speed/120) - gh)*120; S.vy = Math.min(tvy, gr); S.lastVyG = S.vy; } S.gf = 0; S.landCool = 0.3;
+  S.trick = null;
+  S.pitch = gp + wrapA(S.pitch - gp);   // drop whole flip turns so the bike settles by the shortest way
+  if (call.fakie) spins = 0;
   if (S.airT > 0.35){
     const parts = []; let pts = Math.round(S.airT*120);
     if (flips){ parts.push((Math.abs(flips)>1? `${Math.abs(flips)}x `:'') + (flips<0?'Frontflip':'Backflip')); pts += 600*Math.abs(flips); S.flips += Math.abs(flips); }
     if (spins){ parts.push(`${Math.abs(spins)*360}`); pts += 350*Math.abs(spins); S.spins += Math.abs(spins); }
+    if (call.fakie){ parts.push('Fakie'); pts += 200; }
     const TN = {up:'No Hander', down:'No Footer', left:'Superman', right:'Can-Can', ul:'Tuck No Hander', ur:'X-Up', dl:'Nac-Nac', dr:'Tailwhip', bar:'Barspin'};
     for (const t of (S.tricksDone||[])){ parts.push(TN[t]); pts += 400; }
     if ((S.scrub||0) > 0.5){ parts.push('Scrub'); pts += 250; }
@@ -792,10 +1221,20 @@ function land(gh, gp){
 const fmtTime = t => `${Math.floor(t/60)}:${(t%60).toFixed(1).padStart(4,'0')}`;
 
 // ---------- Main loop ----------
-const camPos = new THREE.Vector3(), camLook = new THREE.Vector3(); let camInit = false;
+const camPos = new THREE.Vector3(), camLook = new THREE.Vector3(); let camInit = false, camHead = 0, camPitch = 0, camRollV = 0, camBump = 0, camBumpV = 0, camSusp = 0, camChest = 0;
+const easeTo = (cur, target, dt, tau) => cur + (target - cur) * (1 - Math.exp(-dt / tau));
+const easeAng = (cur, target, dt, tau) => cur + wrapA(target - cur) * (1 - Math.exp(-dt / tau));
+// Critically damped. Used for roll and bump so a landing settles without ringing.
+function camSpring(x, v, target, dt, omega){
+  const a = omega * omega * (target - x) - 2 * omega * v;
+  v += a * dt; x += v * dt;
+  if (Math.abs(target - x) < 1e-4 && Math.abs(v) < 1e-3) return [target, 0];
+  return [x, v];
+}
 const clock = new THREE.Clock(); let acc = 0;
 const arc = $('speedArc'), arcLen = arc.getTotalLength();
-let fpsT=0, fpsN=0, camRoll = 0;
+let fpsT=0, fpsN=0, camRoll = 0, fpCam = { y: 0, pitch: 0, yaw: 0, roll: 0, rollV: 0, on: false };
+const fpV = new THREE.Vector3();
 // dust particles (slides, hard braking, off-trail, landings)
 const DN = 400, dustPos = new Float32Array(DN*3), dustVel = new Float32Array(DN*3), dustLife = new Float32Array(DN); let dustI = 0;
 const dustGeo = new THREE.BufferGeometry(); dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos,3));
@@ -812,22 +1251,42 @@ function spawnDust(dt){
     dustPos[j*3]+=dustVel[j*3]*dt; dustPos[j*3+1]+=dustVel[j*3+1]*dt; dustPos[j*3+2]+=dustVel[j*3+2]*dt; dustVel[j*3+1]-=0.8*dt; }
   dustGeo.attributes.position.needsUpdate = true;
 }
+let presentAt = 0;
 function frame(){
   requestAnimationFrame(frame);
+  window.__rafs = (window.__rafs || 0) + 1;
   const dt = Math.min(0.05, clock.getDelta());
-  const inp = readInput(); if (Object.keys(inp.pressed).length) startMusic();
+  const inp = readInput(); padWiz.tick(); if (Object.keys(inp.pressed).length) startAudio();
+  if (editorApi && editorApi.isOpen()) editorApi.tick(dt, inp);
+  if (S.state === 'riding' && !menu.open && !shopOpen && !bigMap.open) spawnFrame(inp);
+  emoteFrame(dt, inp);
   for (const k in inp.pressed) onPress(k);
+  if (inp.droneHeld && S.state==='riding' && !menu.open && !shopOpen && !bigMap.open) backHold += dt;
+  else {
+    if (backWas && S.state==='riding' && !menu.open && !shopOpen && !bigMap.open){
+      if (backHold >= 0.45) toggleDrone();
+      else if (backHold > 0.05) openMap();
+    }
+    backHold = 0;
+  }
+  backWas = !!(inp.hold && inp.hold.Back);
   if (S.state==='riding' && !S.paused && S.lift){ liftRide(dt, inp); }
+  else if (S.state==='riding' && !S.paused && FPV.state.on && FPV.state.manual){ flyDrone(dt, inp); }
+  else if (S.state==='riding' && !S.paused && S.countdown > 0){ tickCountdown(dt); }
   else if (S.state==='riding' && !S.paused){
     acc += dt; const h = 1/120; while (acc >= h){ step(h, inp); acc -= h; }
+    if (FPV.state.on) flyDrone(dt, inp);
     trackWorld(dt); shopProximity(dt); liftProximity(dt);
   } else if (S.state!=='riding' && S.state!=='menu') { step(dt, {steer:0,pedal:0,brake:1,jump:false,tx:0,ty:0}); }
-  updateSfx({riding: S.state==='riding' && !S.paused, speed:S.speed||0, air:!!S.air && S.crashT<=0, lift:!!S.lift, sliding:!!S.sliding, brake:inp.brake||0, crank:BR.crank(), surface: S.rockT > 0 ? 'rock' : isDirt(S.x,S.z) ? 'dirt' : 'grass'});
+  updateSfx({riding: S.state==='riding' && !S.paused, speed:S.speed||0, air:!!S.air && S.crashT<=0, lift:!!S.lift, sliding:!!S.sliding, brake:inp.brake||0, crank:BR.crank(), coasting: (DRV.cadence||0) < 1 && !S.air && (S.speed||0) > 1.5, surface: S.rockT > 0 ? 'rock' : isDirt(S.x,S.z) ? 'dirt' : 'grass', trees: nearTrees(S.x, S.z).length, water: terrainH(S.x, S.z) < 18});
   windU.value += dt; grassField.update();
   if (menu.open) menuFrame(dt, inp);
   const flyF = S.state === 'menu' ? flyover(dt) : null, fX = flyF ? flyF[0] : S.x, fZ = flyF ? flyF[1] : S.z;
   animateLifts(dt); updateChunks(fX, fZ); farU.value.set(fX, fZ, coveredR);
-  // pose bike
+  // pose bike. A bail poses the loose rider and the tumbling bike instead of the riding IK.
+  DRV.update(S, inp, dt); inp.cadence = DRV.cadence; inp.standing = DRV.standing;
+  if (rag.on) applyBailPose();
+  else {
   bike.position.set(S.x, S.y, S.z);
   // whole-bike orientation as one quaternion (yaw * pitch * lean/tweak); after a landing it slerps to the target over ~0.15 s instead of snapping
   _eY.set(0, S.yaw + S.spin, 0); _qT.setFromEuler(_eY); _eY.set(S.pitch + (S.nose||0)*0.5, 0, 0); _qT.multiply(_q2.setFromEuler(_eY));
@@ -835,41 +1294,96 @@ function frame(){
   if (S.air) S.landBlend = 0.15; else if (S.landBlend > 0) S.landBlend -= dt;
   if (!S.air && S.landBlend > 0) bike.quaternion.slerp(_qT, 1 - Math.exp(-dt/0.04)); else bike.quaternion.copy(_qT);
   pitchG.rotation.set(0,0,0); leanG.rotation.set(0,0,0);   // whip/scrub: stick right = bike whips right
-  DRV.update(S, inp, dt); inp.cadence = DRV.cadence; inp.standing = DRV.standing;
   BR.update(S, inp, dt);                                       // rider pose: IK on grips/pedals, blended trick keyframes, barspin/tailwhip bike parts
   rig.position.z = (S.weight||0)*0.12;                         // visible fore/aft weight transfer
   { // sag 25% at rest; susp (-0.05..0.3) maps onto the rest of the travel; bottom-out at full travel
     const tr_ = THREE.MathUtils.clamp(0.25 + (S.susp||0)/0.3*0.75, 0, 1), [df, dr] = BR.setSusp(tr_, tr_*0.97);
     rig.position.y = -(df + dr)/2 + 0.04; rig.scale.y = 1;
     if (tr_ >= 0.995 && !S.bottomed){ S.bottomed = true; sfxLand(18); } else if (tr_ < 0.8) S.bottomed = false; }
+  }
   spawnDust(dt);
   for (const w of wheels) w.rotation.x -= S.speed*dt/0.36;
   // camera
   const ch = S.travel ?? S.yaw; const fx = -Math.sin(ch), fz = -Math.cos(ch);
-  const cm = camMode < 3 ? camMode : 0, back = [5.2,8,3.4][cm] + S.speed*0.04;
-  const fov = 66 + Math.min(14, S.speed*0.45); if (Math.abs(camera.fov-fov) > 0.05){ camera.fov += (fov-camera.fov)*Math.min(1,dt*3); camera.updateProjectionMatrix(); }
-  const tp = new THREE.Vector3(S.x - fx*back, 0, S.z - fz*back);
-  tp.y = Math.max(groundH(tp.x,tp.z), S.y) + [2.3,3.4,1.7][cm];
-  const tl = new THREE.Vector3(S.x + fx*4, S.y + 1.0, S.z + fz*4);
-  if (!camInit || camPos.distanceTo(tp) > 40){ camPos.copy(tp); camLook.copy(tl); camInit = true; }
-  const k = 1 - Math.exp(-dt*6);
-  camPos.lerp(tp, k); camLook.lerp(tl, 1 - Math.exp(-dt*10));
+  const cm = camMode < 3 ? camMode : 0, back = [5.2,8,3.4][cm];
+  const fpRide = camMode === 3 && !S.lift && S.state === 'riding' && !rag.on;
+  // Speed used to widen the lens (up to +14°) and pull the chase cam back. That shifted every POV as you went faster.
+  const fov = fpRide ? 78 : 66;
+  if (Math.abs(camera.fov - fov) > 0.2){ camera.fov = fov; camera.updateProjectionMatrix(); }
+  // Position is the bike plus a fixed offset along THIS frame's heading. A smoothed
+  // heading used to swing the camera around the rider, and a world-space lerp trailed with speed.
+  // Yaw, pitch and roll ease on their own. The bump spring targets zero, so a landing
+  // dips and settles without leaving a speed-dependent height.
+  const yawErr = wrapA(ch - camHead);
+  if (!camInit || Math.abs(yawErr) > 1.2){
+    camHead = ch; camPitch = S.pitch || 0; camRoll = 0; camRollV = 0; camBump = 0; camBumpV = 0; camSusp = S.susp || 0; camChest = (S.pitch || 0) * 0.25;
+    fpCam.pitch = (S.pitch || 0) * 0.22; fpCam.yaw = S.yaw || 0; fpCam.roll = 0; fpCam.rollV = 0; camInit = true;
+  } else if (!S.paused){
+    camHead = easeAng(camHead, ch, dt, 0.22);
+    camPitch = easeTo(camPitch, (S.pitch || 0) * 0.5, dt, 0.24);
+    camSusp = easeTo(camSusp, S.susp || 0, dt, 0.2);
+    const hf = THREE.MathUtils.clamp(((S.susp || 0) - camSusp) * 0.045, -0.02, 0.03);
+    [camBump, camBumpV] = camSpring(camBump, camBumpV, hf, dt, 9);
+    const rollT = THREE.MathUtils.clamp(-(S.lean || 0) * 0.11 + (S.sliding ? (S.slip || 0) * 0.03 : 0), -0.13, 0.13);
+    [camRoll, camRollV] = camSpring(camRoll, camRollV, rollT, dt, 5.5);
+    camChest = easeTo(camChest, (S.pitch || 0) * 0.25, dt, 0.16);
+    const fpYaw = S.yaw || 0;
+    fpCam.yaw = Math.abs(wrapA(fpYaw - fpCam.yaw)) > 1 ? fpYaw : easeAng(fpCam.yaw, fpYaw, dt, 0.07);
+    fpCam.pitch = easeTo(fpCam.pitch, (S.pitch || 0) * 0.22, dt, 0.12);
+    [fpCam.roll, fpCam.rollV] = camSpring(fpCam.roll, fpCam.rollV, THREE.MathUtils.clamp(-(S.lean || 0) * 0.04, -0.05, 0.05), dt, 8);
+  }
+  const hx = fx, hz = fz;
+  const tp = new THREE.Vector3(S.x - hx*back, 0, S.z - hz*back);
+  tp.y = S.y + [2.3,3.4,1.7][cm] + camBump;
+  const lx = -Math.sin(camHead), lz = -Math.cos(camHead);
+  const tl = new THREE.Vector3(S.x + lx*4, S.y + 1.0 + Math.sin(camPitch) * 2.4 + camBump, S.z + lz*4);
+  camPos.copy(tp); camLook.copy(tl);
   camera.position.copy(camPos);
-  camRoll = THREE.MathUtils.lerp(camRoll, -S.lean*0.18 + (S.sliding ? S.slip*0.1 : 0), Math.min(1, dt*4));
-  camera.up.set(Math.sin(camRoll)*Math.cos(ch), Math.cos(camRoll), -Math.sin(camRoll)*Math.sin(ch)); camera.lookAt(camLook);
-  BR.head.visible = !(camMode === 3 && !S.lift && S.state === 'riding');
-  if (camMode >= 3 && !S.lift && S.state === 'riding'){ const sx = -fz, sz = fx, up = 1;
-    if (camMode === 3 || camMode === 4){   // first person: helmet (bars in view) / chest mount
-      const hy = camMode === 3 ? 1.78 : 1.32, fw = camMode === 3 ? 0.32 : 0.36, pitchDn = camMode === 3 ? 0.55 : 0.35;
-      camera.position.set(S.x + fx*fw, S.y + hy, S.z + fz*fw); camera.up.set(0,1,0); camera.lookAt(S.x + fx*6, S.y + hy - 6*pitchDn*0.4 + (S.vy||0)*0.05, S.z + fz*6);
-      if (camera.near !== 0.05){ camera.near = 0.05; camera.updateProjectionMatrix(); } }
-    else if (camMode === 5){ const t = new THREE.Vector3(S.x + sx*5 - fx*1, Math.max(groundH(S.x + sx*5, S.z + sz*5), S.y) + 1.2, S.z + sz*5 - fz*1);   // side tracking
-      camPos.lerp(t, 1 - Math.exp(-dt*5)); camera.position.copy(camPos); camera.up.set(0,1,0); camera.lookAt(S.x, S.y + 0.9, S.z); }
+  camera.up.set(Math.sin(camRoll)*Math.cos(camHead), Math.cos(camRoll), -Math.sin(camRoll)*Math.sin(camHead)); camera.lookAt(camLook);
+  const fpOn = camMode === 3 && !S.lift && S.state === 'riding' && !rag.on;
+  BR.head.visible = !fpOn;
+  if (BR.parts.torso) BR.parts.torso.visible = !fpOn;
+  // Helmet cam keeps the gloves only. Legs, knees, shoes, arms and the helmet itself stay out of the near plane.
+  for (const k of ['upperL','upperR','foreL','foreR','thighL','thighR','shinL','shinR','kneeL','kneeR','footL','footR']){ const o = BR.parts[k]; if (o) o.visible = !fpOn; }
+  if (rag.on && (camMode === 3 || camMode === 4) && !S.lift && S.state === 'riding') bailCamera();
+  else if (camMode >= 3 && !S.lift && S.state === 'riding'){ const sx = -fz, sz = fx, up = 1;
+    if (camMode === 3 || camMode === 4){   // helmet: just behind the grips so hands and bars stay in frame. Chest mount is lower.
+      if (camMode === 3){
+        // Head lags the chassis: bars keep the full bump pitch, the view only takes a fraction of it.
+        // Rigid to the head. A lagged height sits above the bike while it descends, which reads as the view rising with speed.
+        const eyeH = 1.56, pitch = (S.pitch || 0) * 0.22;
+        fpCam.on = true; fpCam.y = S.y + eyeH;
+        // Eyes, looking a little down the trail so the bars sit low in the frame. Height does not change with speed.
+        const eye = bodyPoint(S.x, S.y, S.z, S.yaw, pitch, { x: 0, y: eyeH, z: 0.02, name: 'eye', fatal: false });
+        const look = bodyPoint(S.x, S.y, S.z, fpCam.yaw, fpCam.pitch * 0.35, { x: 0, y: 0.72, z: -2.6, name: 'look', fatal: false });
+        camera.position.set(eye.x, eye.y, eye.z);
+        const fdx = look.x - eye.x, fdz = look.z - eye.z, fl = Math.hypot(fdx, fdz) || 1;
+        const rr = Math.sin(fpCam.roll); camera.up.set(fdz / fl * rr, Math.cos(fpCam.roll), -fdx / fl * rr);
+        camera.lookAt(look.x, look.y, look.z);
+        const bar = bodyPoint(S.x, S.y, S.z, S.yaw, S.pitch || 0, { x: 0, y: 0.98, z: -0.55, name: 'bar', fatal: false });
+        fpV.set(bar.x, bar.y, bar.z).project(camera); window.__fp = { fov: +camera.fov.toFixed(1), barNdcY: +fpV.y.toFixed(3), mode: camMode };
+      } else { fpCam.on = false; window.__fp = { fov: camera.fov, barNdcY: null, mode: camMode };
+        const hy = 1.32, fw = 0.36, pitchDn = 0.35 + camChest;
+        camera.position.set(S.x + fx*fw, S.y + hy, S.z + fz*fw);
+        const rr = Math.sin(camRoll * 0.5); camera.up.set(fz * rr, Math.cos(camRoll * 0.5), -fx * rr);
+        camera.lookAt(S.x + fx*6, S.y + hy - 6*pitchDn*0.4, S.z + fz*6); }
+      if (camera.near !== 0.08){ camera.near = 0.08; camera.updateProjectionMatrix(); } }
+    else if (camMode === 5){ const t = new THREE.Vector3(S.x + sx*5 - fx*1, S.y + 1.2, S.z + sz*5 - fz*1);   // side tracking, locked to this frame
+      camPos.copy(t); camera.position.copy(camPos); camera.up.set(0,1,0); camera.lookAt(S.x, S.y + 0.9, S.z); }
     else { // drone: parks ahead beside the trail, pans as you pass, then leapfrogs ahead
       const d = Math.hypot(drone.p.x - S.x, drone.p.z - S.z); drone.t -= dt;
       if (drone.t <= 0 || d > 55){ const side = Math.random() < 0.5 ? -1 : 1, ax = S.x + fx*35 + sx*side*12, az = S.z + fz*35 + sz*side*12; drone.p.set(ax, Math.max(groundH(ax, az), S.y - 8) + 9, az); drone.t = 6; }
       camera.position.copy(drone.p); camera.up.set(0,1,0); camera.lookAt(S.x, S.y + 0.8, S.z); } }
   else if (camera.near !== 0.1){ camera.near = 0.1; camera.updateProjectionMatrix(); }
+  { const yaw = S.yaw, fx = -Math.sin(yaw), fz = -Math.cos(yaw), dx = camera.position.x - S.x, dz = camera.position.z - S.z;
+    window.__view = { mode: camMode, fov: +camera.fov.toFixed(2), dist: +Math.hypot(dx, dz).toFixed(3),
+      off: { f: +(dx*fx + dz*fz).toFixed(3), r: +(dx*Math.cos(yaw) - dz*Math.sin(yaw)).toFixed(3), y: +(camera.position.y - S.y).toFixed(3) },
+      arms: ['upperL','upperR','foreL','foreR'].map(k => !!(BR.parts[k] && BR.parts[k].visible)),
+      legs: ['thighL','thighR','shinL','shinR','kneeL','kneeR','footL','footR'].map(k => !!(BR.parts[k] && BR.parts[k].visible)),
+      hands: ['handL','handR'].map(n => { const o = BR.root.getObjectByName(n); return !!(o && o.visible && o.parent === BR.root); }),
+      head: BR.head.visible, torso: !!BR.parts.torso?.visible, spd: +((S.speed||0)).toFixed(2) }; }
+  if (editorApi && editorApi.ownsCamera()) editorApi.applyCamera(camera);
+  if (FPV.state.on && S.state==='riding' && !menu.open && !shopOpen && !bigMap.open && !window.__camSide) droneCamera();
   if (window.__camSide){ const o = window.__camSide, c = Math.cos(S.yaw), s_ = Math.sin(S.yaw); camera.position.set(S.x + c*o.d + Math.sin(S.yaw)*(o.b||0), S.y + (o.h||1.2), S.z - s_*o.d + Math.cos(S.yaw)*(o.b||0)); camera.up.set(0,1,0); camera.lookAt(S.x, S.y + 0.9, S.z); }   // test hook: side camera for pose screenshots
   if (flyF) flyover(0);
   else if (shopOpen) shopCam(dt);   // main menu: flyover camera replaces the chase cam
@@ -877,7 +1391,9 @@ function frame(){
   skyDome.position.copy(camera.position);
   if (!flyF){ sun.position.set(S.x+30, S.y+60, S.z+20); sun.target.position.set(S.x, S.y, S.z-10); }
   if (NET) NET.update(dt);
-  if (GFX) GFX.render(dt); else if (composer) composer.render(); else renderer.render(scene, camera);
+  const cap = fpsCap(), nowMs = performance.now(), minMs = cap > 0 ? 1000 / cap : 0;
+  if (!(cap > 0) || !presentAt || nowMs - presentAt >= minMs - 1.5){ presentAt = nowMs; window.__presents = (window.__presents || 0) + 1; (window.__presentAt ||= []).push(nowMs); if (window.__presentAt.length > 40) window.__presentAt.shift();
+    if (GFX) GFX.render(dt); else if (composer) composer.render(); else renderer.render(scene, camera); }
   fpsMeter(dt);
   // HUD
   const kmh = S.speed*3.6; S.maxKmh = Math.max(S.maxKmh, kmh);
@@ -892,10 +1408,12 @@ function frame(){
   if (CLOUD && S.state === 'riding' && !S.lift && (S.statT = (S.statT || 0) + dt) > 2){ S.statT = 0; if (S.maxKmh > 1) CLOUD.speed(Math.min(S.maxKmh, 108)); }
   $('lives').style.display = S.run ? '' : 'none';
   $('livesVal').textContent = S.lives>0 ? '♥ '.repeat(S.lives).trim() : '—';
-  const run = S.run && trails[S.run.t];
-  $('progressBar').style.width = run ? Math.min(100, S.run.s/run.len*100) + '%' : '0%';
+  const run = (S.run || S.free) && trails[(S.run || S.free).t];
+  const along = (S.run || S.free || {}).s || 0;
+  $('progressBar').style.width = run ? Math.min(100, along/run.len*100) + '%' : '0%';
   $('progressBar').style.background = run ? run.color : '#fff';
-  $('timer').textContent = run ? `${run.name}  ${fmtTime(S.time - S.run.start)}` : (S.onTrailName || 'Free roam');
+  $('timer').textContent = S.run ? `${trails[S.run.t].name}  ${fmtTime(S.time - S.run.start)}` : (S.free && trails[S.free.t] ? `Free ride · ${trails[S.free.t].name}` : (S.onTrailName || 'Free roam'));
+  gatePrompt();
   drawMinimap(); updateWaypoints(dt); if (bigMap.open) mapFrame(dt, inp);
   if (S.trickMsgT > 0){ S.trickMsgT -= dt; if (S.trickMsgT<=0) trickEl.textContent=''; }
   if (S.flashT > 0){ S.flashT -= dt; if (S.flashT<=0) centerEl.style.opacity = 0; }   // fade out (text stays until the next message)
@@ -912,7 +1430,7 @@ const mm = $('minimap'), mmx = mm.getContext('2d'), MMS = mm.width, mmBg = docum
   for (const tr of trails){ const pa = new Path2D(); tr.pts.forEach((p,i)=>{ if (i%3 && i < tr.pts.length-1) return; const [a,b] = P(p[0],p[1]); i ? pa.lineTo(a,b) : pa.moveTo(a,b); }); tr.mmPath = pa; }
   x.fillStyle = 'rgba(160,110,60,.9)'; { const [a,b] = P(PARK.x,PARK.z); x.beginPath(); x.arc(a,b,PARK.r/sc,0,7); x.fill(); }
   x.fillStyle = '#f2b800'; x.strokeStyle = '#000'; x.lineWidth = 1; for (const tr of trails) for (const cp of tr.cps){ const [a,b] = P(cp.x, cp.z); x.beginPath(); x.moveTo(a, b-4); x.lineTo(a+3.5, b+2.5); x.lineTo(a-3.5, b+2.5); x.closePath(); x.fill(); x.stroke(); }   // checkpoints
-  x.strokeStyle = 'rgba(235,215,170,.85)'; x.lineWidth = 1; x.setLineDash([]); for (const c of connectors){ x.beginPath(); c.pts.forEach((p,i)=>{ if (i%4 && i < c.pts.length-1) return; const [a,b] = P(p[0],p[1]); i ? x.lineTo(a,b) : x.moveTo(a,b); }); x.stroke(); }   // connector paths
+  x.setLineDash([]); for (const c of connectors){ x.strokeStyle = c.explore ? 'rgba(190,160,110,.7)' : 'rgba(235,215,170,.85)'; x.lineWidth = c.explore ? 0.6 : 1; x.beginPath(); c.pts.forEach((p,i)=>{ if (i%4 && i < c.pts.length-1) return; const [a,b] = P(p[0],p[1]); i ? x.lineTo(a,b) : x.moveTo(a,b); }); x.stroke(); }   // connector paths, explore lines unlabeled and thinner
   for (const L of LIFTS){ const [a,b] = P(L.bx,L.bz), [c,d] = P(L.tx,L.tz); x.strokeStyle = '#111'; x.lineWidth = 3; x.beginPath(); x.moveTo(a,b); x.lineTo(c,d); x.stroke(); x.strokeStyle = L.color; x.lineWidth = 1.6; x.setLineDash([3,2]); x.stroke(); x.setLineDash([]);
     for (const [p,q] of [[a,b],[c,d]]){ x.fillStyle = L.color; x.fillRect(p-3.5,q-3.5,7,7); x.strokeStyle = '#fff'; x.lineWidth = 1; x.strokeRect(p-3.5,q-3.5,7,7); }
     x.font = 'bold 10px sans-serif'; x.fillStyle = '#fff'; x.strokeStyle = '#000'; x.lineWidth = 3; const lbl = 'Lift ' + L.short; x.strokeText(lbl, a+6, b+4); x.fillText(lbl, a+6, b+4); }
@@ -978,7 +1496,8 @@ function mapTeleport(){ const {s} = mapScale(); let best = -1, bd = 1e9; spots.f
   if (!isOpen(best)){ toast(`🔒 ${spots[best].name} is locked — ${lockMsg(spotTrail(best))}`); return; }
   closeMap(); teleport(best); }
 function mapKey(code){
-  if (code==='B'||code==='KeyM'||code==='Back'||code==='Escape') closeMap();
+  if ((code==='Y'||code==='KeyY') && bigMap.hov >= 0 && spots[bigMap.hov].trail !== undefined){ beginRace(spots[bigMap.hov].trail); return; }
+  if (code==='B'||code===kbBind('map')||code===padBind('map')||code==='Escape') closeMap();
   else if (code==='A'||code==='Enter'||code==='Space') mapTeleport();
   else if (code==='X'||code==='KeyW') toggleWaypointAt(bigMap.cx, bigMap.cz); }
 bm.addEventListener('mousemove', e => { const {s, ox, oy} = mapScale(); bigMap.cx = (e.clientX - ox)/s - HALF; bigMap.cz = (e.clientY - oy)/s - HALF; bigMap.mouse = true; });
@@ -986,14 +1505,14 @@ bm.addEventListener('click', e => { if (bigMap.open) toggleWaypointAt(bigMap.cx,
 bm.addEventListener('dblclick', e => { if (bigMap.open) mapTeleport(); });
 function mapFrame(dt, inp){
   if (bm.width !== innerWidth || bm.height !== innerHeight){ bm.width = innerWidth; bm.height = innerHeight; }
-  const kx = (keys.ArrowRight?1:0) - (keys.ArrowLeft?1:0) + (keys.KeyD?1:0) - (keys.KeyA?1:0), ky = (keys.ArrowDown?1:0) - (keys.ArrowUp?1:0) + (keys.KeyS?1:0);
+  const kx = (keyDown('steerRight')?1:0) - (keyDown('steerLeft')?1:0), ky = (keyDown('brake')?1:0) - (keyDown('pedal')?1:0);
   const vx = (inp.lsx||0) + (inp.dpx||0) + kx, vz = (inp.lsy||0) + (inp.dpy||0) + ky, sp = 600;
   bigMap.cx = Math.max(-HALF, Math.min(HALF, bigMap.cx + vx*sp*dt)); bigMap.cz = Math.max(-HALF, Math.min(HALF, bigMap.cz + vz*sp*dt));
   const {s, ox, oy, sz} = mapScale(), P = (x, z) => [ox + (x+HALF)*s, oy + (z+HALF)*s], c = bmx;
   c.clearRect(0, 0, bm.width, bm.height); c.fillStyle = 'rgba(20,26,18,.92)'; c.fillRect(0, 0, bm.width, bm.height);
   c.imageSmoothingEnabled = true; c.drawImage(bigBg || (bigBg = makeBigBg()), ox, oy, sz, sz); c.strokeStyle = '#fff'; c.lineWidth = 2; c.strokeRect(ox, oy, sz, sz);
   // connectors, park, shop
-  c.strokeStyle = 'rgba(235,215,170,.9)'; c.lineWidth = 1.5; for (const k of connectors){ c.beginPath(); k.pts.forEach((p, i) => { if (i%3 && i < k.pts.length-1) return; const [a,b] = P(p[0],p[1]); i ? c.lineTo(a,b) : c.moveTo(a,b); }); c.stroke(); }
+  for (const k of connectors){ c.strokeStyle = k.explore ? 'rgba(190,160,110,.75)' : 'rgba(235,215,170,.9)'; c.lineWidth = k.explore ? (k.half > 2 ? 1.3 : 0.7) : 1.5; c.beginPath(); k.pts.forEach((p, i) => { if (i%3 && i < k.pts.length-1) return; const [a,b] = P(p[0],p[1]); i ? c.lineTo(a,b) : c.moveTo(a,b); }); c.stroke(); }
   if (RAMP){ const [a,b] = P(RAMPAGE.corral.x, RAMPAGE.corral.z); c.strokeStyle = '#d9772b'; c.lineWidth = 3; c.beginPath(); c.arc(a, b, RAMPAGE.corral.r*s, 0, 7); c.stroke(); }
   if (!RAMP) { const [a,b] = P(PARK.x, PARK.z); c.fillStyle = 'rgba(160,110,60,.9)'; c.beginPath(); c.arc(a, b, PARK.r*s, 0, 7); c.fill(); c.fillStyle = '#fff'; c.font = 'bold 13px "Barlow Condensed", sans-serif'; c.textAlign = 'center'; c.fillText('🏁 Dirt Jump Park', a, b - PARK.r*s - 6); }
   { const [a,b] = P(SHOP.x, SHOP.z); c.font = '18px "Barlow Condensed", sans-serif'; c.textAlign = 'center'; c.fillText('🚲', a, b+6); c.font = 'bold 12px "Barlow Condensed", sans-serif'; c.fillStyle = '#ffe08a'; c.fillText('Bike Shop', a, b+20); }
@@ -1022,7 +1541,10 @@ function mapFrame(dt, inp){
   { const [a,b] = P(bigMap.cx, bigMap.cz); c.strokeStyle = '#fff'; c.lineWidth = 2; c.beginPath(); c.arc(a, b, 10, 0, 7); c.moveTo(a-18, b); c.lineTo(a-6, b); c.moveTo(a+6, b); c.lineTo(a+18, b); c.moveTo(a, b-18); c.lineTo(a, b-6); c.moveTo(a, b+6); c.lineTo(a, b+18); c.stroke();
     let hov = -1; spots.forEach((p, i) => { if (Math.hypot(p.x-bigMap.cx, p.z-bigMap.cz)*s < 22) hov = i; });
     const dist = Math.round(Math.hypot(bigMap.cx - S.x, bigMap.cz - S.z)); c.textAlign = 'left'; c.font = 'bold 13px "Barlow Condensed", sans-serif'; c.fillStyle = '#fff'; c.strokeStyle = '#000'; c.lineWidth = 3;
-    const t = hov >= 0 ? `${spots[hov].name} — ${isOpen(hov) ? 'A / Enter: teleport' : '🔒 locked'}` : `${dist} m away`; c.strokeText(t, a+16, b-14); c.fillText(t, a+16, b-14); }
+    bigMap.hov = hov;
+    const spotTr = hov >= 0 && spots[hov].trail !== undefined ? trails[spots[hov].trail] : null;
+    const raceNote = spotTr ? (raceOpen(spotTr.id) ? PT('{Y}: race') : 'Complete this trail to unlock racing') : '';
+    const t = hov >= 0 ? `${spots[hov].name} — ${isOpen(hov) ? PT('{A} / Enter: free ride') : '🔒 locked'}${raceNote ? ' · ' + raceNote : ''}` : `${dist} m away`; c.strokeText(t, a+16, b-14); c.fillText(t, a+16, b-14); }
   // legend
   const lx = innerWidth - 270, rows = [['━', '#fff', 'Trail (dashed + 🔒 = locked)'], ['▲', '#f2b800', 'Checkpoint'], ['■', '#e53935', 'Lift station (dashed line = lift)'], ['─', '#ebd7aa', 'Connector path'], ...(RAMP ? [['◯', '#d9772b', 'Finish corral']] : [['●', '#a06e3c', 'Dirt Jump Park']]), ['🚲', '#fff', 'Bike Shop'], ['①', '#fff', 'Teleport spot'], ['◆', '#3ef0ff', `Waypoint (max ${WP_MAX})`], ['▲', '#ffd84d', 'You']];
   c.fillStyle = 'rgba(26,22,15,.88)'; c.fillRect(lx-12, 20, 262, 46 + rows.length*20 + 140); c.textAlign = 'left'; c.font = '28px "Bebas Neue", sans-serif'; c.fillStyle = '#d9772b'; c.fillText('MAP', lx, 44);
@@ -1030,26 +1552,15 @@ function mapFrame(dt, inp){
   let y = 80 + rows.length*20; c.fillStyle = '#fff'; c.font = 'bold 13px "Barlow Condensed", sans-serif'; c.fillText('Difficulty', lx, y); c.font = '13px "Barlow Condensed", sans-serif';
   for (const k of ['green','blue','black','dblack', ...(trails.some(t => t.diff === 'pro3') ? ['pro3'] : [])]){ y += 18; c.fillStyle = /^#(000|111|222)/.test(DIFF[k].color) || DIFF[k].color==='black' ? '#eee' : DIFF[k].color; c.fillText(`${DIFF[k].icon} ${DIFF[k].label}`, lx, y); }
   y += 26; c.fillStyle = '#bbb'; c.font = '12px "Barlow Condensed", sans-serif';
-  for (const l of ['Stick / D-pad / arrows / mouse: move cursor', 'A / Enter / double-click: teleport', 'X / W / click: set or remove waypoint', 'B / M / View: close']){ c.fillText(l, lx, y); y += 16; }
+  for (const l of ['Stick / D-pad / arrows / mouse: move cursor', PT('{A} / Enter / double-click: teleport'), PT('{X} / W / click: set or remove waypoint'), PT('{B} / M / {Back}: close')]){ c.fillText(l, lx, y); y += 16; }
 }
 syncBeacons();
-// ---------- music: shuffled CC0 playlist (starts after the first user input, per browser autoplay rules) ----------
-const TRACKS = [
-  {file:'music/actiontrack.mp3', title:'Action Track', artist:'LushoGames', src:'opengameart.org/content/action-track'},
-  {file:'music/simplebeat.mp3', title:'Simple Action Beat', artist:'LushoGames', src:'opengameart.org/content/simple-action-beat'},
-  {file:'music/rock-theme-3.mp3', title:'Rock Theme 3', artist:'Umplix', src:'opengameart.org/content/rock-theme-3'},
-  {file:'music/fastsong.mp3', title:'Fast Cheerful Punk Rock Lo-fi', artist:'annandistance', src:'opengameart.org/content/fast-cheerful-punk-rock-lo-fi'},
-];
-const music = { el: new Audio(), order: [], i: -1, started: false };
-music.el.preload = 'auto';
-const shuffle = a => { for (let i = a.length-1; i > 0; i--){ const j = Math.floor(Math.random()*(i+1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
-function musicVol(){ music.el.volume = SETTINGS.musicOn ? SETTINGS.musicVol : 0; }
-function nextSong(){ if (!SETTINGS.musicOn) return; if (++music.i >= music.order.length){ music.order = shuffle(TRACKS.map((_, k) => k)); music.i = 0; }
-  const t = TRACKS[music.order[music.i]]; music.el.src = t.file; musicVol(); music.el.play().then(() => toast(`♪ Now playing: ${t.title} — ${t.artist} (CC0)`)).catch(() => {}); }
-music.el.addEventListener('ended', nextSong);
-function startMusic(){ initSfx(); setSfxVolume(SETTINGS.volume); if (music.started || !SETTINGS.musicOn) return; music.started = true; nextSong(); }
-for (const ev of ['keydown', 'pointerdown', 'touchend', 'click']) addEventListener(ev, startMusic, {once:false});
-function setMusicOn(on){ SETTINGS.musicOn = on; saveSettings(); if (on){ if (!music.started){ music.started = true; nextSong(); } else if (music.el.paused){ musicVol(); music.el.play().catch(()=>{}); } } else music.el.pause(); }
+// ---------- audio: procedural bike and nature sounds only. No music tracks. ----------
+let audioOn = false;
+function startAudio(){ if (audioOn) return; audioOn = true; initSfx(); setSfxVolume(SETTINGS.volume); setAmbience(SETTINGS.ambience); }
+for (const ev of ['keydown', 'pointerdown', 'touchend', 'click']) addEventListener(ev, startAudio, {once:false});
+function setAmbienceVol(v){ SETTINGS.ambience = Math.max(0, Math.min(1, Math.round(v*10)/10)); SETTINGS.musicVol = SETTINGS.ambience; saveSettings(); setAmbience(SETTINGS.ambience); }
+window.__musicPlaying = musicPlaying;
 
 // ---------- menus: main menu (flyover), trails, settings, credits, pause ----------
 const menu = { open:false, page:'main', sel:0, stack:[], repeatT:0, fly:0 };
@@ -1060,29 +1571,43 @@ function fpsMeter(dt){ if (!SETTINGS.fpsOn){ if (fpsEl.style.display !== 'none')
   fpsM.acc += dt; fpsM.n++; fpsM.worst = Math.max(fpsM.worst, dt);
   if (fpsM.acc >= 0.5){ const f = fpsM.n/fpsM.acc; fpsEl.textContent = `${f.toFixed(0)} FPS · ${(fpsM.acc/fpsM.n*1000).toFixed(1)} ms · worst ${(fpsM.worst*1000).toFixed(0)} ms` + (GFX && GFX.gov ? ` · ${(SETTINGS.gfx || '').toUpperCase()} ${Math.round(GFX.gov.rs*100)}% scale` : ''); fpsM.acc = 0; fpsM.n = 0; fpsM.worst = 0; } }
 const ON = v => v ? 'ON' : 'OFF', PCT = v => Math.round(v*100) + '%';
+let trailPick = 0;
 function trailItems(){ return trails.map((tr, i) => { const d = DIFF[tr.diff], open = isOpen(i);
-  return {label:`<span class="dIcon" style="color:${d.color === '#111' ? '#e8e2d0' : d.color}">${d.icon}</span> ${open ? '' : '🔒 '}${tr.name}`, sub:`${d.label} · ${tr.type}${open ? '' : tr.unlockAny ? ' · finish any other Rampage line to unlock' : ' · finish it once to unlock'}`, disabled:!open, act:() => { spotI = i; startRide(); }}; }); }
+  return {label:`<span class="dIcon" style="color:${d.color === '#111' ? '#e8e2d0' : d.color}">${d.icon}</span> ${open ? '' : '🔒 '}${tr.name}`, sub:`${d.label} · ${tr.type}${open ? '' : tr.unlockAny ? ' · finish any other Rampage line to unlock' : ' · finish it once to unlock'} · ${raceOpen(tr.id) ? 'Race open' : 'Complete this trail to unlock racing'}`, disabled:!open, act:() => { trailPick = i; go('trailgo'); }}; }); }
 const PAGES = {
   main: () => ({title:null, items:[
     {label:'Ride', sub:RAMP ? 'Free roam from the Valley Overlook' : 'Free roam from the base plaza', act:() => { spotI = spots.findIndex(s => s.name.startsWith(RAMP ? 'Valley Overlook' : 'Valley Base')); startRide(); }},
+    {label:'Level Editor', sub:'Build a trail, test ride it, save it on this device', act:() => editorApi && editorApi.open()},
     {label:'World', value:RAMP ? 'RAMPAGE' : 'MOUNTAIN', sub:RAMP ? 'Utah desert freeride venue (Red Bull Rampage style)' : 'Alpine bike park', adj:() => switchWorld(), act:() => switchWorld()},
     {label:'Trails', sub:`${trails.filter((_, i) => isOpen(i)).length}/${trails.length} unlocked — drop in at a trail start`, act:() => go('trails')},
     {label:'Bike Shop', sub:`$${S.score.toLocaleString()} DOLLAHS`, act:() => openShop()},
     {label:'Multiplayer', value:NET && NET.st.status === 'in' ? 'ROOM ' + NET.st.code : undefined, sub:'Ride with friends in a private room (room code)', act:() => go('multi')},
-    {label:'Leaderboards', sub:'Fastest times, biggest air, top speed… (LB / RB or Q / E: category)', act:() => openBoards()},
-    {label:'Settings', sub:'Graphics, quality, music, controls, invert', act:() => go('settings')},
+    {label:'Leaderboards', sub:PT('Fastest times, biggest air, top speed… ({LB} / {RB} or Q / E: category)'), act:() => openBoards()},
+    {label:'Settings', sub:'Graphics, ambience, frame rate, controls', act:() => go('settings')},
     {label:'Credits', act:() => go('credits')} ]}),
   trails: () => ({title:RAMP ? 'RAMPAGE LINES' : 'TRAILS', items:[...trailItems(), ...(RAMP ? [] : [{label:'Dirt Jump Park', sub:'Pro line · always open', act:() => { spotI = spots.findIndex(s => s.name === 'Dirt Jump Park'); startRide(); }}]), {label:'‹ Back', act:back}]}),
+  trailgo: () => { const tr = trails[trailPick], open = raceOpen(tr.id); return { title: tr.name.toUpperCase(), items: [
+    { label: 'Free Ride', sub: 'No timer and no leaderboard. Finish every checkpoint to unlock racing.', act: () => { spotI = trailPick; startRide(); } },
+    { label: 'Race', sub: open ? 'Countdown, timer, checkpoints in order. No drone and no respawn point.' : 'Complete this trail to unlock racing', act: () => beginRace(trailPick) },
+    { label: '‹ Back', act: back } ] }; },
   settings: () => ({title:'SETTINGS', items:[
     {label:'Cloud Save', value:CLOUD ? ({synced:'SYNCED', offline:'OFFLINE', idle:'…'})[CLOUD.st.status] || '' : 'OFF', sub:'Your save code, restore on another browser', act:() => go('cloud')},
     {label:'Graphics', value:(SETTINGS.gfx||'low').toUpperCase(), sub:'Low = classic look · Medium / High / Max = HDR sky, PBR textures, shadows, post FX, more detail (reloads)', adj:d => setGfx(d), act:() => setGfx(1, true)},
     {label:'FPS counter', value:ON(SETTINGS.fpsOn), adj:() => { SETTINGS.fpsOn = !SETTINGS.fpsOn; saveSettings(); }, act:() => { SETTINGS.fpsOn = !SETTINGS.fpsOn; saveSettings(); }},
+    {label:'Frame rate', value:SETTINGS.fpsCap ? SETTINGS.fpsCap + ' FPS' : 'UNLIMITED', sub:'Caps how often the picture is drawn. The bike physics stay on a fixed step.', adj:d => { const i = Math.max(0, FPS_OPTS.indexOf(SETTINGS.fpsCap)); SETTINGS.fpsCap = FPS_OPTS[(i + d + FPS_OPTS.length) % FPS_OPTS.length]; saveSettings(); }, act:() => { const i = Math.max(0, FPS_OPTS.indexOf(SETTINGS.fpsCap)); SETTINGS.fpsCap = FPS_OPTS[(i + 1) % FPS_OPTS.length]; saveSettings(); }},
     {label:'Time of day', value:({morning:'MORNING', noon:'NOON', golden:'GOLDEN HOUR'})[SETTINGS.tod || 'noon'], sub:'Graphics Medium and up (reloads)', adj:d => setTod(d), act:() => setTod(1)},
-    {label:'Music', value:ON(SETTINGS.musicOn), adj:() => setMusicOn(!SETTINGS.musicOn), act:() => setMusicOn(!SETTINGS.musicOn)},
-    {label:'Music volume', value:PCT(SETTINGS.musicVol), adj:d => { SETTINGS.musicVol = Math.max(0, Math.min(1, Math.round((SETTINGS.musicVol + d*0.1)*10)/10)); saveSettings(); musicVol(); }},
+    {label:'Ambience volume', value:PCT(SETTINGS.ambience), sub:'Birds, leaves and a distant creek. 0% is quiet.', adj:d => setAmbienceVol(SETTINGS.ambience + d*0.1)},
     {label:'Sound volume', value:PCT(SETTINGS.volume), sub:'sound effects (0% = mute)', adj:d => { SETTINGS.volume = Math.max(0, Math.min(1, Math.round((SETTINGS.volume + d*0.1)*10)/10)); saveSettings(); setSfxVolume(SETTINGS.volume); }},
     {label:'Invert lean / flip (left stick ↕)', value:ON(SETTINGS.invertY), adj:() => { SETTINGS.invertY = !SETTINGS.invertY; saveSettings(); }, act:() => { SETTINGS.invertY = !SETTINGS.invertY; saveSettings(); }},
     {label:'Invert whip / tweak (right stick ↔)', value:ON(SETTINGS.invertX), adj:() => { SETTINGS.invertX = !SETTINGS.invertX; saveSettings(); }, act:() => { SETTINGS.invertX = !SETTINGS.invertX; saveSettings(); }},
+    {label:'Drone', value:SETTINGS.droneFly === 'manual' ? 'MANUAL FPV' : 'AUTO FOLLOW', sub:'Z to launch. Manual parks the bike. Follow films you while you ride.', adj:() => { SETTINGS.droneFly = SETTINGS.droneFly === 'manual' ? 'follow' : 'manual'; saveSettings(); }, act:() => { SETTINGS.droneFly = SETTINGS.droneFly === 'manual' ? 'follow' : 'manual'; saveSettings(); }},
+    {label:'Drone max speed', value:(SETTINGS.droneSpeed||12) + ' m/s', adj:d => { SETTINGS.droneSpeed = Math.max(6, Math.min(24, (SETTINGS.droneSpeed||12) + d*2)); saveSettings(); }},
+    {label:'Drone camera tilt', value:(SETTINGS.droneTilt||12) + '°', adj:d => { SETTINGS.droneTilt = Math.max(0, Math.min(35, (SETTINGS.droneTilt||12) + d*3)); saveSettings(); }},
+    {label:'Follow distance', value:(SETTINGS.droneDist||8) + ' m', adj:d => { SETTINGS.droneDist = Math.max(4, Math.min(18, (SETTINGS.droneDist||8) + d)); saveSettings(); }},
+    {label:'Follow height', value:(SETTINGS.droneHeight||4) + ' m', adj:d => { SETTINGS.droneHeight = Math.max(2, Math.min(12, (SETTINGS.droneHeight||4) + d)); saveSettings(); }},
+    ...nameRows(),
+    {label:'Rider look', value:legacyRider ? 'CLASSIC' : 'ATHLETIC', sub:'Athletic is the lean rider. Classic is the original. Reloads.', act:() => { LS.set('trailDescent.legacyRider', !legacyRider); toast(legacyRider ? 'Athletic rider — reloading…' : 'Classic rider — reloading…'); setTimeout(() => location.reload(), 500); }},
+    {label:'Controls', sub:'Rebind every keyboard and controller action', act:() => go('controls')},
     {label:'Controls / help', value:$('help').classList.contains('hidden') ? 'SHOW' : 'HIDE', act:() => $('help').classList.toggle('hidden')},
     {label:'‹ Back', act:back} ]}),
   multi: () => { const st = NET ? NET.st : {status:'off'}, inRoom = st.status === 'in', host = inRoom && st.id === st.host, nm = mpName();
@@ -1091,11 +1616,11 @@ const PAGES = {
       items.push({label:'Create room', sub:st.status === 'connecting' ? 'Connecting…' : 'Get a private 6-character code to share with friends', act:() => { NET.create().then(() => renderMenu()); renderMenu(); }});
       items.push({label:'Join with code', sub:'Type the code your friend gives you', act:() => askCode()}); }
     else {
-      items.push({label:'Room code', value:st.code, sub:`${st.peers.size + 1}/8 riders · share this code (in person / family chat). Emotes when stopped or on a lift: T + 1–4 (controller: D-pad).`, act:() => {}});
+      items.push({label:'Room code', value:st.code, sub:`${st.peers.size + 1}/8 riders · share this code (in person / family chat). Emotes when stopped or on a lift: hold T or D-pad Up, then 1–4 or the right stick.`, act:() => {}});
       if (host) items.push({label:'Lock room', value:ON(st.locked), sub:'When locked, nobody new can join', adj:() => NET.lock(!st.locked), act:() => NET.lock(!st.locked)});
       if (host) for (const p of st.peers.values()) items.push({label:`Remove ${p.label}`, sub:'Kick this rider from the room', act:() => NET.kick(p.id)});
       items.push({label:'Leave room', act:() => { NET.leave(); renderMenu(); }}); }
-    items.push({label:'Your rider name', value:`${NAME_A[nm[0]]} ${NAME_B[nm[1]]}`.toUpperCase(), sub:'Preset names only · ← → to change' + (inRoom ? ' (applies next time you join)' : ''), adj:d => { const k = (nm[0]*NAME_B.length + nm[1] + d*7 + NAME_A.length*NAME_B.length) % (NAME_A.length*NAME_B.length); LS.set('trailDescent.mpName', [Math.floor(k/NAME_B.length), k % NAME_B.length]); }, act:() => { const n = [Math.floor(Math.random()*NAME_A.length), Math.floor(Math.random()*NAME_B.length)]; LS.set('trailDescent.mpName', n); }});
+    items.push({label:'Your rider name', value:`${NAME_A[nm[0]]} ${NAME_B[nm[1]]}`.toUpperCase(), sub:'Rooms use your generated name · ← → to change' + (inRoom ? ' (applies next time you join)' : ''), adj:d => { const k = (nm[0]*NAME_B.length + nm[1] + d*7 + NAME_A.length*NAME_B.length) % (NAME_A.length*NAME_B.length); LS.set('trailDescent.mpName', [Math.floor(k/NAME_B.length), k % NAME_B.length]); }, act:() => { const n = [Math.floor(Math.random()*NAME_A.length), Math.floor(Math.random()*NAME_B.length)]; LS.set('trailDescent.mpName', n); }});
     items.push({label:'‹ Back', act:back});
     return {title:'MULTIPLAYER', html:'<p class="mpNote">Private rooms only — no chat, preset names and emotes. Your rider position and look are shared with the room while you are in it; nothing is stored.</p>', items}; },
   cloud: () => { const c = CLOUD && CLOUD.st; return {title:'CLOUD SAVE', html:`<p class="mpNote">Your progress (DOLLAHS, bikes, skins, unlocks, best times) is saved on this device and backed up online.<br>Use your <b>save code</b> to get it back on another browser. Keep it secret — anyone with the code can load your save.</p>`, items:[
@@ -1105,36 +1630,42 @@ const PAGES = {
       {label:'Delete my cloud data', sub:'Removes the online copy + your leaderboard entries (this device keeps its progress)', act:() => { if (cloudDel){ CLOUD && CLOUD.wipe(); cloudDel = false; } else { cloudDel = true; toast('Select again to confirm deleting your cloud data'); setTimeout(() => cloudDel = false, 5000); } }},
       {label:'‹ Back', act:back} ]}; },
   boards: () => { const C = LB_CATS[LBV.cat], tl = trails, html = LBV.res === undefined ? '<p class="mpNote">Loading…</p>' : !LBV.res || !LBV.res.ok ? '<p class="mpNote">📡 Leaderboards are offline right now.</p>' : boardHtml(LBV.res, C);
-    const items = [{label:'Category', value:C.label.toUpperCase(), sub:'LB / RB (Q / E) or ← →', adj:d => lbMove(d, 0)}];
+    const items = [{label:'Category', value:C.label.toUpperCase(), sub:PT('{LB} / {RB} (Q / E) or ← →'), adj:d => lbMove(d, 0)}];
     if (C.per === 'trail'){ items.push({label:'World', value:RAMP ? 'RAMPAGE' : 'MOUNTAIN', sub:'Switching world reloads the game', adj:() => switchWorld()}); items.push({label:'Trail', value:(tl[LBV.trail] || {}).name || '', adj:d => { LBV.trail = (LBV.trail + d + tl.length) % tl.length; lbLoad(); }}); }
+    const rep = reportable(LBV.res); if (rep.length){ LBV.rep = ((LBV.rep || 0) % rep.length + rep.length) % rep.length;
+      items.push({label:'Report a name', value:rep[LBV.rep], sub:'← → picks a name. Select to report it for review.', adj:d => { LBV.rep += d; }, act:() => reportName(rep[LBV.rep])}); }
     items.push({label:'‹ Back', act:back});
     return {title:'LEADERBOARDS', html, items}; },
   credits: () => ({title:'CREDITS', html:`<div class="credits"><p><b>Grip 'N Rip</b> — an open-world mountain bike game in the browser.</p>
     <p><b>Game, code, world, rider and bike models, textures:</b> made procedurally for this project (Three.js r160).</p>
-    <p><b>Music (CC0, from OpenGameArt.org):</b><br>${TRACKS.map(t => `${t.title} — ${t.artist} <small>(${t.src})</small>`).join('<br>')}</p>
+    <p><b>Sound:</b> synthesized in the browser with Web Audio. No music tracks. Bike, wind, birds, leaves and creek are procedural.</p>
     <p><b>Fonts:</b> Bebas Neue & Barlow Condensed (SIL Open Font License, Google Fonts).</p>
+    <p><b>Name filter word list:</b> List of Dirty, Naughty, Obscene, and Otherwise Bad Words by Shutterstock (LDNOOBW), CC BY 4.0.</p>
     <p><b>Trick references:</b> Red Bull slopestyle trick dictionary, X Games BMX Tricktionary, riding.guide.</p>
     <p><b>Graphics Medium/High/Max:</b> CC0 textures & HDRIs from Poly Haven (polyhaven.com): sparse_grass, brown_mud_leaves_01, aerial_rocks_02, bark_brown_02, gravel, aerial_sand, red_dirt_mud_01, dry_riverbed_rock; skies pizzo_pernice_puresky (Mountain), quarry_01_puresky (Rampage).</p>
     <p><b>Engine:</b> three.js (MIT).</p></div>`, items:[{label:'‹ Back', act:back}]}),
+  controls: () => ({title:'CONTROLS', html:'<p class="mpNote">Select a row, then press the new key or button. A shared control (map and drone, camera reset and shop, shift-up and emote, brake and the respawn modifier) is not a conflict. Wheelie, hop, and stick tricks stay on the sticks.</p>', items: controlItems()}),
   pause: () => ({title:'PAUSED', items:[
     {label:'Resume', act:() => togglePause()},
-    {label:'Map', sub:'View / M', act:() => { closeMenu(); openMap(); bigMap.wasPaused = false; }},
+    {label:'Map', sub: padLabel(padBind('map')) + ' / ' + keyLabel(kbBind('map')), act:() => { closeMenu(); openMap(); bigMap.wasPaused = false; }},
+    {label:'FPV drone', sub: keyLabel(kbBind('drone')) + ', or hold ' + padLabel(padBind('drone')) + '. Off during a race.', act:() => { closeMenu(); S.paused = false; toggleDrone(); }},
     {label:'Bike Shop', act:() => openShop()},
+    {label:'Clear respawn point', sub: spawn ? 'Bails go back to the last checkpoint' : 'None set', act: () => { if (!spawn){ toast('↩ No respawn point set'); return; } clearSpawnPoint(); }},
     {label:'Multiplayer', value:NET && NET.st.status === 'in' ? 'ROOM ' + NET.st.code : undefined, act:() => go('multi')},
     {label:'Leaderboards', act:() => openBoards()},
-    {label:'Skip song', sub: music.started && SETTINGS.musicOn && music.i >= 0 ? `Now: ${TRACKS[music.order[music.i]].title} — ${TRACKS[music.order[music.i]].artist}` : 'Music is off or not started', act:() => { if (!music.started){ music.started = true; } nextSong(); }},
     {label:'Settings', act:() => go('settings')},
     {label:'Controls / help', act:() => $('help').classList.toggle('hidden')},
     {label:'Main Menu', sub:'Leave the ride (progress and DOLLAHS are saved)', act:() => toMainMenu()} ]}),
 };
 function renderMenu(){ const P = PAGES[menu.page](), el = $('menuPanel');
   menu.items = P.items; menu.sel = Math.max(0, Math.min(menu.sel, P.items.length-1));
-  el.innerHTML = (P.title ? `<h2>${P.title}</h2>` : '') + (P.html || '') + `<ul class="mItems${menu.page === 'trails' ? ' scroll' : ''}">` + P.items.map((it, k) =>
-    `<li data-k="${k}" class="${k === menu.sel ? 'sel' : ''}${it.disabled ? ' dis' : ''}"><span class="mLabel">${it.label}</span>${it.value !== undefined ? `<span class="mVal">${it.adj ? '‹ ' : ''}${it.value}${it.adj ? ' ›' : ''}</span>` : ''}${it.sub ? `<small>${it.sub}</small>` : ''}</li>`).join('') + '</ul>';
+  el.innerHTML = (P.title ? `<h2>${P.title}</h2>` : '') + (P.html || '') + `<ul class="mItems${menu.page === 'trails' || menu.page === 'controls' || menu.page === 'settings' ? ' scroll' : ''}">` + P.items.map((it, k) =>
+    `<li data-k="${k}" class="${k === menu.sel ? 'sel' : ''}${it.disabled ? ' dis' : ''}"><span class="mLabel">${it.label}</span>${it.value !== undefined ? `<span class="mVal">${it.adj ? '‹ ' : ''}${esc(it.value)}${it.adj ? ' ›' : ''}</span>` : ''}${it.sub ? `<small>${esc(it.sub)}</small>` : ''}</li>`).join('') + '</ul>';
   $('menuLogo').style.display = menu.page === 'main' ? '' : 'none';
-  el.querySelectorAll('li').forEach(li => { const k = +li.dataset.k; li.onmouseenter = () => { if (menu.sel !== k){ menu.sel = k; renderMenu(); } }; li.onclick = () => { menu.sel = k; menuKey('Enter'); }; });
-  const s = el.querySelector('li.sel'); if (s && s.scrollIntoView) s.scrollIntoView({block:'nearest'});
-  $('menuHint').textContent = menu.page === 'main' ? 'D-pad / stick / arrows: choose · A / Enter: select' : 'D-pad / stick / arrows: choose · ← → change · A / Enter: select · B / Esc: back'; }
+  el.querySelectorAll('li').forEach(li => { const k = +li.dataset.k; li.addEventListener('pointerenter', e => { if (e.pointerType && e.pointerType !== 'mouse') return; if (menu.sel === k) return; menu.sel = k; el.querySelectorAll('li').forEach(n => n.classList.toggle('sel', +n.dataset.k === k)); }); li.onclick = () => { menu.sel = k; menuKey('Enter'); }; });
+  const list = el.querySelector('.mItems'), s = el.querySelector('li.sel');
+  if (list && s){ const top = s.offsetTop, bot = top + s.offsetHeight, view = list.clientHeight; if (top < list.scrollTop + 2) list.scrollTop = Math.max(0, top - 2); else if (bot > list.scrollTop + view - 2) list.scrollTop = bot - view + 2; }
+  $('menuHint').textContent = PT(menu.page === 'main' ? 'D-pad / stick / arrows: choose · {A} / Enter: select' : 'D-pad / stick / arrows: choose · ← → change · {A} / Enter: select · {B} / Esc: back'); }
 function openMenu(page){ menu.open = true; menu.page = page; menu.sel = 0; menu.stack = []; $('menu').classList.remove('hidden'); $('menu').classList.toggle('pause', page === 'pause'); document.body.classList.toggle('inmenu', page !== 'pause'); renderMenu(); }
 function closeMenu(){ menu.open = false; document.body.classList.remove('inmenu'); $('menu').classList.add('hidden'); }
 function go(page){ menu.stack.push([menu.page, menu.sel]); menu.page = page; menu.sel = 0; renderMenu(); }
@@ -1142,7 +1673,80 @@ function back(){ if (!menu.stack.length){ if (menu.page === 'pause') togglePause
 function switchWorld(){ LS.set('trailDescent.world', RAMP ? 'mountain' : 'rampage'); $('loading').classList.remove('done'); $('loading').textContent = RAMP ? 'LOADING THE MOUNTAIN…' : 'LOADING RAMPAGE…'; setTimeout(() => location.reload(), 50); }
 function startRide(){ closeMenu(); resetGame(); }
 function toMainMenu(){ S.paused = false; S.state = 'menu'; S.run = null; S.lift = null; myChair.visible = false; $('liftRide').style.display = 'none'; camInit = false; openMenu('main'); $('loading').classList.add('done'); }
-function menuKey(code){ const it = menu.items[menu.sel];
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const PAD_CODES = new Set(['A','B','X','Y','Start','Back','LB','RB','LS','RS','DU','DD','DL','DR','LT','RT']);
+let bindCapture = null;
+function bindName(id){ return id === 'spawnClick' ? 'Respawn click' : id === 'spawnMod' ? 'Respawn modifier' : actionLabel(id); }
+function bindLabel(device, code){ return device === 'pad' ? padLabel(code) : keyLabel(code); }
+function startBind(id, device){ bindCapture = { id, device, phase: 'listen', trig: true }; }
+function cancelBind(){ bindCapture = null; toast('Bind cancelled'); if (menu.open) renderMenu(); }
+function applyBind(next, msg){ SETTINGS.binds = next; saveSettings(); renderHelp(); bindCapture = null; toast(msg); if (menu.open) renderMenu(); }
+function finishBind(code){
+  const cap = bindCapture; if (!cap) return;
+  if (cap.phase === 'conflict'){
+    if (code === 'A' || code === 'Enter' || code === 'KeyA') applyBind(swapBind(SETTINGS.binds, cap.device, cap.id, cap.code), 'Swapped ' + bindName(cap.id) + ' and ' + bindName(cap.other));
+    else if (code === 'B' || code === 'KeyB' || code === 'Escape' || code === 'Backspace' || code === 'Start') cancelBind();
+    return;
+  }
+  const hit = proposeBind(SETTINGS.binds, cap.device, cap.id, code);
+  if (!hit.ok){ cap.phase = 'conflict'; cap.code = code; cap.other = hit.other; toast(bindLabel(cap.device, code) + ' is used by ' + bindName(hit.other) + PT('. {A} swaps, {B} or Esc cancels.')); if (menu.open) renderMenu(); return; }
+  applyBind(hit.binds, bindName(cap.id) + ' → ' + bindLabel(cap.device, code));
+}
+function captureKey(code){
+  const cap = bindCapture;
+  if (cap.phase === 'conflict'){ finishBind(code); return; }
+  if (code === 'Escape' || code === 'Backspace' || code === 'Start'){ cancelBind(); return; }
+  if (cap.device === 'kb' && PAD_CODES.has(code)) return;
+  if (cap.device === 'pad' && !PAD_CODES.has(code)) return;
+  finishBind(code);
+}
+function controlItems(){
+  const g = connectedPad(), prof = g && PAD_PROFILES[g.id];
+  const rows = [{ label:'Set up controller', value: g ? (prof ? 'CUSTOM' : g.mapping === 'standard' ? 'STANDARD' : 'AUTO') : 'NONE', sub: g ? `${GLYPHS[padFamily(g)].name}. Press each button when asked, so every button does the right thing.` : 'Plug in a controller and press a button on it', act:() => setupController() }];
+  if (prof) rows.push({ label:'Forget controller setup', sub:'Go back to the automatic layout for this controller', act:() => { savePadProfile(g.id, null); toast('Controller setup removed'); } });
+  rows.push({ label:'Reset to defaults', sub:'Restores every keyboard and controller bind', act:() => { SETTINGS.binds = loadBinds(null); saveSettings(); renderHelp(); toast('Controls reset'); } });
+  const row = (id, device) => ({ label: bindName(id) + (device === 'kb' ? ' — keyboard' : ' — controller'), value: device === 'kb' ? keyLabel(kbBind(id)) : padLabel(padBind(id)), sub: bindCapture && bindCapture.id === id && bindCapture.device === device ? (bindCapture.phase === 'conflict' ? bindLabel(device, bindCapture.code) + ' is ' + bindName(bindCapture.other) + PT('. {A} swaps, {B} cancels.') : 'Press the new ' + (device === 'kb' ? 'key' : 'button') + '. Esc cancels.') : (device === 'kb' ? 'Select, then press a key' : 'Select, then press a button'), act: () => startBind(id, device) });
+  for (const [id] of ACTIONS){ rows.push(row(id, 'kb')); if (id in PAD_DEFAULT) rows.push(row(id, 'pad')); }
+  rows.push(row('spawnClick', 'pad'));
+  rows.push(row('spawnMod', 'pad'));
+  rows.push({ label:'Wheelie', value:'BOTH STICKS UP', sub:'Fixed. On the ground only: both sticks leave center together and stay up.' });
+  rows.push({ label:'Hop', value:PT('RIGHT STICK DOWN, THEN UP'), sub:'Fixed. The up flick hops only after the stick was down.' });
+  rows.push({ label:'Tricks', value:PT('{LB} + RIGHT STICK').toUpperCase(), sub:PT('Fixed. Eight directions. {RS} is a barspin. Keyboard uses the trick modifier.') });
+  rows.push({ label:'‹ Back', act: back });
+  return rows;
+}
+function renderHelp(){
+  const k = id => keyLabel(kbBind(id)), p = id => padLabel(padBind(id));
+  const rows = [
+    ['Steer (spin in air)', 'Left stick ← →', k('steerLeft') + ' / ' + k('steerRight') + ' or ← →'],
+    ['In the air, stick down / back is a backflip (nose up) and stick up / forward is a frontflip (nose down). On the ground this stick only shifts your weight. A wheelie still needs both sticks up, and only while the wheels are on the ground.', 'Left stick ↓ backflip · ↑ frontflip', k('flipBack') + ' backflip · ' + k('flipForward') + ' frontflip'],
+    ['Accelerate / pedal', p('pedal'), k('pedal') + ' or ↑'],
+    ['Brake (+steer = slide). Holding the respawn modifier alone still brakes.', p('brake'), k('brake') + ' or ↓'],
+    ['Pump / preload (bend down)', 'Right stick ↓ (hold)', k('pump') + ' (hold)'],
+    ['Bunny hop. The up flick only hops if the stick was down first.', 'Right stick ↓ then ↑', 'release ' + k('pump')],
+    ['Counter-pump (stretch up)', 'Right stick ↑', k('counter')],
+    ['Lean the bike into a turn. Matching the steer tightens the turn. Leaning the wrong way widens it. In the air it is a style tilt. Landing leaned much past 30° bails.', 'Right stick ← →', k('leanLeft') + ' / ' + k('leanRight')],
+    ['Tricks (stick amount = strength)', PT('{LB} + right stick. {RS} = barspin'), k('trick') + ' + direction, ' + k('trick') + ' + ' + k('barspin') + ' = barspin'],
+    ['Respawn', p('respawn'), k('respawn')],
+    ['Camera / reset camera', p('camera') + ' / ' + p('camReset'), k('camera') + ' / ' + k('camReset')],
+    ['Shift gear up / down. A short tap shifts. Holding the emote button opens emotes.', p('gearUp') + ' / ' + p('gearDown'), k('gearUp') + ' / ' + k('gearDown')],
+    ['Pause', p('pause') + ' / Esc', k('pause') + ' / Esc'],
+    ['Full-screen map. A short press opens it. Hold the drone button for the FPV drone.', p('map') + ' (tap)', k('map')],
+    ['FPV drone. Off during a race. Free ride can use it.', 'Hold ' + p('drone'), k('drone')],
+    ['Bike shop. The controller button opens it from the title or pause menu.', p('shop'), k('shop')],
+    ['Respawn point at your position and facing. Stopped or slow, on the ground, not on a lift or inside a rock or tree. Press again while standing on it to clear it, or use the pause menu. Using it during a timed run makes that run unranked. Saved on this device only.', p('spawnClick') + ' + ' + p('spawnMod'), k('spawn')],
+    ['Wheelie. Both sticks up together from center, then balance with the left stick. Ground only.', 'Both sticks ↑', k('flipBack') + ' while rolling'],
+    ['Emotes, only in a room, stopped or on a lift. Hold to open the wheel.', 'Hold ' + p('emote'), 'Hold ' + k('emote')],
+    ['Teleport to prev / next spot', p('spotPrev') + ' / ' + p('spotNext'), k('spotPrev') + ' / ' + k('spotNext')],
+  ];
+  const table = document.querySelector('#help table');
+  if (table) table.innerHTML = '<tr><th></th><th>' + esc(GLYPHS[padFam].name) + '</th><th>Keyboard</th></tr>' + rows.map(r => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td><td>${esc(r[2])}</td></tr>`).join('');
+  const head = document.querySelector('#help h3');
+  if (head) head.innerHTML = `CONTROLS <small>(${k('help')}, or ${padLabel('Y')} in the pause menu, toggles · rebind in Settings → Controls)</small>`;
+  const foot = document.querySelector('#help p');
+  if (foot) foot.textContent = `Pump: compress into backsides, extend over faces to gain speed. Lean with the right stick (${k('leanLeft')} / ${k('leanRight')}) to carve. Land straight and not leaned past 30°. Respawn point is ${k('spawn')} or ${p('spawnClick')}+${p('spawnMod')}. Controller: press any button so Firefox detects it.`;
+}
+function menuKey(code){ if (bindCapture){ captureKey(code); return; } const it = menu.items[menu.sel];
   if (menu.page === 'boards' && ['LB','RB','KeyQ','KeyE'].includes(code)){ lbMove(['LB','KeyQ'].includes(code) ? -1 : 1, 1); return; }
   if (['DU','ArrowUp','KeyW'].includes(code)){ do { menu.sel = (menu.sel - 1 + menu.items.length) % menu.items.length; } while (menu.items[menu.sel].disabled && menu.items.some(i => !i.disabled) && false); renderMenu(); }
   else if (['DD','ArrowDown','KeyS'].includes(code)){ menu.sel = (menu.sel + 1) % menu.items.length; renderMenu(); }
@@ -1151,6 +1755,14 @@ function menuKey(code){ const it = menu.items[menu.sel];
   else if (['B','Escape','Backspace'].includes(code)) back();
   else if ((code === 'Start' || code === 'KeyP') && menu.page === 'pause') togglePause(); }
 function menuFrame(dt, inp){ // analog stick navigation with repeat
+  if (bindCapture){
+    if (bindCapture.phase === 'listen' && bindCapture.device === 'pad'){
+      const cap = bindCapture, lt = (inp.lt || 0) > 0.6, rt = (inp.rt || 0) > 0.6;
+      if (!lt && !rt) cap.trig = false;
+      else if (!cap.trig){ cap.trig = true; finishBind(lt ? 'LT' : 'RT'); }
+    }
+    return;
+  }
   const y = inp.lsy || 0; menu.repeatT -= dt;
   if (Math.abs(y) > 0.6 && menu.repeatT <= 0){ menuKey(y > 0 ? 'DD' : 'DU'); menu.repeatT = 0.22; } else if (Math.abs(y) < 0.3) menu.repeatT = 0;
   const x = inp.lsx || 0; if (Math.abs(x) > 0.7 && (menu.xT = (menu.xT || 0) - dt) <= 0){ menuKey(x > 0 ? 'DR' : 'DL'); menu.xT = 0.3; } else if (Math.abs(x) < 0.3) menu.xT = 0; }
@@ -1227,13 +1839,55 @@ function bar(v){ const p = Math.round(50 + (v-1)*250); return `<span class="sbar
 const hex = c => '#' + C(c).getHexString();
 function swatch(it, cat){ if (cat === 'paint' && it.id === 'stock') return hex(BIKE.color);
   if (it.mode === 2) return `linear-gradient(90deg,${hex(it.a)},${hex(it.b)})`; if (it.b !== undefined) return `linear-gradient(135deg,${hex(it.a)} 50%,${hex(it.b)} 50%)`; return hex(it.a); }
+// One small offscreen pass of the real bike mesh. Pictures are cached per bike and equipped paint.
+const thumbCache = new Map();
+let thumbRig = null;
+function thumbSetup(){
+  if (thumbRig) return thumbRig;
+  const scene = new THREE.Scene();
+  scene.add(new THREE.HemisphereLight(0xfff6ea, 0x3d4634, 1.15));
+  const key = new THREE.DirectionalLight(0xffe6c4, 2.4); key.position.set(3, 5, 2); scene.add(key);
+  const frameMat = new THREE.MeshStandardMaterial({color:0xffffff, roughness:0.4, metalness:0.3});
+  const rider = makeRider(frameMat);
+  const g = new THREE.Group(); g.add(rider.root); scene.add(g);
+  const cam = new THREE.PerspectiveCamera(30, 256/160, 0.08, 30);
+  cam.position.set(1.85, 1.05, -2.15); cam.lookAt(0, 0.72, 0.05);
+  const rt = new THREE.WebGLRenderTarget(256, 160);
+  thumbRig = { scene, g, rider, cam, rt };
+  return thumbRig;
+}
+function bikeLookKey(bike){ return bike.id + ':' + SKIN_CATS.map(c => equippedSkin(bike, c).id).join('/'); }
+function bikeThumb(bike){
+  const key = bikeLookKey(bike);
+  const hit = thumbCache.get(key); if (hit) return hit;
+  const R = thumbSetup();
+  R.g.scale.set(bike.scale[0], bike.scale[1], bike.scale[2]);
+  skinRider(R.rider, bike, c => equippedSkin(bike, c));
+  R.rider.update({air:false, crashT:0, susp:0.04, speed:0, tweak:0, wPitch:0, wYaw:0, jolt:0}, {cadence:0, standing:0, steer:0}, 0.05);
+  const prev = renderer.getRenderTarget();
+  const fill = new THREE.DirectionalLight(0xffffff, 1.4); fill.position.set(-3, 2, -2); if (!R.fill){ R.scene.add(fill); R.fill = fill; }
+  renderer.setRenderTarget(R.rt); renderer.setClearColor(0x243028, 1); renderer.clear();
+  renderer.render(R.scene, R.cam);
+  const w = 256, h = 160, buf = new Uint8Array(w * h * 4);
+  renderer.readRenderTargetPixels(R.rt, 0, 0, w, h, buf);
+  renderer.setRenderTarget(prev);
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const ctx = cv.getContext('2d'), img = ctx.createImageData(w, h);
+  const srgb = c => { const x = c / 255; const s = x <= 0.0031308 ? x * 12.92 : 1.055 * Math.pow(x, 1 / 2.4) - 0.055; return Math.max(0, Math.min(255, Math.round(s * 255))); };
+  for (let y = 0; y < h; y++){ const row = (h - 1 - y) * w * 4, dst = y * w * 4; for (let i = 0; i < w * 4; i += 4){ img.data[dst+i] = srgb(buf[row+i]); img.data[dst+i+1] = srgb(buf[row+i+1]); img.data[dst+i+2] = srgb(buf[row+i+2]); img.data[dst+i+3] = 255; } }
+  ctx.putImageData(img, 0, 0);
+  const url = cv.toDataURL('image/jpeg', 0.8);
+  thumbCache.set(key, url);
+  if (thumbCache.size > 24) thumbCache.delete(thumbCache.keys().next().value);
+  return url;
+}
 function renderShop(){
   $('shopBal').textContent = '$' + S.score.toLocaleString() + ' DOLLAHS';
   const t = SHOP_TABS[shopTab];
   $('shopTabs').innerHTML = SHOP_TABS.map((k,i) => `<span class="tab${i===shopTab?' on':''}">${TAB_LABEL[k]}</span>`).join('');
   if (t === 'bikes'){ applySkins();
     $('shopList').innerHTML = BIKES.map((b,i) => { const own = owned.has(b.id), eq = BIKE === b;
-    return `<div class="bike${i===shopSel?' sel':''}"><div class="sw" style="background:#${b.color.toString(16).padStart(6,'0')}"></div><div class="bn"><b>${b.name}</b><small>${b.desc}</small></div>
+    return `<div class="bike${i===shopSel?' sel':''}"><img class="bikeThumb" alt="${b.name}" src="${bikeThumb(b)}"><div class="bn"><b>${b.name}</b><small>${b.desc}</small></div>
       <div class="st">Speed ${bar(2-b.drag)} Grip ${bar(b.grip)}<br>Pop ${bar(b.pop)} Stability ${bar(b.stab)}</div>
       <div class="pr">${eq ? 'EQUIPPED' : own ? 'OWNED · equip' : b.price ? '$'+b.price.toLocaleString() : 'FREE'}</div></div>`; }).join(''); }
   else { const items = SKINS[t], cur = equippedSkin(BIKE, t); applySkins([t, items[shopSel]]);   // live 3D preview of the highlighted item
@@ -1328,7 +1982,7 @@ const SHOP_POS = {x:SHOP.x, z:SHOP.z, yaw:SHOP.yaw};   // placed in world.js >= 
     const bg = new THREE.BufferGeometry(); bg.setAttribute('position', new THREE.BufferAttribute(pos,3)); bg.setAttribute('normal', new THREE.BufferAttribute(nor,3));
     const mesh = new THREE.Mesh(bg, mat); mesh.castShadow = mesh.receiveShadow = !(mat.isMeshBasicMaterial); g.add(mesh); }
   const lamp = new THREE.PointLight(0xffb85c, 6, 14, 2); lamp.position.set(0, 3.0, -Dp/2-1.2); g.add(lamp);
-  g.position.set(SHOP_POS.x, y-0.15, SHOP_POS.z); g.rotation.y = SHOP_POS.yaw; scene.add(g); }
+  g.position.set(SHOP_POS.x, y, SHOP_POS.z); g.rotation.y = SHOP_POS.yaw; scene.add(g); }
 // ---------- connector paths (narrow gravel ribbons draped on the terrain) ----------
 { const v = [], idx = [], col = []; const c1 = new THREE.Color(0xb59a6e), c2 = new THREE.Color(0x9c845c);
   for (const c of connectors){ const P = c.pts, b0 = v.length/3;
@@ -1421,7 +2075,7 @@ function animateLifts(dt){ for (const o of liftObjs){ o.phase = (o.phase + dt*LI
 function liftProximity(dt){ S.liftCool = Math.max(0, (S.liftCool||0) - dt); if (S.lift || S.liftCool > 0 || S.air || S.crashT > 0) return;
   for (let i=0;i<LIFTS.length;i++){ const L = LIFTS[i]; if (Math.hypot(S.x-L.bx, S.z-L.bz) < 4.5){ startLift(i); return; } } }
 function startLift(i){ sfxLiftStart(); const L = LIFTS[i]; S.lift = {i, d:0}; S.run = null; S.speed = 0; S.vy = 0; S.air = false; S.crumbs = []; S.liftWas = S.yaw;
-  $('liftRide').style.display = 'block'; $('liftRide').textContent = `🚡 ${L.name} → ${L.serves.join(' · ')}   (A / Enter to skip)`; camInit = false; }
+  $('liftRide').style.display = 'block'; $('liftRide').textContent = `🚡 ${L.name} → ${L.serves.join(' · ')}   (${padLabel('A')} / Enter to skip)`; camInit = false; }
 function liftRide(dt, inp){ const o = liftObjs[S.lift.i], L = o.L;
   S.lift.d += dt*LIFT_SPEED*6;   // the ride itself is sped up so it takes ~10-25 s
   if (S.lift.d >= L.len){ endLift(); return; }
@@ -1434,11 +2088,16 @@ function shopProximity(dt){ S.shopCool = Math.max(0, (S.shopCool||0) - dt);
   const dx = S.x - (SHOP_POS.x - Math.sin(SHOP_POS.yaw)*8), dz = S.z - (SHOP_POS.z - Math.cos(SHOP_POS.yaw)*8);   // porch steps
   if (!shopOpen && S.shopCool <= 0 && !S.air && dx*dx + dz*dz < 9) openShop(); }
 S.score = LS.get('trailDescent.dollahs', 0); S.savedScore = S.score; applyBike(); S.best = LS.get('trailDescent.best.' + WORLD, {});
-function endParkLine(){ if (S.parkLine && CLOUD) CLOUD.park(S.parkLine.pts, Math.max(0.5, S.time - S.parkLine.t0)); S.parkLine = null; }
+function endParkLine(){ if (S.parkLine && CLOUD) CLOUD.park(S.parkLine.pts, Math.max(0.5, S.time - S.parkLine.t0), parkLayoutTag()); S.parkLine = null; }
 // ---------- multiplayer (net.js): private rooms, remote riders; stays solo if the server can't be reached ----------
 // ---------- cloud save + leaderboards (cloud.js) ----------
 let cloudShow = false, cloudDel = false; const LBV = {cat:0, trail:0, res:undefined, seq:0};
-function boardHtml(r, C){ const rows = r.top.map(e => `<tr class="${e.me ? 'me' : ''}"><td>${e.rank}</td><td>${CLOUD.nameOf(e.name)}${e.me ? ' (you)' : ''}</td><td>${C.fmt(e.v)}</td></tr>`).join('');
+// a board row's name: the custom name when it is valid and not hidden, else the generated one. Custom names (not your own)
+// get a report flag; one report per device per name.
+function nameCell(e){ const n = CLOUD ? CLOUD.label(e) : 'Rider', custom = !!(CLOUD && e.custom && n === e.custom);
+  const flag = custom && !e.me ? (CLOUD.reported(n) ? ' <span class="nameRep done" title="Reported">⚑</span>' : ` <button class="nameRep" data-name="${n}" title="Report this name">⚑</button>`) : '';
+  return n + (e.me ? ' (you)' : '') + flag; }
+function boardHtml(r, C){ const rows = r.top.map(e => `<tr class="${e.me ? 'me' : ''}"><td>${e.rank}</td><td>${nameCell(e)}</td><td>${C.fmt(e.v)}</td></tr>`).join('');
   const mine = r.me ? `<p class="lbMe">You: <b>#${r.me.rank}</b> of ${r.total} · ${C.fmt(r.me.v)}</p>` : `<p class="lbMe">${r.total ? r.total + ' riders ranked' : 'No times yet'} · you're not on this board yet</p>`;
   return `<table class="lbT">${rows || '<tr><td colspan=3>Be the first!</td></tr>'}</table>${mine}`; }
 async function lbLoad(){ const C = LB_CATS[LBV.cat], seq = ++LBV.seq; LBV.res = undefined; if (menu.open && menu.page === 'boards') renderMenu();
@@ -1450,6 +2109,39 @@ const lbPanel = document.createElement('div'); lbPanel.id = 'lbPanel'; document.
 function showFinishBoard(r){ if (!r || !r.top) return; const C = LB_CATS.find(c => c.id === (r.cat || 'time'));
   lbPanel.innerHTML = `<h4>🏁 ${r.label || ''} — LEADERBOARD</h4>` + boardHtml({...r, top:r.top.slice(0, 5)}, C) + (r.improved ? '<p class="lbMe">⭐ New personal best on the board!</p>' : '');
   lbPanel.classList.add('on'); clearTimeout(lbPanelT); lbPanelT = setTimeout(() => lbPanel.classList.remove('on'), 9000); }
+// ---- custom rider names (optional; the generated preset name stays the default and is what rooms show)
+const NAME_S = () => CLOUD && CLOUD.st.name;
+function genName(){ const n = mpName(); return `${NAME_A[n[0]]} ${NAME_B[n[1]]}`; }
+function nameRows(){ const N = NAME_S(), soon = !N || N.avail === false, wait = N && N.nextChange > Date.now() ? Math.ceil((N.nextChange - Date.now()) / 3600000) : 0;
+  const shown = N && N.custom && !N.hidden && !soon ? N.custom : genName();
+  const rows = [
+    {label:'Rider name', value:shown.toUpperCase(), sub:N && N.custom && N.hidden ? 'Your custom name is being checked. Boards show your generated name for now.' : N && N.custom ? 'Your custom name. Leaderboards show it. Rooms show your generated name.' : 'Your generated name. Leaderboards and rooms show it.', act:() => {}},
+    {label:'Generated name', value:genName().toUpperCase(), sub:'← → picks another. Rooms always use this one.', adj:d => { const n = mpName(), k = (n[0]*NAME_B.length + n[1] + d*7 + NAME_A.length*NAME_B.length) % (NAME_A.length*NAME_B.length); LS.set('trailDescent.mpName', [Math.floor(k/NAME_B.length), k % NAME_B.length]); }, act:() => { LS.set('trailDescent.mpName', [Math.floor(Math.random()*NAME_A.length), Math.floor(Math.random()*NAME_B.length)]); }},
+    {label:'Custom name', value:soon ? 'SOON' : N.custom ? N.custom.toUpperCase() : 'NONE', sub:soon ? NAME_S.soonText() : wait ? `${NAME_SAY.soon} (about ${wait} h)` : `Optional. 3-${NAME_MAX} letters and numbers. You can change it about once a day.`, act:() => { if (soon){ toast(NAME_S.soonText()); if (CLOUD) CLOUD.refreshName().then(() => menu.open && renderMenu()); } else askCustomName(); }}];
+  if (N && N.custom && !soon) rows.push({label:'Back to generated name', sub:'Stop using ' + N.custom + ' and show ' + genName() + ' again', act:() => CLOUD.clearName().then(r => { toast(r.ok ? 'Back to ' + genName() : r.say); if (menu.open) renderMenu(); })});
+  return rows; }
+NAME_S.soonText = () => NAME_SAY.offline;
+function askCustomName(){ const ov = document.createElement('div'); ov.id = 'mpAsk'; const N = NAME_S();
+  ov.innerHTML = `<div class="mpBox"><h3>CUSTOM RIDER NAME</h3><input id="mpName" maxlength="${NAME_MAX}" autocomplete="off" spellcheck="false" placeholder="${genName().replace(' ', '')}" style="width:340px;letter-spacing:2px;text-transform:none;font-size:30px"><p class="mpNote" id="mpNameSay">3-${NAME_MAX} letters and numbers. No spaces.</p><div><button id="mpGo">Use this name</button> <button id="mpNo">Cancel</button></div></div>`;
+  document.body.appendChild(ov); const inp = ov.querySelector('#mpName'), say = ov.querySelector('#mpNameSay'), goB = ov.querySelector('#mpGo'); inp.value = N && N.custom || ''; inp.focus();
+  let busy = false;
+  const live = () => { const c = checkName(inp.value); say.textContent = inp.value === '' ? `3-${NAME_MAX} letters and numbers. No spaces.` : c.ok ? '✓ Looks good' : c.say; say.className = 'mpNote' + (c.ok || inp.value === '' ? '' : ' bad'); goB.disabled = !c.ok || busy; return c; };
+  const close = () => { ov.remove(); if (menu.open) renderMenu(); };
+  const submit = async () => { const c = live(); if (!c.ok || busy) return; busy = true; goB.disabled = true; say.textContent = 'Checking…';
+    const r = await CLOUD.setName(c.name); busy = false;
+    if (r.ok){ toast('You are now ' + r.name + ' on the leaderboards'); close(); return; }
+    say.textContent = r.say; say.className = 'mpNote bad'; goB.disabled = false; };
+  // the field only keeps ASCII letters and digits (drops spaces, symbols, emoji, accents and invisible characters)
+  inp.addEventListener('input', () => { const v = inp.value.replace(/[^A-Za-z0-9]/g, '').slice(0, NAME_MAX); if (v !== inp.value) inp.value = v; live(); });
+  inp.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') submit(); if (e.key === 'Escape') close(); }); inp.addEventListener('keyup', e => e.stopPropagation());
+  goB.onclick = submit; ov.querySelector('#mpNo').onclick = close; live(); }
+async function reportName(name, btn){ if (!CLOUD) return;
+  const r = await CLOUD.reportName(name);
+  if (btn){ const sp = document.createElement('span'); sp.className = 'nameRep done'; sp.title = 'Reported'; sp.textContent = '⚑'; btn.replaceWith(sp); }
+  toast(r.ok ? (r.already ? 'You already reported ' + name : 'Thanks. ' + name + ' was reported.') : r.say); if (menu.open && menu.page === 'boards') renderMenu(); }
+document.addEventListener('click', e => { const b = e.target.closest && e.target.closest('button.nameRep'); if (b){ e.preventDefault(); e.stopPropagation(); reportName(b.dataset.name, b); } }, true);
+// names on the open board a pad / keyboard player can report from the menu
+function reportable(res){ return res && res.ok && Array.isArray(res.top) ? [...new Set(res.top.filter(e => !e.me && e.custom && CLOUD && CLOUD.label(e) === e.custom && !CLOUD.reported(e.custom)).map(e => e.custom))] : []; }
 function askSaveCode(){ const ov = document.createElement('div'); ov.id = 'mpAsk';
   ov.innerHTML = `<div class="mpBox"><h3>RESTORE SAVE</h3><input id="mpCode" maxlength="19" autocomplete="off" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX" style="width:420px;letter-spacing:3px;font-size:28px"><div><button id="mpGo">Restore</button> <button id="mpNo">Cancel</button></div></div>`;
   document.body.appendChild(ov); const inp = ov.querySelector('#mpCode'); inp.focus();
@@ -1473,15 +2165,29 @@ function askCode(){ const ov = document.createElement('div'); ov.id = 'mpAsk';
   inp.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') done(true); if (e.key === 'Escape') done(false); });
   inp.addEventListener('keyup', e => e.stopPropagation()); inp.addEventListener('input', () => { inp.value = cleanCode(inp.value); });
   ov.querySelector('#mpGo').onclick = () => done(true); ov.querySelector('#mpNo').onclick = () => done(false); }
-try { NET = initNet({THREE, scene, camera, S, bike, buildBikeRider, skinTo:skinRemote, mySkin, myName:mpName, worldIdx:() => RAMP ? 1 : 0, toast, trickKeys:Object.keys(BR.TRICK_OF), drive:() => DRV,
+try { NET = initNet({THREE, scene, camera, S, bike, buildBikeRider: makeRider, skinTo:skinRemote, mySkin, myName:mpName, worldIdx:() => RAMP ? 1 : 0, toast, trickKeys:Object.keys(BR.TRICK_OF), drive:() => DRV,
   onWorld:(w, code) => { LS.set('trailDescent.world', w ? 'rampage' : 'mountain'); toast(`Room is on ${w ? 'RAMPAGE' : 'THE MOUNTAIN'} — switching world…`); setTimeout(() => location.reload(), 900); } });
   NET.on(() => { if (menu.open && menu.page === 'multi') renderMenu(); }); window.__net = NET; } catch (e) { console.warn('multiplayer unavailable', e); NET = null; }
+let editorApi = null;
+editorApi = createEditor({
+  THREE, scene, toast, getS: () => S, placeAt, updateChunks,
+  lsGet: (k, d) => LS.get(k, d), lsSet: (k, v) => LS.set(k, v),
+  hit: hitBind, bindLabel: id => keyLabel(kbBind(id)), padLabel: code => padLabel(code),
+  saveCode: () => CLOUD ? CLOUD.st.code : null, nameCell: e => nameCell(e),
+  closeMenu, mainMenu: () => { S.paused = false; S.state = 'menu'; openMenu('main'); },
+  camera: () => camera, view: () => renderer.domElement.getBoundingClientRect(),
+});
 openMenu('main'); setTimeout(() => $('loading').classList.add('done'), 300);
 teleport(spotI, true);
-window.__features = features; window.__respawn = () => respawnSafe(); window.__game = S; window.__readInput = readInput; window.__groundH = groundH; window.__lift = i => startLift(i); window.__world = { LIFTS, connectors, trails, features, spots, PARK, SHOP, terrainH, featH, isDirt, nearTrails, base, inPark };
+window.__features = features; window.__respawn = () => respawnSafe(); window.__game = S; window.__readInput = readInput; window.__emoteFrame = emoteFrame;
+window.__drone = FPV.state; window.__droneToggle = toggleDrone; window.__droneFly = (dt, inp) => flyDrone(dt, inp || {steer:0, lyRaw:0, bankRaw:0, rsy:0}); window.__saveSettings = saveSettings; window.__settings = SETTINGS; window.__bail = () => crash('Bail!'); window.__ragdoll = rag; window.__ragdollReport = () => rag.on ? ragdollReport(rag, groundH) : null; window.__groundH = groundH; window.__lift = i => startLift(i); window.__world = { LIFTS, connectors, trails, features, spots, PARK, SHOP, terrainH, featH, isDirt, nearTrails, base, inPark, treesInCell, trailDist };
+window.__race = { open: raceOpen, mark: markCleared, cleared: () => cleared, submit: run => shouldSubmit(run, false) };
+window.__editor = editorApi;
+window.__setCam = m => { camMode = ((m % CAM_NAMES.length) + CAM_NAMES.length) % CAM_NAMES.length; camInit = false; camHead = S.travel ?? S.yaw; };
 window.__BR = BR; window.__teleport = i => teleport(i); window.__unlocked = unlocked; window.__isOpen = isOpen; window.__chunks = () => chunks.size; window.__renderer = renderer; window.__place = (x, z, yaw) => { placeAt(x, z, yaw); S.air = false; };
 window.__sim = (secs, inp) => { const h=1/120; const base={steer:0,pedal:0,brake:0,jump:false,tx:0,ty:0}; for(let t=0;t<secs;t+=h){ step(h, Object.assign({}, base, typeof inp==='function'?inp(t):inp)); trackWorld(h); } return {x:S.x, z:S.z, kmh:S.speed*3.6, air:S.air, lives:S.lives, clean:S.clean, score:S.score}; };
 if (SETTINGS.gfx && SETTINGS.gfx !== 'low') import('./gfx.js').then(m => { GFX = m.initGfx({level:SETTINGS.gfx, renderer, scene, camera, sun, SUN_DIR, skyDome, TEX, terrainMat, trunkMat, frameMat, RAMP, S, groundH, terrainH, getCam:() => camMode, toast, tod:SETTINGS.tod, coneG, trunkG, bushG, rockG, folMat, bushMat, rockMat, farU, farMesh:FARMESH, grassMesh:grassField.mesh, chunks, treesInCell, TCELL, HALF, LOAD_R, isDirt, featH, trailDist, groundColor,
     setGrass:(r, c) => { Q = {...Q, grassR:r, grassCell:c}; grassField.rebuild(true); }}); composer = null; window.__gfx = GFX; }).catch(e => { console.warn('graphics upgrade failed, using Low', e); });
 window.__gfxLevel = SETTINGS.gfx;
-frame();window.__shop = { open: openShop, key: shopKey, close: closeShop };
+renderHelp(); refreshPadHints();
+frame(); window.__frame = frame; window.__renderer = renderer; window.__shop = { open: openShop, key: shopKey, close: closeShop };

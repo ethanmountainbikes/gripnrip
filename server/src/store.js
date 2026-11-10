@@ -1,7 +1,13 @@
 // Cloud saves + leaderboards: one SQLite-backed Durable Object (free plan, strongly consistent, no extra API permission).
 // Privacy: save codes are never stored, only SHA-256(pepper + code). No IPs, emails or free text are stored; rate limits
-// are kept in memory only. Names are two indices into the client's preset word lists.
+// are kept in memory only. Names are two indices into the client's preset word lists, plus an optional custom rider name
+// (3-12 ASCII letters / digits, checked by the shared filter in names.js) that is unique, reportable and reviewable.
 import TRAILS from './trails.json';
+import { validateLevel, publicCodeOk, levelName, rateLevel, makeCode, ALPHA } from '../../level.js';
+import { checkName, nameKey } from '../../names.js';
+
+export const NAME_CHANGE_MS = 20 * 3600 * 1000;   // about once a day
+export const NAME_REPORTS_HIDE = 3;              // reports (one per device) before a name is hidden pending review
 
 const SAVE_CODE_RE = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{16}$/;
 const ID_RE = /^[a-z0-9:_-]{1,40}$/;
@@ -21,7 +27,7 @@ export const CATS = {
   park:   {per:'g',     asc:false, scale:1},      // dirt jump park best line score
 };
 const RUN_START = 18, RUN_END = 8;   // a run starts within 18 m of the top and finishes 8 m before the end (as in game.js)
-const SETTINGS_KEYS = { tod: ['morning','noon','golden'], quality: ['low','med','high'], invertY: 'b', invertX: 'b', volume: 'n', musicOn: 'b', musicVol: 'n' };
+const SETTINGS_KEYS = { tod: ['morning','noon','golden'], quality: ['low','med','high'], invertY: 'b', invertX: 'b', volume: 'n', musicVol: 'n', ambience: 'n', fpsCap: 'fps' };
 
 const json = (o, s = 200) => new Response(JSON.stringify(o), { status: s, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' } });
 async function sha(s) { const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)); return [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join(''); }
@@ -36,7 +42,11 @@ export function cleanSave(d) {
   const unl = (a, w) => Array.isArray(a) ? [...new Set(a.filter(x => names(w).has(x)))] : [];
   const best = (o, w) => { const r = {}; if (o && typeof o === 'object') for (const t of TRAILS[w]) { const v = o[t.name]; if (typeof v === 'number' && v > 0 && v < 36000) r[t.name] = Math.round(v * 1000) / 1000; } return r; };
   const skins = {}; if (d.skins && typeof d.skins === 'object') for (const [b, s] of Object.entries(d.skins).slice(0, 20)) if (ID_RE.test(b) && s && typeof s === 'object') { const o = {}; for (const [k, v] of Object.entries(s).slice(0, 8)) if (ID_RE.test(k) && typeof v === 'string' && ID_RE.test(v)) o[k] = v; skins[b] = o; }
-  const settings = {}; if (d.settings && typeof d.settings === 'object') for (const [k, t] of Object.entries(SETTINGS_KEYS)) { const v = d.settings[k]; if (Array.isArray(t) ? t.includes(v) : t === 'b' ? typeof v === 'boolean' : (typeof v === 'number' && v >= 0 && v <= 1)) settings[k] = v; }
+  const settings = {}; if (d.settings && typeof d.settings === 'object') {
+    for (const [k, t] of Object.entries(SETTINGS_KEYS)) { const v = d.settings[k]; const fpsOk = t === 'fps' && typeof v === 'number' && [0, 30, 60, 90, 120, 144, 165].includes(v); if (Array.isArray(t) ? t.includes(v) : t === 'b' ? typeof v === 'boolean' : fpsOk || (t === 'n' && typeof v === 'number' && v >= 0 && v <= 1)) settings[k] = v; }
+    const span = (k, lo, hi) => { const v = d.settings[k]; if (typeof v === 'number' && v >= lo && v <= hi) settings[k] = v; };
+    span('droneSpeed', 6, 24); span('droneTilt', 0, 35); span('droneDist', 4, 18); span('droneHeight', 2, 12);
+    if (d.settings.droneFly === 'manual' || d.settings.droneFly === 'follow') settings.droneFly = d.settings.droneFly; }
   return {
     v: 1, updated: int(d.updated, 0, 9e15) ? d.updated : 0,
     dollahs: int(d.dollahs, 0, 1e9) ? d.dollahs : 0,
@@ -46,7 +56,7 @@ export function cleanSave(d) {
     best: { mountain: best(d.best?.mountain, 'mountain'), rampage: best(d.best?.rampage, 'rampage') },
     name: Array.isArray(d.name) && int(d.name[0], 0, 31) && int(d.name[1], 0, 31) ? d.name : [0, 0],
     earned: int(d.earned, 0, 1e9) ? d.earned : 0,
-    pb: (() => { const r = {}; if (d.pb && typeof d.pb === 'object') for (const [k, v] of Object.entries(d.pb).slice(0, 200)) if (/^[a-z]{2,8}(:[01]:\d{1,2})?$/.test(k) && typeof v === 'number' && Number.isFinite(v) && v >= 0 && v < 1e9) r[k] = v; return r; })(),
+    pb: (() => { const r = {}; if (d.pb && typeof d.pb === 'object') for (const [k, v] of Object.entries(d.pb).slice(0, 200)) if (/^[a-z]{2,8}(:[01]:\d{1,2}(:[0-9a-z]{4,8})?)?$/.test(k) && typeof v === 'number' && Number.isFinite(v) && v >= 0 && v < 1e9) r[k] = v; return r; })(),
   };
 }
 export function mergeSave(a, b) {   // a, b already cleaned
@@ -65,7 +75,17 @@ export class Store {
   constructor(state, env) { this.state = state; this.env = env; this.sql = state.storage.sql; this.rl = new Map();
     this.sql.exec(`CREATE TABLE IF NOT EXISTS saves (h TEXT PRIMARY KEY, data TEXT NOT NULL, updated INTEGER NOT NULL)`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS stats (c TEXT, w INTEGER, t INTEGER, h TEXT, na INTEGER, nb INTEGER, v INTEGER, at INTEGER, PRIMARY KEY (c, w, t, h))`);
-    this.sql.exec(`CREATE INDEX IF NOT EXISTS stats_rank ON stats (c, w, t, v)`); }
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS stats_rank ON stats (c, w, t, v)`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS levels (code TEXT PRIMARY KEY, id TEXT, ver INTEGER, na INTEGER, nb INTEGER, nc INTEGER, diff TEXT, style TEXT, likes INTEGER, reports INTEGER, hidden INTEGER, data TEXT, created INTEGER, updated INTEGER)`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS level_likes (code TEXT, h TEXT, PRIMARY KEY (code, h))`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS level_reports (code TEXT, h TEXT, PRIMARY KEY (code, h))`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS level_times (code TEXT, ver INTEGER, h TEXT, ms INTEGER, at INTEGER, PRIMARY KEY (code, ver, h))`);
+    // Custom rider names, keyed to the save (player). name / lower are NULL after "back to generated name"; the row keeps
+    // the last change time for the once-a-day limit. lower is unique, so names are unique ignoring case.
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS names (h TEXT PRIMARY KEY, name TEXT, lower TEXT UNIQUE, reports INTEGER NOT NULL DEFAULT 0, hidden INTEGER NOT NULL DEFAULT 0, changed INTEGER NOT NULL DEFAULT 0)`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS name_reports (lower TEXT, dev TEXT, at INTEGER, PRIMARY KEY (lower, dev))`);
+    // Level times can carry the racer's save so level boards show names. Older rows have none.
+    try { this.sql.exec(`ALTER TABLE level_times ADD COLUMN sh TEXT`); } catch {} }
   // upsert a stat if it beats the stored one (lower for asc categories)
   put(c, w, t, h, name, v) { const C = CATS[c], prev = this.sql.exec('SELECT v FROM stats WHERE c = ? AND w = ? AND t = ? AND h = ?', c, w, t, h).toArray()[0];
     const better = !prev || (C.asc ? v < prev.v : v > prev.v);
@@ -76,7 +96,8 @@ export class Store {
   async fetch(req) {
     const url = new URL(req.url), ip = req.headers.get('CF-Connecting-IP') || 'x';
     if (!this.limit('ip:' + ip, 120)) return json({ error: 'slow down' }, 429);
-    let body; try { const t = await req.text(); if (t.length > 16000) return json({ error: 'too big' }, 413); body = JSON.parse(t || '{}'); } catch { return json({ error: 'bad json' }, 400); }
+    const cap = url.pathname.startsWith('/level') ? 70000 : 16000;
+    let body; try { const t = await req.text(); if (t.length > cap) return json({ error: 'too big' }, 413); body = JSON.parse(t || '{}'); } catch { return json({ error: 'bad json' }, 400); }
     const code = typeof body.code === 'string' ? body.code.toUpperCase().replace(/[^A-Z0-9]/g, '') : '';
     const h = SAVE_CODE_RE.test(code) ? await sha((this.env.PEPPER || 'gnr') + ':' + code) : null;
     const row = h ? this.sql.exec('SELECT data FROM saves WHERE h = ?', h).toArray()[0] : null;
@@ -103,7 +124,7 @@ export class Store {
         return json({ ok: true }); }
       case '/save/delete': {   // "delete my cloud data": the save and every leaderboard entry made with it
         if (!h) return json({ error: 'badcode' }, 400);
-        this.sql.exec('DELETE FROM saves WHERE h = ?', h); this.sql.exec('DELETE FROM stats WHERE h = ?', h);
+        this.sql.exec('DELETE FROM saves WHERE h = ?', h); this.sql.exec('DELETE FROM stats WHERE h = ?', h); this.sql.exec('DELETE FROM names WHERE h = ?', h);
         return json({ ok: true }); }
       case '/save/get': {
         if (!h) return json({ error: 'badcode' }, 400);
@@ -122,6 +143,10 @@ export class Store {
         const marks = [RUN_START, ...tr.cps, tr.len - RUN_END], times = [0, ...cps, time];
         for (let i = 1; i < marks.length; i++) { const dt = times[i] - times[i - 1], need = Math.max(0, marks[i] - marks[i - 1]) / MAX_SPEED;
           if (!(dt > 0) || dt + 0.05 < need) return json({ error: 'implausible time', rejected: true, split: i, min: +need.toFixed(2) }, 422); }
+        // NOT DEPLOYED. The live worker ignores body.layout and stores t as the trail index, so old times stay on that board.
+        // To reset a changed trail: when body.layout matches /^[0-9a-z]{4,8}$/, store and read
+        // t = trailIndex + 64 * ((layoutHash % 40) + 1), and raise int(body.trail, 0, 63) in /lb/get to that range.
+        // Plain trail indexes keep the old rows. The client already sends layout and versions the local PB key.
         const name = cleanSave(JSON.parse(row.data)).name, improved = this.put('time', w, body.trail, h, name, Math.round(time * 1000));
         let comboImproved = false; if (int(body.combo, 1, 1e7) && body.combo <= time * PTS_PER_S + 500) comboImproved = this.put('combo', w, body.trail, h, name, body.combo);
         return json({ ok: true, improved, comboImproved, ...this.board('time', w, body.trail, h) }); }
@@ -146,12 +171,167 @@ export class Store {
         const c = CATS[body.cat] ? body.cat : 'time', C = CATS[c], w = C.per === 'g' ? 2 : body.world === 1 ? 1 : 0, t = C.per === 'trail' && int(body.trail, 0, 63) ? body.trail : 0;
         if (!this.limit('lbget:' + ip, 90)) return json({ error: 'slow down' }, 429);
         return json({ ok: true, cat: c, ...this.board(c, w, t, h) }); }
+      case '/name/get': return this.nameGet(h);
+      case '/name/set': return this.nameSet(h, body, ip);
+      case '/name/clear': return this.nameClear(h);
+      case '/name/report': return this.nameReport(body, ip);
+      case '/admin/names': return this.nameAdmin(body);
+      case '/level/publish': return this.publish(body, ip);
+      case '/level/get': return this.levelGet(body);
+      case '/level/list': return this.levelList(body);
+      case '/level/search': return this.levelSearch(body);
+      case '/level/like': return this.levelLike(body);
+      case '/level/report': return this.levelReport(body);
+      case '/level/time': {   // body.code is the level; the racer's save code (optional) goes in body.savecode to name the row
+        const sc = typeof body.savecode === 'string' ? body.savecode.toUpperCase().replace(/[^A-Z0-9]/g, '') : '';
+        return this.levelTime(body, SAVE_CODE_RE.test(sc) ? await sha((this.env.PEPPER || 'gnr') + ':' + sc) : null); }
     }
     return json({ error: 'not found' }, 404);
   }
+  deviceHash(device){ return typeof device === 'string' && [...device].every(c => ALPHA.includes(c)) && device.length === 16 ? sha((this.env.PEPPER || 'gnr') + ':dev:' + device) : Promise.resolve(null); }
+  card(r){ return { code: r.code, id: r.id, version: r.ver, name: [r.na, r.nb, r.nc], title: levelName([r.na, r.nb, r.nc]), diff: r.diff, style: r.style, likes: r.likes, reports: r.reports }; }
+  async publish(body, ip){
+    if (!this.limit('lvpub:' + ip, 10)) return json({ error: 'slow down' }, 429);
+    const check = validateLevel(body.level);
+    if (!check.ok) return json({ error: 'invalid', reasons: check.errors }, 422);
+    const lv = body.level, rated = rateLevel(lv);
+    let code = typeof body.code === 'string' ? body.code.toUpperCase() : '';
+    const row = publicCodeOk(code) ? this.sql.exec('SELECT id, ver FROM levels WHERE code = ?', code).toArray()[0] : null;
+    const ver = row ? row.ver + 1 : 1;
+    const id = row ? row.id : (typeof lv.id === 'string' && lv.id.length >= 6 && lv.id.length <= 16 ? lv.id : makeCode());
+    if (!row){ code = makeCode(); for (let n = 0; n < 8 && this.sql.exec('SELECT code FROM levels WHERE code = ?', code).toArray()[0]; n++) code = makeCode(); }
+    const data = JSON.stringify({ ...lv, version: ver, id });
+    if (data.length > 60000) return json({ error: 'too big' }, 413);
+    const now = Date.now();
+    if (row) this.sql.exec('UPDATE levels SET ver = ?, na = ?, nb = ?, nc = ?, diff = ?, style = ?, data = ?, updated = ?, hidden = 0 WHERE code = ?', ver, lv.name[0], lv.name[1], lv.name[2], rated.diff, rated.style, data, now, code);
+    else this.sql.exec('INSERT INTO levels (code, id, ver, na, nb, nc, diff, style, likes, reports, hidden, data, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?)', code, id, ver, lv.name[0], lv.name[1], lv.name[2], rated.diff, rated.style, data, now, now);
+    return json({ ok: true, code, id, version: ver, title: levelName(lv.name), ...rated });
+  }
+  levelGet(body){
+    const code = typeof body.code === 'string' ? body.code.toUpperCase() : '';
+    if (!publicCodeOk(code)) return json({ error: 'badcode' }, 400);
+    const r = this.sql.exec('SELECT * FROM levels WHERE code = ?', code).toArray()[0];
+    if (!r || r.hidden) return json({ error: r && r.hidden ? 'hidden' : 'missing' }, r && r.hidden ? 403 : 404);
+    return json({ ok: true, ...this.card(r), level: JSON.parse(r.data) });
+  }
+  levelList(body){
+    const liked = body.sort === 'liked';
+    const rows = this.sql.exec(`SELECT * FROM levels WHERE hidden = 0 ORDER BY ${liked ? 'likes DESC, created DESC' : 'created DESC'} LIMIT 20`).toArray();
+    return json({ ok: true, levels: rows.map(r => this.card(r)) });
+  }
+  levelSearch(body){
+    const rows = this.sql.exec('SELECT * FROM levels WHERE hidden = 0 ORDER BY created DESC LIMIT 200').toArray();
+    const words = Array.isArray(body.words) ? body.words.filter(n => Number.isInteger(n)) : [];
+    const out = rows.filter(r => {
+      if (body.diff && body.diff !== 'any' && r.diff !== body.diff) return false;
+      if (body.style && body.style !== 'any' && r.style !== body.style) return false;
+      if (words.length && !words.some(w => w === r.na || w === r.nb || w === r.nc)) return false;
+      return true;
+    }).slice(0, 20);
+    return json({ ok: true, levels: out.map(r => this.card(r)) });
+  }
+  async levelLike(body){
+    const code = typeof body.code === 'string' ? body.code.toUpperCase() : '';
+    const h = await this.deviceHash(body.device);
+    if (!publicCodeOk(code) || !h) return json({ error: 'bad' }, 400);
+    const row = this.sql.exec('SELECT hidden FROM levels WHERE code = ?', code).toArray()[0];
+    if (!row || row.hidden) return json({ error: 'missing' }, 404);
+    const had = this.sql.exec('SELECT h FROM level_likes WHERE code = ? AND h = ?', code, h).toArray()[0];
+    if (!had){ this.sql.exec('INSERT INTO level_likes (code, h) VALUES (?, ?)', code, h); this.sql.exec('UPDATE levels SET likes = likes + 1 WHERE code = ?', code); }
+    const likes = this.sql.exec('SELECT likes FROM levels WHERE code = ?', code).toArray()[0].likes;
+    return json({ ok: true, likes, already: !!had });
+  }
+  async levelReport(body){
+    const code = typeof body.code === 'string' ? body.code.toUpperCase() : '';
+    const h = await this.deviceHash(body.device);
+    if (!publicCodeOk(code) || !h) return json({ error: 'bad' }, 400);
+    const row = this.sql.exec('SELECT hidden, reports FROM levels WHERE code = ?', code).toArray()[0];
+    if (!row) return json({ error: 'missing' }, 404);
+    const had = this.sql.exec('SELECT h FROM level_reports WHERE code = ? AND h = ?', code, h).toArray()[0];
+    let reports = row.reports, hidden = row.hidden;
+    if (!had && !hidden){
+      this.sql.exec('INSERT INTO level_reports (code, h) VALUES (?, ?)', code, h);
+      reports += 1; hidden = reports >= 3 ? 1 : 0;
+      this.sql.exec('UPDATE levels SET reports = ?, hidden = ? WHERE code = ?', reports, hidden, code);
+    }
+    return json({ ok: true, reports, hidden: !!hidden });
+  }
+  async levelTime(body, sh){
+    const code = typeof body.code === 'string' ? body.code.toUpperCase() : '';
+    const h = await this.deviceHash(body.device);
+    if (!publicCodeOk(code) || !h) return json({ error: 'bad' }, 400);
+    const row = this.sql.exec('SELECT ver, hidden, data FROM levels WHERE code = ?', code).toArray()[0];
+    if (!row || row.hidden) return json({ error: 'missing' }, 404);
+    if (body.version !== row.ver) return json({ error: 'old version', version: row.ver }, 409);
+    const time = body.time;
+    if (typeof time !== 'number' || !(time > 1 && time < 3600)) return json({ error: 'bad time' }, 400);
+    const ms = Math.round(time * 1000);
+    const prev = this.sql.exec('SELECT ms FROM level_times WHERE code = ? AND ver = ? AND h = ?', code, row.ver, h).toArray()[0];
+    const better = !prev || ms < prev.ms;
+    const own = sh && this.sql.exec('SELECT h FROM saves WHERE h = ?', sh).toArray()[0] ? sh : null;   // only a real save names the row
+    if (better) this.sql.exec('INSERT INTO level_times (code, ver, h, ms, at, sh) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(code, ver, h) DO UPDATE SET ms = excluded.ms, at = excluded.at, sh = COALESCE(excluded.sh, level_times.sh)', code, row.ver, h, ms, Date.now(), own);
+    else if (own) this.sql.exec('UPDATE level_times SET sh = ? WHERE code = ? AND ver = ? AND h = ?', own, code, row.ver, h);
+    const top = this.sql.exec('SELECT t.h AS h, t.ms AS ms, t.sh AS sh, s.data AS data, n.name AS cn, n.hidden AS hid FROM level_times t LEFT JOIN saves s ON s.h = t.sh LEFT JOIN names n ON n.h = t.sh WHERE t.code = ? AND t.ver = ? ORDER BY t.ms ASC LIMIT 20', code, row.ver).toArray()
+      .map((r, i) => { const e = { rank: i + 1, v: r.ms / 1000, me: r.h === h };
+        if (r.data) { try { e.name = cleanSave(JSON.parse(r.data)).name; } catch {} }
+        if (r.cn && !r.hid) e.custom = r.cn;
+        return e; });
+    return json({ ok: true, improved: better, version: row.ver, top });
+  }
+  // ---- custom rider names
+  nameRow(h){ return h ? this.sql.exec('SELECT * FROM names WHERE h = ?', h).toArray()[0] || null : null; }
+  nameState(r){ const now = Date.now(), next = r && r.changed ? r.changed + NAME_CHANGE_MS : 0;
+    return { ok: true, name: r && r.name || null, hidden: !!(r && r.hidden), nextChange: next > now ? next : 0 }; }
+  nameGet(h){ if (!h) return json({ error: 'badcode' }, 400); return json(this.nameState(this.nameRow(h))); }
+  nameSet(h, body, ip){
+    if (!h || !this.sql.exec('SELECT h FROM saves WHERE h = ?', h).toArray()[0]) return json({ error: 'nosave' }, 400);
+    if (!this.limit('name:' + ip, 10)) return json({ error: 'slow down' }, 429);
+    const chk = checkName(body.name);
+    if (!chk.ok) return json({ error: chk.reason }, 422);
+    const lower = nameKey(chk.name), r = this.nameRow(h), now = Date.now();
+    if (r && r.name === chk.name) return json(this.nameState(r));
+    if (r && r.changed && now - r.changed < NAME_CHANGE_MS) return json({ error: 'soon', nextChange: r.changed + NAME_CHANGE_MS }, 429);
+    const other = this.sql.exec('SELECT h FROM names WHERE lower = ?', lower).toArray()[0];
+    if (other && other.h !== h) return json({ error: 'taken' }, 409);
+    // a new name starts with no reports; reports against the old spelling stay with that spelling
+    this.sql.exec('INSERT INTO names (h, name, lower, reports, hidden, changed) VALUES (?, ?, ?, 0, 0, ?) ON CONFLICT(h) DO UPDATE SET name = excluded.name, lower = excluded.lower, reports = (SELECT COUNT(*) FROM name_reports WHERE lower = excluded.lower), hidden = 0, changed = excluded.changed', h, chk.name, lower, now);
+    const hiddenAlready = this.sql.exec('SELECT reports FROM names WHERE h = ?', h).toArray()[0].reports >= NAME_REPORTS_HIDE;
+    if (hiddenAlready) this.sql.exec('UPDATE names SET hidden = 1 WHERE h = ?', h);
+    return json(this.nameState(this.nameRow(h)));
+  }
+  nameClear(h){   // back to the generated name: releases the claim, keeps the change time
+    if (!h) return json({ error: 'badcode' }, 400);
+    this.sql.exec('UPDATE names SET name = NULL, lower = NULL, reports = 0, hidden = 0 WHERE h = ?', h);
+    return json(this.nameState(this.nameRow(h)));
+  }
+  async nameReport(body, ip){
+    const dev = await this.deviceHash(body.device), chk = checkName(body.name);
+    if (!dev || typeof body.name !== 'string' || !/^[A-Za-z0-9]{3,12}$/.test(body.name)) return json({ error: 'bad' }, 400);
+    if (!this.limit('nrep:' + ip, 20)) return json({ error: 'slow down' }, 429);
+    const lower = nameKey(body.name), r = this.sql.exec('SELECT h, reports, hidden FROM names WHERE lower = ?', lower).toArray()[0];
+    if (!r) return json({ error: 'missing' }, 404);
+    const had = this.sql.exec('SELECT dev FROM name_reports WHERE lower = ? AND dev = ?', lower, dev).toArray()[0];
+    if (!had) this.sql.exec('INSERT INTO name_reports (lower, dev, at) VALUES (?, ?, ?)', lower, dev, Date.now());
+    const reports = this.sql.exec('SELECT COUNT(*) AS n FROM name_reports WHERE lower = ?', lower).toArray()[0].n;
+    const hidden = r.hidden || reports >= NAME_REPORTS_HIDE || !chk.ok ? 1 : 0;   // a name the current filter refuses hides at once
+    this.sql.exec('UPDATE names SET reports = ?, hidden = ? WHERE h = ?', reports, hidden, r.h);
+    return json({ ok: true, already: !!had, hidden: !!hidden });
+  }
+  // Reviewer: needs the ADMIN secret (wrangler secret put ADMIN). list = hidden or reported names; clear = keep the name and
+  // drop its reports; remove = take the name away (the player is back on the generated name).
+  nameAdmin(body){
+    if (!this.env.ADMIN || typeof body.key !== 'string' || body.key !== this.env.ADMIN) return json({ error: 'not found' }, 404);
+    const lower = typeof body.name === 'string' ? nameKey(body.name) : '';
+    if (body.action === 'list') return json({ ok: true, names: this.sql.exec('SELECT name, reports, hidden, changed FROM names WHERE name IS NOT NULL AND (hidden = 1 OR reports > 0) ORDER BY hidden DESC, reports DESC LIMIT 200').toArray() });
+    if (!lower) return json({ error: 'name needed' }, 400);
+    if (body.action === 'clear') { this.sql.exec('DELETE FROM name_reports WHERE lower = ?', lower); this.sql.exec('UPDATE names SET reports = 0, hidden = 0 WHERE lower = ?', lower); return json({ ok: true }); }
+    if (body.action === 'remove') { this.sql.exec('DELETE FROM name_reports WHERE lower = ?', lower); this.sql.exec('UPDATE names SET name = NULL, lower = NULL, reports = 0, hidden = 0 WHERE lower = ?', lower); return json({ ok: true }); }
+    return json({ error: 'unknown action' }, 400);
+  }
   board(c, w, t, h) {
     const C = CATS[c], ord = C.asc ? 'ASC' : 'DESC', cmp = C.asc ? '<' : '>';
-    const top = this.sql.exec(`SELECT h, na, nb, v FROM stats WHERE c = ? AND w = ? AND t = ? ORDER BY v ${ord}, at ASC LIMIT 20`, c, w, t).toArray().map((r, i) => ({ rank: i + 1, name: [r.na, r.nb], v: r.v / C.scale, me: r.h === h }));
+    const top = this.sql.exec(`SELECT s.h AS h, s.na AS na, s.nb AS nb, s.v AS v, n.name AS cn, n.hidden AS hid FROM stats s LEFT JOIN names n ON n.h = s.h WHERE s.c = ? AND s.w = ? AND s.t = ? ORDER BY s.v ${ord}, s.at ASC LIMIT 20`, c, w, t).toArray()
+      .map((r, i) => ({ rank: i + 1, name: [r.na, r.nb], ...(r.cn && !r.hid ? { custom: r.cn } : {}), v: r.v / C.scale, me: r.h === h }));
     const total = this.sql.exec('SELECT COUNT(*) AS n FROM stats WHERE c = ? AND w = ? AND t = ?', c, w, t).toArray()[0].n;
     let me = null; if (h) { const r = this.sql.exec('SELECT v FROM stats WHERE c = ? AND w = ? AND t = ? AND h = ?', c, w, t, h).toArray()[0];
       if (r) me = { v: r.v / C.scale, rank: this.sql.exec(`SELECT COUNT(*) AS n FROM stats WHERE c = ? AND w = ? AND t = ? AND v ${cmp} ?`, c, w, t, r.v).toArray()[0].n + 1 }; }
