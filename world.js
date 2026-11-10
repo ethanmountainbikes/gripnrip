@@ -224,7 +224,7 @@ for (const tr of trails){
       const [x,z] = tr.pts[i], yaw = tr.yaw[i+2], A = (kind, hw, pr) => { const f = addFeature(kind, x, z, yaw, hw, S_(kind, pr), tr.id); f.k = k; f.g = JUMPY.has(kind) ? g : 1; return f; };
       let f;
       const sz = {green:0.7, blue:0.9, black:1.1, dblack:1.3}[tr.diff];   // feature size by difficulty
-      const hip = (H) => { const ang = 0.38 + (k%3)*0.09; const f = addFeature('kicker', x, z, yaw + (k%2 ? ang : -ang), KW, S_('kicker', PROF.kicker(H, KL)), tr.id); f.k = k; f.g = g; f.hip = ang; return f; };
+      const hip = (H) => { const ang = 0.05 + (k % 3) * 0.025; const f = addFeature('kicker', x, z, yaw + (k % 2 ? ang : -ang), KW, S_('kicker', PROF.kicker(H, KL)), tr.id); f.k = k; f.g = g; f.hip = ang; return f; };
       const bigTable = () => A('table', 2.8, PROF.table(1.5*sz, 5.5, 8, 7));
       switch (tr.kind){
         case 'dh':       f = [() => A('kicker', KW, PROF.kicker(KH, KL)), () => hip(1.5*sz), () => bigTable(), () => A('rocks', 2.6, PROF.rocks(0.28, 10, 5)), () => A('drop', 1.8, PROF.drop(1.2*sz, 5, 2.5)),
@@ -489,6 +489,26 @@ for (const f of features){
   featRetarget(f);
   landingFixes.push(f);
 }
+// Hips and long landings were aimed off the tread. Point every trail jump down the trail and cut it where the centreline leaves the corridor.
+function seatJumps(){
+  const angLim = 10 * Math.PI / 180, wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
+  for (const f of features){
+    if (!(f.trail >= 0) || f.mega || !LAND_KIND.has(f.kind)) continue;
+    const tr = trails[f.trail]; if (!tr) continue;
+    const near = (x, z) => { let bi = 0, bd = 1e9; for (let i = 0; i < tr.pts.length; i++){ const d = (tr.pts[i][0] - x) ** 2 + (tr.pts[i][1] - z) ** 2; if (d < bd){ bd = d; bi = i; } } return { d: Math.sqrt(bd), yaw: tr.yaw[bi] }; };
+    const o = near(f.x, f.z);
+    f.yaw = o.yaw; f.dx = -Math.sin(o.yaw); f.dz = -Math.cos(o.yaw); f.hip = 0;
+    let keep = 0;
+    for (let t = 0; t <= f.L + 1e-6; t += 0.5){
+      const n = near(f.x + f.dx * t, f.z + f.dz * t);
+      if (n.d > W + 0.15 || Math.abs(wrap(Math.atan2(-f.dx, -f.dz) - n.yaw)) > angLim * 0.92) break;
+      keep = t;
+    }
+    if (keep >= 3 && keep < f.L - 0.25) f.L = keep;
+    featRetarget(f);
+  }
+}
+seatJumps();
 for (const f of features) put(featGrid, f.minx, f.maxx, f.minz, f.maxz, f);
 
 // nearest point on each trail within reach: returns [{t, s, d, h}] (t = trail id, s = distance along, d = lateral distance, h = path height)
@@ -720,6 +740,87 @@ function exploreLine(wps, half){
   });
   const road = RAMP ? [[0, 385], [150, 330], [250, 200], [80, 80], [-40, 200]] : [valley, J, [PARK.x, PARK.z + PARK.r + 40], L_(1), L_(6)];
   exploreLine(road, 3.4);
+}
+// Side trails, fire roads and connectors stay out of the jump park, the pump track and feature footprints.
+// A path that has to meet another path or a named trail does it along that line, not as an X of two ribbons.
+export let pathsRerouted = 0;
+function pathForbidden(x, z){
+  if (!RAMP && Math.hypot(x - PARK.x, z - PARK.z) < PARK.r + 4) return 'park';
+  if (PARK.pump){ const dx = x - PARK.pump.x, dz = z - PARK.pump.z, along = dx * PARK.dir[0] + dz * PARK.dir[1], lat = dx * -PARK.dir[1] + dz * PARK.dir[0];
+    if ((along / 36) ** 2 + (lat / 18) ** 2 < 1) return 'pump'; }
+  for (const f of features){ if (f.kind === 'berm' || f.rollin) continue;
+    const t = (x - f.x) * f.dx + (z - f.z) * f.dz, u = Math.abs((x - f.x) * f.dz - (z - f.z) * f.dx);
+    if (t > 0.5 && t < (f.L || 0) - 0.5 && u < (f.hw || 2) + 1.2) return 'feat'; }
+  return '';
+}
+function pathEntry(x, z){
+  if (!PARK.lines) return false;
+  for (const ln of PARK.lines){ if (!ln.rampFoot) continue;
+    const dx = x - ln.rampFoot.x, dz = z - ln.rampFoot.z, back = -(dx * PARK.dir[0] + dz * PARK.dir[1]), lat = Math.abs(dx * -PARK.dir[1] + dz * PARK.dir[0]);
+    if (back > -6 && back < 26 && lat < 7) return true; }
+  return false;
+}
+function pushClear(x, z){
+  if (pathEntry(x, z)) return [x, z];
+  let px = x, pz = z;
+  if (!RAMP && Math.hypot(px - PARK.x, pz - PARK.z) < PARK.r + 6){
+    const a = Math.atan2(pz - PARK.z, px - PARK.x);
+    px = PARK.x + Math.cos(a) * (PARK.r + 14); pz = PARK.z + Math.sin(a) * (PARK.r + 14);
+  }
+  for (let it = 0; it < 3 && pathForbidden(px, pz); it++){
+    let best = null, bd = 1e9;
+    for (const f of features){ if (f.kind === 'berm' || f.rollin) continue;
+      const t = (px - f.x) * f.dx + (pz - f.z) * f.dz; if (t < -2 || t > (f.L || 0) + 2) continue;
+      const lat = (px - f.x) * f.dz - (pz - f.z) * f.dx, d = Math.abs(lat);
+      if (d < bd){ bd = d; best = { f, lat }; } }
+    if (!best) break;
+    const sign = best.lat >= 0 ? 1 : -1, off = (best.f.hw || 2) + 6;
+    px += best.f.dz * sign * (off - best.lat * sign); pz -= best.f.dx * sign * (off - best.lat * sign);
+  }
+  return [px, pz];
+}
+{ const changed = new Set();
+  const mark = (c, i, x, z) => { const p = c.pts[i]; if (Math.hypot(x - p[0], z - p[1]) > 0.4){ c.pts[i] = [x, z]; changed.add(c); } };
+  for (const c of connectors){
+    const n = c.pts.length;
+    for (let i = 0; i < n; i++){
+      const p = c.pts[i]; if (pathEntry(p[0], p[1])) continue;
+      if (!pathForbidden(p[0], p[1])) continue;
+      const q = pushClear(p[0], p[1]); mark(c, i, q[0], q[1]);
+    }
+    if (changed.has(c)) for (let it = 0; it < 2; it++) for (let i = 2; i < n - 2; i++){
+      const a = c.pts[i - 1], b = c.pts[i], e = c.pts[i + 1];
+      let x = (a[0] + 2 * b[0] + e[0]) / 4, z = (a[1] + 2 * b[1] + e[1]) / 4;
+      if (pathForbidden(x, z) && !pathEntry(x, z)){ const q = pushClear(x, z); x = q[0]; z = q[1]; }
+      c.pts[i] = [x, z];
+    }
+  }
+  // A path that cuts another path in the middle steps aside so the ribbons do not pile up at an angle.
+  const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
+  const segCross = (a, b, c0, d0) => {
+    const r = [b[0] - a[0], b[1] - a[1]], s = [d0[0] - c0[0], d0[1] - c0[1]];
+    const den = r[0] * s[1] - r[1] * s[0]; if (Math.abs(den) < 1e-6) return null;
+    const q = [c0[0] - a[0], c0[1] - a[1]], t = (q[0] * s[1] - q[1] * s[0]) / den, u = (q[0] * r[1] - q[1] * r[0]) / den;
+    if (t <= 0.12 || t >= 0.88 || u <= 0.12 || u >= 0.88) return null;
+    const acute = Math.min(Math.abs(wrap(Math.atan2(r[1], r[0]) - Math.atan2(s[1], s[0]))), Math.PI);
+    const turn = Math.min(acute, Math.PI - acute);
+    return turn > 0.45 ? { nx: -s[1], nz: s[0] } : null;
+  };
+  for (let a = 0; a < connectors.length; a++){
+    const A = connectors[a];
+    for (let i = 2; i < A.pts.length - 2; i++){
+      for (let b = a + 1; b < connectors.length; b++){
+        const B = connectors[b];
+        for (let j = 2; j < B.pts.length - 2; j++){
+          const hit = segCross(A.pts[i - 1], A.pts[i], B.pts[j - 1], B.pts[j]);
+          if (!hit) continue;
+          const len = Math.hypot(hit.nx, hit.nz) || 1, gap = (A.half || 1.3) + (B.half || 1.3) + 1.6;
+          mark(A, i, A.pts[i][0] + hit.nx / len * gap, A.pts[i][1] + hit.nz / len * gap);
+        }
+      }
+    }
+  }
+  pathsRerouted = changed.size;
 }
 export function exploreStats(){
   let m = 0, n = 0; for (const c of connectors) if (c.explore){ n++; for (let i = 1; i < c.pts.length; i++) m += Math.hypot(c.pts[i][0] - c.pts[i - 1][0], c.pts[i][1] - c.pts[i - 1][1]); }

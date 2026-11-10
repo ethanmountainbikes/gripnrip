@@ -74,8 +74,10 @@ try {
   check('helmet hides arms', helm && helm.arms.every(v => v === false), JSON.stringify(helm && helm.arms));
   check('helmet keeps hands', helm && helm.hands.every(v => v === true), JSON.stringify(helm && helm.hands));
   check('helmet hides head and torso', helm && helm.head === false && helm.torso === false, JSON.stringify(helm && {head:helm.head, torso:helm.torso}));
+  check('helmet hides legs and feet', helm && helm.legs && helm.legs.every(v => v === false), JSON.stringify(helm && helm.legs));
   const chase = byMode[0] && byMode[0].slow;
   check('chase shows arms and hands', chase && chase.arms.every(Boolean) && chase.hands.every(Boolean), JSON.stringify(chase && {arms:chase.arms, hands:chase.hands}));
+  check('chase shows legs', chase && chase.legs && chase.legs.every(Boolean), JSON.stringify(chase && chase.legs));
   const chest = byMode[4] && byMode[4].slow;
   check('chest shows arms', chest && chest.arms.every(Boolean), JSON.stringify(chest && chest.arms));
   const jumps = await ev(`(() => {

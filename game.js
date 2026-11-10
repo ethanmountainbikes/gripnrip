@@ -139,16 +139,35 @@ const mergeGeos = gs => { let n = 0; const ps = gs.map(g => g.index ? g.toNonInd
   const P = new Float32Array(n*3), N = new Float32Array(n*3), U = new Float32Array(n*2); let o = 0;
   for (const g of ps){ if (!g.attributes.normal) g.computeVertexNormals(); P.set(g.attributes.position.array, o*3); N.set(g.attributes.normal.array, o*3); if (g.attributes.uv) U.set(g.attributes.uv.array, o*2); o += g.attributes.position.count; }
   const r = new THREE.BufferGeometry(); r.setAttribute('position', new THREE.BufferAttribute(P,3)); r.setAttribute('normal', new THREE.BufferAttribute(N,3)); r.setAttribute('uv', new THREE.BufferAttribute(U,2)); return r; };
-const trunkG = new THREE.CylinderGeometry(0.07,0.42,1,7,3); trunkG.translate(0,0.5,0);
-// conifer: 5 layered, drooping tiers with ragged needle edges (spans y 0..1, radius 1)
-const coneG = (() => { const tiers = []; for (let k = 0; k < 5; k++){ const r = 1 - k*0.18, hgt = 0.34 - k*0.03, y0 = k*0.17;
-    const g = new THREE.ConeGeometry(r, hgt, 14, 2, true); const p = g.attributes.position;
-    for (let i = 0; i < p.count; i++){ const x = p.getX(i), y = p.getY(i), z = p.getZ(i), rad = Math.hypot(x, z); if (y < -hgt*0.45 && rad > 0.01){ const a = Math.atan2(z, x), jag = 1 + 0.16*Math.sin(a*7 + k) + 0.08*Math.sin(a*13 + k*2); p.setXYZ(i, x*jag, y - 0.05*r*(jag-0.9), z*jag); } }
-    g.translate(0, y0 + hgt/2, 0); g.computeVertexNormals(); tiers.push(g); }
-  tiers.push(new THREE.ConeGeometry(0.2, 0.25, 8).translate(0, 0.9, 0)); return mergeGeos(tiers); })();
-const trunkMat = new THREE.MeshStandardMaterial({map:TEX.bark.map, normalMap:TEX.bark.normal, roughness:0.95});
+const trunkG = new THREE.CylinderGeometry(0.11, 0.34, 1, 8, 4); trunkG.translate(0, 0.5, 0);
+const liftNormals = (g) => { const n = g.attributes.normal; if (!n) return g; for (let i = 0; i < n.count; i++) n.setY(i, n.getY(i) + 0.85); g.normalizeNormals(); return g; };
+// Needle card: a few strokes with a clear background, drawn once and shared by every branch.
+const needleMap = (() => { const cv = document.createElement('canvas'); cv.width = cv.height = 128; const c = cv.getContext('2d');
+  c.clearRect(0, 0, 128, 128);
+  for (let i = 0; i < 46; i++){ const x = 64 + (i % 9 - 4) * 7, y0 = 118 - (i % 5) * 3; c.strokeStyle = `rgba(${18 + (i % 4) * 14},${70 + (i % 5) * 18},${22 + (i % 3) * 10},0.92)`; c.lineWidth = 1.4;
+    c.beginPath(); c.moveTo(x, y0); c.quadraticCurveTo(x + (i % 2 ? 10 : -10), 60, 64 + (i % 7 - 3) * 4, 8); c.stroke(); }
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; return t; })();
+// Conifer crown (y 0..1, radius ~1): a soft core plus drooping branch cards, not a stack of flat cones.
+const coneG = (() => { const parts = [];
+  for (let k = 0; k < 4; k++){ const r = 0.92 - k * 0.18, y = 0.08 + k * 0.2, g = new THREE.ConeGeometry(r, 0.42, 9, 1, true);
+    g.translate(0, y + 0.12, 0); const p = g.attributes.position;
+    for (let i = 0; i < p.count; i++){ const yv = p.getY(i); if (yv < y + 0.05) p.setY(i, yv - 0.08 * r); }
+    g.computeVertexNormals(); parts.push(liftNormals(g)); }
+  parts.push(liftNormals(new THREE.ConeGeometry(0.16, 0.22, 7).translate(0, 0.96, 0)));
+  for (let k = 0; k < 5; k++){ const y = 0.12 + k * 0.16, rad = 0.78 - k * 0.12, n = 6;
+    for (let i = 0; i < n; i++){ const a = i / n * Math.PI * 2 + k * 0.4, g = new THREE.PlaneGeometry(rad * 0.95, 0.34);
+      g.translate(0, 0, 0); g.rotateX(0.55 + k * 0.04); g.rotateY(a); g.translate(Math.cos(a) * rad * 0.42, y, Math.sin(a) * rad * 0.42);
+      g.computeVertexNormals(); parts.push(g); } }
+  return mergeGeos(parts); })();
+// Broadleaf: a few leafy clumps on a shorter crown.
+const broadG = (() => { const parts = [];
+  const blob = (x, y, z, s) => { const g = new THREE.IcosahedronGeometry(s, 1); g.translate(x, y, z); g.computeVertexNormals(); parts.push(liftNormals(g)); };
+  blob(0, 0.62, 0, 0.46); blob(-0.28, 0.48, 0.12, 0.32); blob(0.26, 0.5, -0.1, 0.3); blob(0.05, 0.78, 0.08, 0.28);
+  return mergeGeos(parts); })();
+const trunkMat = new THREE.MeshStandardMaterial({map:TEX.bark.map, normalMap:TEX.bark.normal, roughness:0.86, color:0xc4a07a});
 TEX.bark.map.repeat.set(2, 5); TEX.bark.normal.repeat.set(2, 5);
-const folMat = new THREE.MeshStandardMaterial({map:TEX.needles.map, normalMap:TEX.needles.normal, color:0x8fce55, roughness:0.85, side:THREE.DoubleSide});
+const folMat = new THREE.MeshStandardMaterial({map:needleMap, color:0xd6f0a4, roughness:0.55, emissive:0x1c4a16, emissiveIntensity:0.45, side:THREE.DoubleSide, alphaTest:0.35, transparent:false});
+const broadMat = new THREE.MeshStandardMaterial({map:TEX.needles.map, color:0xb7e07a, roughness:0.62, emissive:0x14380f, emissiveIntensity:0.28, side:THREE.DoubleSide});
 function windSway(mat, amp){
   mat.onBeforeCompile = sh => { sh.uniforms.uTime = windU;
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime;\n').replace('#include <begin_vertex>', `#include <begin_vertex>
@@ -159,8 +178,9 @@ function windSway(mat, amp){
       transformed.z += cos(uTime*0.85 + sw.z*0.06) * swayH * swayH * ${(amp * 0.65).toFixed(3)};`); };
   mat.customProgramCacheKey = () => 'wind' + amp;
 }
-windSway(trunkMat, 0.025);
-windSway(folMat, 0.11);
+windSway(trunkMat, 0.04);
+windSway(folMat, 0.18);
+windSway(broadMat, 0.1);
 TEX.needles.map.repeat.set(6, 2); TEX.needles.normal.repeat.set(6, 2);
 const rockG = (() => { const g = new THREE.IcosahedronGeometry(1, 1), p = g.attributes.position;
   for (let i = 0; i < p.count; i++){ const v = new THREE.Vector3().fromBufferAttribute(p, i), n = 1 + 0.18*Math.sin(v.x*3.1 + v.y*2.3) + 0.12*Math.sin(v.z*5.3 - v.x*1.7) + 0.07*Math.sin(v.y*9.1); v.multiplyScalar(n); v.y *= 0.7; p.setXYZ(i, v.x, v.y, v.z); }
@@ -224,12 +244,19 @@ function buildChunk(ci, cj){
   const ts = treesInCell(ci, cj);
   const M = new THREE.Matrix4(), q = new THREE.Quaternion(), sv = new THREE.Vector3(), p = new THREE.Vector3(), up = new THREE.Vector3(0,1,0);
   if (ts.length){
-    const trunk = new THREE.InstancedMesh(trunkG, trunkMat, ts.length), fol = new THREE.InstancedMesh(coneG, folMat, ts.length);
-    ts.forEach((t, i) => { const h = t.h, wv = 0.85 + ((t.hue*13.7)%1)*0.4, rr = h*0.2*wv; q.setFromAxisAngle(up, t.rot);
-      M.compose(p.set(t.x,t.y,t.z), q, sv.set(0.8+h*0.03, h*0.5, 0.8+h*0.03)); trunk.setMatrixAt(i,M);
-      M.compose(p.set(t.x,t.y+h*0.16,t.z), q, sv.set(rr, h*0.86, rr)); fol.setMatrixAt(i,M);
-      c.setHSL(0.27+t.hue*0.07, 0.35+((t.hue*3.3)%1)*0.2, 0.55+((t.hue*7)%1)*0.3); fol.setColorAt(i,c); });
-    for (const im of [trunk,fol]){ im.castShadow = true; im.receiveShadow = true; im.computeBoundingSphere(); grp.add(im); }
+    const broadIdx = [], firIdx = [];
+    ts.forEach((t, i) => (((t.hue * 5.1 + t.rot) % 1) > 0.78 ? broadIdx : firIdx).push(i));
+    const trunk = new THREE.InstancedMesh(trunkG, trunkMat, ts.length);
+    const fol = firIdx.length ? new THREE.InstancedMesh(coneG, folMat, firIdx.length) : null;
+    const brd = broadIdx.length ? new THREE.InstancedMesh(broadG, broadMat, broadIdx.length) : null;
+    let fi = 0, bi = 0;
+    ts.forEach((t, i) => { const h = t.h, broad = broadIdx.includes(i), wv = 0.85 + ((t.hue*13.7)%1)*0.35, rr = h*(broad ? 0.22 : 0.16)*wv;
+      q.setFromAxisAngle(up, t.rot);
+      M.compose(p.set(t.x, t.y, t.z), q, sv.set(0.7 + h*0.018, h*(broad ? 0.48 : 0.58), 0.7 + h*0.018)); trunk.setMatrixAt(i, M);
+      const crown = broad ? brd : fol, slot = broad ? bi++ : fi++;
+      M.compose(p.set(t.x, t.y + h*(broad ? 0.42 : 0.36), t.z), q, sv.set(rr, h*(broad ? 0.55 : 0.7), rr)); crown.setMatrixAt(slot, M);
+      c.setHSL(broad ? 0.28 : 0.26, 0.45, broad ? 0.42 : 0.5); crown.setColorAt(slot, c); });
+    for (const im of [trunk, fol, brd]) if (im){ im.castShadow = true; im.receiveShadow = true; im.computeBoundingSphere(); grp.add(im); }
   }
   // rocks and bushes (kept off trails, paths and jumps)
   { const r = (() => { let a = (ci*73856093 ^ cj*19349663) >>> 0 || 1; return () => (a = (a*16807) % 2147483647) / 2147483647; })();
@@ -883,7 +910,13 @@ function step(dt, inp){
         for (let i = 1; i <= n; i++){ const t = fa.L * i / n, h = fa.p(t, 0);
           if (h + 0.02 >= peak){ if (h > peak){ peak = h; peakT = t; } }
           else if (peak > 0.12 && t > peakT + 0.5) break; }
-        if (peak > 0.08){ let t0 = 0; for (let i = 0; i <= n; i++){ const t = peakT * i / n; if (fa.p(t, 0) < peak * 0.18) t0 = t; } lipInfo = { h: peak, face: Math.max(0.4, peakT - t0) }; } }
+        if (peak > 0.08){
+          let t0 = 0, faceGrade = 0.12;
+          for (let i = 0; i <= n; i++){ const t = peakT * i / n; if (fa.p(t, 0) < peak * 0.18) t0 = t; }
+          // Steepest half-metre on the way UP. The half-metre under the wheels at the lip already sees the downslope and would clamp the launch to nothing.
+          for (let t = 0.35; t <= peakT + 0.01; t += 0.35){ const g = (fa.p(t, 0) - fa.p(Math.max(0, t - 0.5), 0)) / 0.5; if (g > faceGrade) faceGrade = g; }
+          lipInfo = { h: peak, face: Math.max(0.4, peakT - t0), faceGrade };
+        } }
       if (fa) backFeat = (S.vx*fa.dx + S.vz*fa.dz) < -0.2*S.speed;   // riding a jump the wrong way (up a landing / over the back of a lip)
       if (fa){ const mx = nx - S.x, mz = nz - S.z, dA = mx*fa.dx + mz*fa.dz;
         // Ribbon only. Boulder tops live in featH and are climbed as rocks; treating a slab edge as a wall yaws the bike ninety degrees.
@@ -911,11 +944,11 @@ function step(dt, inp){
     // The old ramp ceiling was 1.5× speed, so that spike left the lip at a cannon angle.
     // The face grade over half a metre is the lip. A hop still adds its own pop later.
     const upCap0 = (vyFeat !== null ? faceG * S.speed + 0.45 : Math.min(1, gradeF) * S.speed + 0.3);
-    // A small lip or a short face must not turn speed into height. Apex stays about 1.3× the lip.
-    // A big jump is left on the face-grade launch, so speed still makes it send.
-    const smallLip = lipInfo && (lipInfo.h < 0.62 || (lipInfo.h < 0.95 && lipInfo.face < 3.3));
+    // Only a genuinely small lip is capped (~1.3× its own height). A medium face that is short and steep is still a real jump.
+    const smallLip = lipInfo && lipInfo.h < 0.62;
     const vySmall = smallLip ? Math.sqrt(2 * G_AIR * Math.max(0.12, lipInfo.h * 1.35)) : 1e9;
-    const upCap = Math.min(upCap0, vySmall);
+    const faceCap = lipInfo ? lipInfo.faceGrade * S.speed + 0.55 : 0;
+    const upCap = Math.min(Math.max(upCap0, faceCap), vySmall);
     vyG = Math.max(-1.5*S.speed - 3, Math.min(vyG, upCap));
     S.landCool = Math.max(0, (S.landCool||0) - dt);
     S.gf = (S.gf||0) + 1;
@@ -930,15 +963,18 @@ function step(dt, inp){
     if (backFeat && !edge) crest = false;   // wrong-way over a jump: roll over it, never pop off its crest
     if (edge && !crest && S.rockT <= 0 && S.landCool <= 0) crest = true;   // never re-launch right after touching down (no landing bounce)
     if (crest){ // only leave the ground if the ballistic path really clears the terrain (no micro-hops)
-      let clear = 0; for (let t=0.03; t<=0.18; t+=0.03){ const bx=S.x+S.vx*t, bz=S.z+S.vz*t, by=S.y+S.lastVyG*t-0.5*G_AIR*t*t; const gap_=by-groundH(bx,bz); if (t < 0.065 && gap_ < 0.03){ clear = 0; break; } clear=Math.max(clear, gap_); }   // must actually separate right away (no 1-frame micro-hops)
-      if (clear < 0.4) crest = false; }
+      const vyPred = Math.max(S.lastVyG, lipInfo && !smallLip ? lipInfo.faceGrade * S.speed * 0.85 : 0);
+      let clear = 0; for (let t=0.03; t<=0.18; t+=0.03){ const bx=S.x+S.vx*t, bz=S.z+S.vz*t, by=S.y+vyPred*t-0.5*G_AIR*t*t; const gap_=by-groundH(bx,bz); if (t < 0.065 && gap_ < 0.03){ clear = 0; break; } clear=Math.max(clear, gap_); }
+      // A real lip still launches when the landing ramp is already inside that short window. Rollers do not.
+      if (clear < 0.4 && !(lipInfo && lipInfo.h >= 0.7)) crest = false; }
     if (pop > 0 || crest){
       S.air = true; S.airT = 0; S.takeoffPitch = S.pitch; S.spin = 0;
       // A charged hop adds height. Ground-follow can be largely negative where the lip
       // falls away; that must not turn the hop into a dive. A plain crest keeps the ramp's own vertical speed.
       const groundVy = backFeat ? Math.min(S.lastVyG, 0.1*S.speed) : S.lastVyG;
-      // The lip's own grade is the launch. A hop adds a small pop on top, never instead of it, and never a cannon.
-      const lipVy = Math.min(vySmall, Math.max(0, groundVy, onFace ? faceG * S.speed * 0.85 : 0));
+      // Face grade, not the half-metre sample at the crest (that one is already the downslope and reads as zero).
+      const gradeVy = lipInfo ? lipInfo.faceGrade * S.speed * (smallLip ? 0.5 : 0.9) : 0;
+      const lipVy = Math.min(vySmall, Math.max(0, groundVy, gradeVy, onFace ? faceG * S.speed * 0.85 : 0));
       const popAdd = Math.min(pop, 2.0);
       S.vy = lipVy + popAdd;
       S.popped = pop > 0;
@@ -957,7 +993,7 @@ function step(dt, inp){
       // was a second climb penalty and bled speed up every jump.
       const expected = Math.max(0, slope) * S.speed * dt;
       const extra = Math.max(0, hf - (S.prevHf ?? hf) - expected) + Math.max(0, hr - (S.prevHr ?? hr) - expected);
-      if (extra > 0.004){ S.speed = Math.max(0, S.speed - extra * (1.6 + S.speed * 0.18)); S.jolt = Math.min(1, (S.jolt || 0) + extra * 3); S.suspV = (S.suspV || 0) + extra * 18; }
+      if (!onFace && extra > 0.004){ S.speed = Math.max(0, S.speed - extra * (1.6 + S.speed * 0.18)); S.jolt = Math.min(1, (S.jolt || 0) + extra * 3); S.suspV = (S.suspV || 0) + extra * 18; }
       S.prevHf = hf; S.prevHr = hr;
       const sup = supportPitch(hf, hr), drop = Math.min(hf, hr) < ng - 0.4;
       if (inp.kbWheelie) S.wheelieArm = 1;
@@ -1179,20 +1215,20 @@ function frame(){
   camera.up.set(Math.sin(camRoll)*Math.cos(camHead), Math.cos(camRoll), -Math.sin(camRoll)*Math.sin(camHead)); camera.lookAt(camLook);
   const fpOn = camMode === 3 && !S.lift && S.state === 'riding' && !rag.on;
   BR.head.visible = !fpOn;
-  const torso = BR.root.getObjectByName('riderTorso'); if (torso) torso.visible = !fpOn;
-  // Arms are siblings of the hands on the rider root, not parents of them. Helmet cam hides the sleeves only.
-  for (const n of ['armUpperL','armUpperR','armForeL','armForeR']){ const o = BR.root.getObjectByName(n); if (o) o.visible = !fpOn; }
+  if (BR.parts.torso) BR.parts.torso.visible = !fpOn;
+  // Helmet cam keeps the gloves only. Legs, knees, shoes, arms and the helmet itself stay out of the near plane.
+  for (const k of ['upperL','upperR','foreL','foreR','thighL','thighR','shinL','shinR','kneeL','kneeR','footL','footR']){ const o = BR.parts[k]; if (o) o.visible = !fpOn; }
   if (rag.on && (camMode === 3 || camMode === 4) && !S.lift && S.state === 'riding') bailCamera();
   else if (camMode >= 3 && !S.lift && S.state === 'riding'){ const sx = -fz, sz = fx, up = 1;
     if (camMode === 3 || camMode === 4){   // helmet: just behind the grips so hands and bars stay in frame. Chest mount is lower.
       if (camMode === 3){
         // Head lags the chassis: bars keep the full bump pitch, the view only takes a fraction of it.
         // Rigid to the head. A lagged height sits above the bike while it descends, which reads as the view rising with speed.
-        const eyeH = 1.28, pitch = (S.pitch || 0) * 0.22;
+        const eyeH = 1.56, pitch = (S.pitch || 0) * 0.22;
         fpCam.on = true; fpCam.y = S.y + eyeH;
-        // The eye stays on the head. Look yaw, pitch and roll are the smoothed ones, so a bump does not flick the horizon.
+        // Eyes, looking a little down the trail so the bars sit low in the frame. Height does not change with speed.
         const eye = bodyPoint(S.x, S.y, S.z, S.yaw, pitch, { x: 0, y: eyeH, z: 0.02, name: 'eye', fatal: false });
-        const look = bodyPoint(S.x, S.y, S.z, fpCam.yaw, fpCam.pitch * 0.35, { x: 0, y: eyeH - 0.22, z: -8, name: 'look', fatal: false });
+        const look = bodyPoint(S.x, S.y, S.z, fpCam.yaw, fpCam.pitch * 0.35, { x: 0, y: 0.72, z: -2.6, name: 'look', fatal: false });
         camera.position.set(eye.x, eye.y, eye.z);
         const fdx = look.x - eye.x, fdz = look.z - eye.z, fl = Math.hypot(fdx, fdz) || 1;
         const rr = Math.sin(fpCam.roll); camera.up.set(fdz / fl * rr, Math.cos(fpCam.roll), -fdx / fl * rr);
@@ -1215,9 +1251,10 @@ function frame(){
   { const yaw = S.yaw, fx = -Math.sin(yaw), fz = -Math.cos(yaw), dx = camera.position.x - S.x, dz = camera.position.z - S.z;
     window.__view = { mode: camMode, fov: +camera.fov.toFixed(2), dist: +Math.hypot(dx, dz).toFixed(3),
       off: { f: +(dx*fx + dz*fz).toFixed(3), r: +(dx*Math.cos(yaw) - dz*Math.sin(yaw)).toFixed(3), y: +(camera.position.y - S.y).toFixed(3) },
-      arms: ['armUpperL','armUpperR','armForeL','armForeR'].map(n => { const o = BR.root.getObjectByName(n); return !!(o && o.visible); }),
+      arms: ['upperL','upperR','foreL','foreR'].map(k => !!(BR.parts[k] && BR.parts[k].visible)),
+      legs: ['thighL','thighR','shinL','shinR','kneeL','kneeR','footL','footR'].map(k => !!(BR.parts[k] && BR.parts[k].visible)),
       hands: ['handL','handR'].map(n => { const o = BR.root.getObjectByName(n); return !!(o && o.visible && o.parent === BR.root); }),
-      head: BR.head.visible, torso: !!BR.root.getObjectByName('riderTorso')?.visible, spd: +((S.speed||0)).toFixed(2) }; }
+      head: BR.head.visible, torso: !!BR.parts.torso?.visible, spd: +((S.speed||0)).toFixed(2) }; }
   if (FPV.state.on && S.state==='riding' && !menu.open && !shopOpen && !bigMap.open && !window.__camSide) droneCamera();
   if (window.__camSide){ const o = window.__camSide, c = Math.cos(S.yaw), s_ = Math.sin(S.yaw); camera.position.set(S.x + c*o.d + Math.sin(S.yaw)*(o.b||0), S.y + (o.h||1.2), S.z - s_*o.d + Math.cos(S.yaw)*(o.b||0)); camera.up.set(0,1,0); camera.lookAt(S.x, S.y + 0.9, S.z); }   // test hook: side camera for pose screenshots
   if (flyF) flyover(0);
