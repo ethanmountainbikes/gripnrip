@@ -38,12 +38,14 @@ try {
   await send('Page.enable'); await send('Runtime.enable');
   await send('Page.addScriptToEvaluateOnNewDocument', { source: `window.__errs=[]; addEventListener('error', e => window.__errs.push(String(e.message))); const oe=console.error; console.error=(...a)=>{ window.__errs.push(a.map(x=>String(x&&x.message||x)).join(' ')); oe(...a); };` });
   await send('Page.navigate', { url: `http://127.0.0.1:${PORT}/` });
-  await sleep(2800);
   const ev = async expr => {
     const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true });
     if (r.exceptionDetails) throw new Error(JSON.stringify(r.exceptionDetails).slice(0, 900));
     return r.result.value;
   };
+  // wait for the game to finish loading (three.js from the CDN + shader compile can take a while on swiftshader)
+  for (let i = 0; i < 450; i++){ if (await ev(`!!(window.__game && window.__world && document.querySelector('#menuPanel li'))`).catch(() => false)) break; await sleep(200); }
+  await sleep(1500);
   const shot = async name => {
     const { data } = await send('Page.captureScreenshot', { format: 'png' });
     writeFileSync(`${ART}/${name}.png`, Buffer.from(data, 'base64'));
