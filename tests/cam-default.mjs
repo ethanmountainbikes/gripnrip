@@ -20,7 +20,7 @@ try {
   const boot = async (setup) => {
     if (setup) await send('Page.addScriptToEvaluateOnNewDocument', { source: setup });
     await send('Page.navigate', { url: `http://127.0.0.1:${PORT}/` });
-    for (let i=0;i<40;i++){ if (await ev(`!!window.__view`)) break; await sleep(200); }
+    for (let i = 0; i < 450; i++){ if (await ev(`!!window.__view`)) break; await sleep(200); }
     return ev(`({mode:window.__view.mode, saved:localStorage.getItem('trailDescent.cam')})`);
   };
   const fresh = await boot('');

@@ -18,7 +18,7 @@ try {
   await send('Page.addScriptToEvaluateOnNewDocument', { source: `try{localStorage.setItem('trailDescent.codeShown','true')}catch(e){}` });
   await send('Page.navigate', { url: `http://127.0.0.1:${PORT}/` });
   const ev = async expr => { const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error(String(r.exceptionDetails.exception?.description || 'eval').slice(0, 700)); return r.result.value; };
-  for (let i = 0; i < 40; i++){ if (await ev(`!!window.__place`)) break; await sleep(200); }
+  for (let i = 0; i < 450; i++){ if (await ev(`!!window.__place`)) break; await sleep(200); }
   await ev(`document.querySelector('#menuPanel li[data-k="0"]')?.click()`);
   await sleep(400);
   const info = await ev(`(() => {

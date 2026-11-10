@@ -15,7 +15,7 @@ try {
   await send('Page.enable'); await send('Runtime.enable');
   await send('Page.navigate', { url: `http://127.0.0.1:${PORT}/` });
   const ev=async expr=>{ const r=await send('Runtime.evaluate',{expression:expr,returnByValue:true,awaitPromise:true}); if(r.exceptionDetails) throw new Error(String(r.exceptionDetails.exception?.description||'eval').slice(0,800)); return r.result.value; };
-  for (let i = 0; i < 150; i++){ if (await ev(`!!window.__sim && !!window.__world`)) break; await sleep(200); }
+  for (let i = 0; i < 450; i++){ if (await ev(`!!window.__sim && !!window.__world`)) break; await sleep(200); }
   const out = await ev(`(() => {
     const S=window.__game, W=window.__world, g=window.__groundH;
     const wrap=a=>Math.atan2(Math.sin(a),Math.cos(a));

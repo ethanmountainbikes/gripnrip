@@ -46,6 +46,8 @@ const evalJs = async expr => {
   if (r.exceptionDetails) throw new Error(JSON.stringify(r.exceptionDetails).slice(0, 800));
   return r.result.value;
 };
+// On a busy machine the page takes longer than the fixed wait above: wait for the game and the world.
+for (let i = 0; i < 450; i++){ if (await evalJs(`!!window.__game && !!window.__world`)) break; await sleep(200); }
 const shot = async name => {
   const { data } = await send('Page.captureScreenshot', { format: 'png' });
   writeFileSync(`${ART}/${name}.png`, Buffer.from(data, 'base64'));

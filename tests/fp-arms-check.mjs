@@ -20,7 +20,7 @@ try {
   await send('Page.addScriptToEvaluateOnNewDocument', { source: `window.__errs=[]; const oe=console.error; console.error=(...a)=>{ window.__errs.push(a.map(x=>String(x&&x.message||x)).join(' ')); oe(...a); }; addEventListener('error', e=>window.__errs.push(String(e.message)));` });
   const ev = async expr => { const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error(String(r.exceptionDetails.exception?.description || 'eval').slice(0, 700)); return r.result.value; };
   const boot = async () => {
-    for (let i=0;i<40;i++){ if (await ev(`!!window.__view && !!window.__riderStats`)) break; await sleep(200); }
+    for (let i = 0; i < 450; i++){ if (await ev(`!!window.__view && !!window.__riderStats && !!window.__world`)) break; await sleep(200); }
     for (let i=0;i<25;i++){ if (await ev(`!!document.getElementById('mpAsk')`)) { await ev(`document.querySelector('#mpAsk #mpGo').click()`); break; } await sleep(150); }
     await ev(`document.querySelector('#menuPanel li[data-k="0"]')?.click()`);
     await sleep(400);

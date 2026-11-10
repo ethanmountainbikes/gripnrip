@@ -17,7 +17,7 @@ try {
   await send('Page.enable'); await send('Runtime.enable');
   await send('Page.navigate', { url: `http://127.0.0.1:${PORT}/` });
   const ev=async expr=>{ const r=await send('Runtime.evaluate',{expression:expr,returnByValue:true,awaitPromise:true}); if(r.exceptionDetails) throw new Error(String(r.exceptionDetails.exception?.description||'eval').slice(0,500)); return r.result.value; };
-  for (let i=0;i<40;i++){ if (await ev(`!!window.__BR`)) break; await sleep(200); }
+  for (let i = 0; i < 450; i++){ if (await ev(`!!window.__BR`)) break; await sleep(200); }
   const out = await ev(`(() => {
     const BR=window.__BR, THREE=window.__THREE || null;
     const hold=(speed, steer)=>{ const S={air:false,crashT:0,speed,yaw:0,pitch:0,lean:0,susp:0,wheelie:false,fakie:false,tweak:0,jolt:0,landBlend:0,wPitch:0,wYaw:0,spin:0};
