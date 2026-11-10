@@ -71,11 +71,14 @@ try {
   check('ambience volume is in settings', labels.includes('Ambience volume'));
   check('frame rate is in settings', labels.includes('Frame rate'));
   let cap = '';
-  for (let i = 0; i < 8 && !String(cap).includes('30'); i++){
+  const seen = [];
+  for (let i = 0; i < 10 && !String(cap).includes('30'); i++){
     await ev(`(() => { const li = [...document.querySelectorAll('#menuPanel li')].find(el => el.querySelector('.mLabel')?.textContent === 'Frame rate'); li.click(); return li.querySelector('.mVal').textContent; })()`);
     await sleep(40);
     cap = await ev(`[...document.querySelectorAll('#menuPanel li')].find(el => el.querySelector('.mLabel')?.textContent === 'Frame rate').querySelector('.mVal').textContent`);
+    seen.push(cap);
   }
+  check('165 is a frame rate option', seen.some(t => String(t).includes('165')), seen.join(' | '));
   check('frame rate can be set to 30', String(cap).includes('30'), cap);
   const saved = await ev(`JSON.parse(localStorage.getItem('trailDescent.settings') || '{}')`);
   check('the 30 FPS cap is saved', saved.fpsCap === 30, JSON.stringify(saved.fpsCap));
@@ -93,6 +96,14 @@ try {
     const t = setInterval(() => { window.__calls++; window.__frame(); if (window.__calls >= 16){ clearInterval(t); r.render = draw; res({ calls: window.__calls, presents: window.__presents, saved: JSON.parse(localStorage.getItem('trailDescent.settings')).fpsCap }); } }, 16);
   })`);
   check('unlimited is saved and draws on every frame', open.saved === 0 && open.presents >= open.calls - 1, JSON.stringify(open));
+  let cap165 = '';
+  for (let i = 0; i < 8 && !String(cap165).includes('165'); i++){
+    await ev(`(() => { const li = [...document.querySelectorAll('#menuPanel li')].find(el => el.querySelector('.mLabel')?.textContent === 'Frame rate'); li.click(); return true; })()`);
+    await sleep(30);
+    cap165 = await ev(`[...document.querySelectorAll('#menuPanel li')].find(el => el.querySelector('.mLabel')?.textContent === 'Frame rate').querySelector('.mVal').textContent`);
+  }
+  const saved165 = await ev(`JSON.parse(localStorage.getItem('trailDescent.settings') || '{}').fpsCap`);
+  check('165 FPS is saved', String(cap165).includes('165') && saved165 === 165, JSON.stringify({ cap165, saved165 }));
   const audio = await ev(`(() => { const els = [...document.querySelectorAll('audio')]; const songs = performance.getEntriesByType('resource').filter(e => /\\/music\\//.test(e.name)).map(e => e.name); return { audio: els.map(a => ({ src: a.currentSrc, paused: a.paused })), songs, playing: window.__musicPlaying() }; })()`);
   check('no music element is playing', audio.audio.length === 0 && audio.songs.length === 0 && audio.playing === false, JSON.stringify(audio));
   console.log(JSON.stringify({ fail, box, paced, gap, open, audio }, null, 2));

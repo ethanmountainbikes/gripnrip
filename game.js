@@ -44,7 +44,7 @@ let seed = 7; const rnd = () => (seed = (seed*16807) % 2147483647) / 2147483647;
 
 // ---------- settings (quality, inverts, volume) ----------
 const SETTINGS = Object.assign({gfx:'low', tod:'noon', fpsOn:false, fpsCap:60, invertY:false, invertX:false, volume:0.8, ambience:0.45, droneSpeed:12, droneTilt:12, droneDist:8, droneHeight:4, droneFly:'follow'}, LS.get('trailDescent.settings', {}));
-const FPS_OPTS = [30, 60, 90, 120, 144, 0];
+const FPS_OPTS = [30, 60, 90, 120, 144, 165, 0];
 if (!FPS_OPTS.includes(SETTINGS.fpsCap)) SETTINGS.fpsCap = 60;
 if (typeof SETTINGS.ambience !== 'number') SETTINGS.ambience = SETTINGS.musicOn === false ? 0 : (typeof SETTINGS.musicVol === 'number' ? SETTINGS.musicVol : 0.45);
 function fpsCap(){ return FPS_OPTS.includes(SETTINGS.fpsCap) ? SETTINGS.fpsCap : 60; }
