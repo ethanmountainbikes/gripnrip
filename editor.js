@@ -88,7 +88,7 @@ export function createEditor(api){
         <button data-act="browse">Browse</button><button data-act="exit">Exit</button>
       </div>
       <div id="edExtra"></div>
-      <div style="opacity:.75;margin-top:6px">Click the ground to place. Drag for a trail. Left stick moves the cursor, ${pl('A')} places, ${pl('X')} rotates, ${pl('LB')}/${pl('RB')} resize, ${pl('Y')} changes tool. Test ride: ${api.bindLabel('editorTest')}.</div>
+      <div style="opacity:.75;margin-top:6px">Click the ground to place. Drag for a trail. Left stick moves the cursor, ${pl('A')} places, ${pl('X')} rotates, ${pl('LB')}/${pl('RB')} resize, ${pl('Y')} changes tool. Test ride: ${api.bindLabel('editorTest')} or ${pl('Start')}.</div>
       <div style="margin-top:6px">${local.map(l => `<button data-load="${l.id}">${levelName(l.name)}</button>`).join(' ') || 'No saved levels yet.'}</div>`;
     const tools = ui.querySelector('#edTools');
     for (const [id, label] of TOOLS){ const b = document.createElement('button'); b.textContent = label; b.style.outline = id === tool ? '2px solid #ffe08a' : ''; b.onclick = () => { tool = id; paint(); }; tools.appendChild(b); }

@@ -87,6 +87,9 @@ try {
   check('switch: family', sw.fam === 'switch', sw.fam);
   check('switch: prompts use Nintendo names in Nintendo spots', sw.hint.includes('B / Enter: select') && sw.shop.includes('B / Enter: buy') && sw.shop.includes('A / Esc: close') && sw.th === 'Switch controller' && sw.help.includes('ZR') && sw.shop.includes('L/R'), JSON.stringify({ hint: sw.hint, th: sw.th, shop: sw.shop }));
 
+  // ---- level editor help and the binds screen follow the Switch pad too ----
+  const ed = await ev(`(async () => { window.__editor.open(); await new Promise(r => setTimeout(r, 300)); const t = document.getElementById('editor').textContent; window.__editor.close(); await new Promise(r => setTimeout(r, 200)); return t; })()`);
+  check('switch: editor help uses Nintendo names', ed.includes('B places, Y rotates, L/R resize, X changes tool') && ed.includes('or +'), ed.slice(-220));
   // ---- custom binds sit on top of the remap: pedal on the bottom face button ----
   const cb = await ev(`(() => { const S = window.__settings, old = S.binds.pad.pedal; S.binds.pad.pedal = 'A'; const gp = window.__pad; gp.clear(); window.__read();
     gp.press(0); const bottom = window.__read(); gp.clear(); gp.press(7); const zr = window.__read(); gp.clear(); window.__read(); S.binds.pad.pedal = old; return { bottom, zr }; })()`);
@@ -163,6 +166,12 @@ try {
   await ev(`window.__fake('Xbox 360 Controller (XInput STANDARD GAMEPAD)', 'standard', 17, 4); window.__read(); true`);
   check('settings opens', await clickLabel('Settings') === 'ok'); await sleep(150);
   check('controls opens', await clickLabel('Controls') === 'ok'); await sleep(200);
+  const bindRow = await ev(`[...document.querySelectorAll('#menuPanel li')].find(el => el.querySelector('.mLabel')?.textContent === 'Pedal — controller')?.querySelector('.mVal')?.textContent || ''`);
+  check('binds screen: Xbox pad shows RT for pedal', /RT/.test(bindRow), bindRow);
+  const bindSw = await ev(`(async () => { window.__fake('Pro Controller (Vendor: 057e Product: 2009)', '', 16, 10).press(7); window.__read(); window.__pad.clear(); window.__read(); await new Promise(r => setTimeout(r, 100));
+    return [...document.querySelectorAll('#menuPanel li')].find(el => el.querySelector('.mLabel')?.textContent === 'Pedal — controller')?.querySelector('.mVal')?.textContent || ''; })()`);
+  check('binds screen: Switch pad shows ZR for pedal', /ZR/.test(bindSw), bindSw);
+  await ev(`window.__fake('Xbox 360 Controller (XInput STANDARD GAMEPAD)', 'standard', 17, 4).press(7); window.__read(); window.__pad.clear(); window.__read(); true`);
   check('controls has Set up controller', await clickLabel('Set up controller') === 'ok');
   await sleep(100);
   const mouse = await ev(`(() => { const W = window.__padWiz, a = W.state().mode; const li = [...document.querySelectorAll('#padWiz li')].find(l => l.textContent.startsWith('Cancel')); li && li.click(); return { a, b: W.open, toast: (window.__toastLog || []).slice(-1)[0] }; })()`);

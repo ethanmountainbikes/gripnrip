@@ -873,7 +873,7 @@ function gatePrompt(){
   if (!gateEl){ gateEl = document.createElement('div'); gateEl.id = 'gatePrompt'; gateEl.style.cssText = 'position:fixed;left:50%;bottom:16%;transform:translateX(-50%);z-index:28;padding:8px 16px;background:rgba(12,16,12,.82);color:#f3e9d2;font:700 18px/1.3 "Barlow Condensed",sans-serif;letter-spacing:.04em;border-radius:6px;pointer-events:none;display:none;text-align:center'; document.body.appendChild(gateEl); }
   const show = S.state === 'riding' && !S.paused && !menu.open && !bigMap.open && !shopOpen && !(S.countdown > 0) && !(S.run && S.run.mode === 'race') && S.atStart >= 0;
   gateEl.style.display = show ? '' : 'none';
-  if (show) gateEl.textContent = raceOpen(S.atStart) ? 'FREE RIDE  ·  Enter / A to RACE' : 'Complete this trail to unlock racing';
+  if (show) gateEl.textContent = raceOpen(S.atStart) ? PT('FREE RIDE  ·  Enter / {A} to RACE') : 'Complete this trail to unlock racing';
 }
 function trackWorld(dt){
   if (S.crashT > 0) return;
