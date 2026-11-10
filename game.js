@@ -39,6 +39,8 @@ function markCleared(id){ const tr = trails[id]; if (!tr) return; cleared[clearK
 const owned = new Set(LS.get('trailDescent.owned', ['hardtail'])); owned.add('hardtail');
 let BIKE = BIKES.find(b => b.id === LS.get('trailDescent.bike', 'hardtail') && owned.has(b.id)) || BIKES[0];
 const EARN = 0.15;   // DOLLAHS earn rate vs. the old REP values (~15%)
+// Surfaces you ride over but never launch from: their crests keep the speed you carry and add none.
+const NOT_LIP = new Set(['berm', 'rocks', 'roll', 'crashrocks', 'camber', 'rock', 'log', 'tree']);
 const G_AIR = 9.81*1.35;   // heavier feel in the air: realistic MTB airtime (~0.6-1.0 s off a kicker at 30 km/h)
 let seed = 7; const rnd = () => (seed = (seed*16807) % 2147483647) / 2147483647;
 
@@ -620,6 +622,7 @@ function placeAt(x, z, yaw){
   endRagdoll();
   stickGate.ready = true; stickGate.downAt = 0;
   S.x = x; S.z = z; S.y = groundH(S.x,S.z); S.yaw = yaw;
+  S.prevHf = S.prevHr = undefined;   // wheel heights from before the move would read as a huge bump on the first frame
   S.speed = 0; S.vy = 0; S.air = false; S.travel = S.yaw; S.wYaw = S.wPitch = 0; S.nose = 0; S.susp = S.suspV = 0; S.pitch = 0; S.spin = 0; S.lean = 0; S.preload = 0; S.crashT = 0; S.tweak = 0; S.trick = null; S.landCool = 0.3; S.fakie = false; S.wheelie = false; S.wheelieArm = 0; S.lipHop = null; S.hopWin = 0; S.jolt = 0;
 }
 function resetGame(){
@@ -1005,13 +1008,18 @@ function step(dt, inp){
     // jump collision: only a feature's ramp face (along its forward axis) adds launch speed. Its sides are climbed
     // (rounded dirt) or block/deflect you with a speed loss (steep / wooden walls), never launch you.
     let vyFeat = null, backFeat = false, lipInfo = null;
-    { const fa = featAxis(nx, nz) || featAxis(S.x, S.z);
+    { const faAt = featAxis(S.x, S.z), fa = faAt || featAxis(nx, nz);
       if (fa && fa.p && fa.L > 0){ // first crest only, so a landing ramp is not mistaken for the lip
         let peak = 0, peakT = 0; const n = 28;
         for (let i = 1; i <= n; i++){ const t = fa.L * i / n, h = fa.p(t, 0);
           if (h + 0.02 >= peak){ if (h > peak){ peak = h; peakT = t; } }
           else if (peak > 0.12 && t > peakT + 0.5) break; }
-        if (peak > 0.08){
+        // Lip speed belongs to the face under the wheels. A lip further down the feature must not lend its speed
+        // to a hillside crest back here, and a ramp cut off at a bend (fa.cut) or a berm / rock / tread is not a lip.
+        const tHere = ((faAt ? S.x : nx) - fa.x) * fa.dx + ((faAt ? S.z : nz) - fa.z) * fa.dz;
+        const hereH = fa.p(Math.max(0, Math.min(fa.L, tHere)), 0);
+        const onLip = !NOT_LIP.has(fa.kind) && !fa.groom && !fa.cut && peakT - tHere <= 1.8 && tHere <= peakT + 0.8 && hereH >= peak * 0.42;
+        if (peak > 0.08 && onLip){
           let t0 = 0, faceGrade = 0.12;
           for (let i = 0; i <= n; i++){ const t = peakT * i / n; if (fa.p(t, 0) < peak * 0.18) t0 = t; }
           // Steepest half-metre on the way UP. The half-metre under the wheels at the lip already sees the downslope and would clamp the launch to nothing.
@@ -1063,19 +1071,28 @@ function step(dt, inp){
     const edge = (ng - S.y) < -0.12 && (S.lastVyG - vyG)/dt > G_AIR*3 && S.speed > 1.5;   // rolling off a ledge/lip: the ground drops away faster than you can fall
     if (backFeat && !edge) crest = false;   // wrong-way over a jump: roll over it, never pop off its crest
     if (edge && !crest && S.rockT <= 0 && S.landCool <= 0) crest = true;   // never re-launch right after touching down (no landing bounce)
+    const atLip = !!lipInfo && !backFeat;
+    // Off a lip the bike only has the vertical speed it already carries: the grade it was just riding times its speed.
+    // The ground-follow speed alone can spike above that for a frame (wheel support catching up), and a crest
+    // must not turn that spike into a launch. A hillside crest gets nothing extra.
+    const pathVy = (g0 - groundH(S.x - fdx*0.6, S.z - fdz*0.6))/0.6 * S.speed + 0.3;
+    const carryVy = Math.min(S.lastVyG, pathVy);
     if (crest){ // only leave the ground if the ballistic path really clears the terrain (no micro-hops)
-      const vyPred = Math.max(S.lastVyG, lipInfo && !smallLip ? lipInfo.faceGrade * S.speed * 0.85 : 0);
+      const vyPred = atLip && !smallLip ? Math.max(S.lastVyG, lipInfo.faceGrade * S.speed * 0.85) : carryVy;
       let clear = 0; for (let t=0.03; t<=0.18; t+=0.03){ const bx=S.x+S.vx*t, bz=S.z+S.vz*t, by=S.y+vyPred*t-0.5*G_AIR*t*t; const gap_=by-groundH(bx,bz); if (t < 0.065 && gap_ < 0.03){ clear = 0; break; } clear=Math.max(clear, gap_); }
       // A real lip still launches when the landing ramp is already inside that short window. Rollers do not.
-      if (clear < 0.4 && !(lipInfo && lipInfo.h >= 0.7)) crest = false; }
+      if (clear < 0.4 && !(atLip && lipInfo.h >= 0.7)) crest = false; }
     if (pop > 0 || crest){
       S.air = true; S.airT = 0; S.takeoffPitch = S.pitch; S.spin = 0;
       // A charged hop adds height. Ground-follow can be largely negative where the lip
       // falls away; that must not turn the hop into a dive. A plain crest keeps the ramp's own vertical speed.
       const groundVy = backFeat ? Math.min(S.lastVyG, 0.1*S.speed) : S.lastVyG;
       // Face grade, not the half-metre sample at the crest (that one is already the downslope and reads as zero).
-      const gradeVy = lipInfo ? lipInfo.faceGrade * S.speed * (smallLip ? 0.5 : 0.9) : 0;
-      const lipVy = Math.min(vySmall, Math.max(0, groundVy, gradeVy, onFace ? faceG * S.speed * 0.85 : 0));
+      const gradeVy = atLip ? lipInfo.faceGrade * S.speed * (smallLip ? 0.5 : 0.9) : 0;
+      // A crest that is not a lip keeps the speed you already had, downhill included. Swapping a downhill
+      // speed for zero was an upward kick that threw riders off hilltops and over the trees.
+      const lipVy = atLip ? Math.min(vySmall, Math.max(0, groundVy, gradeVy, onFace ? faceG * S.speed * 0.85 : 0))
+        : (pop > 0 ? Math.max(0, groundVy) : Math.min(groundVy, carryVy));
       const popAdd = Math.min(pop, 2.0);
       S.vy = lipVy + popAdd;
       S.popped = pop > 0;

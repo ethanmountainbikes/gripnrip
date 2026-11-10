@@ -158,6 +158,12 @@ export const trails = TRAIL_DEFS.map((def, id) => {
     for (let i = 0; i < n; i++){ let a = 0, c = 0; for (let j = Math.max(0, i-3); j <= Math.min(n-1, i+3); j++){ const w = 4 - Math.abs(i-j); a += dev[j]*w; c += w; } h[i] += a/c; }   // soften the kinks (no crest launches)
     for (let i = 1; i < n; i++) h[i] = Math.min(h[i], h[i-1] - 0.04);   // never climbs
   }
+  // Round off the sharpest crests: a slope that steepens by more than 0.035 per 2 m sample is shaved down.
+  // A hill top this tight throws a fast rider off the ground, and on the 2 m terrain mesh it shows as a hard seam.
+  // Rampage lines (and hand-shaped pro lines) keep their raw ridges, cut chutes and ledges on purpose.
+  if (!RAMP && !def.shape) for (let pass = 0; pass < 24; pass++){ let moved = false;
+    for (let i = 1; i < n - 1; i++){ const dk = (2*h[i] - h[i-1] - h[i+1])/2; if (dk > 0.035){ h[i] -= dk - 0.034; moved = true; } }
+    if (!moved) break; }
   const yaw = pts.map((p,i) => { const a = pts[Math.max(0,i-1)], b = pts[Math.min(n-1,i+1)]; return Math.atan2(-(b[0]-a[0]), -(b[1]-a[1])); });
   return {...def, id, pts, h, yaw, len:(n-1)*2};
 });
@@ -519,7 +525,24 @@ function seatJumps(){
       if (n.d > W + 0.15 || Math.abs(wrap(Math.atan2(-f.dx, -f.dz) - n.yaw)) > angLim * 0.92) break;
       keep = t;
     }
-    if (keep >= 3 && keep < f.L - 0.25) f.L = keep;
+    if (keep >= 3 && keep < f.L - 0.25){
+      // Cut at a bend, the ramp would stop mid-face as a cliff, and that edge rode like a lip.
+      // Ease the last couple of metres back down to the tread instead. If the cut took the real lip
+      // with it (the first crest is in the eased part or beyond), what is left is not a lip at all.
+      const old = f.p, cut = keep, fade = Math.min(3.2, Math.max(1.6, cut * 0.5));
+      let peak = 0, peakT = 0;
+      for (let i = 1; i <= 28; i++){ const t = f.L * i / 28, h = old(t, 0);
+        if (h + 0.02 >= peak){ if (h > peak){ peak = h; peakT = t; } } else if (peak > 0.12 && t > peakT + 0.5) break; }
+      if (peakT > cut - fade) f.cut = true;
+      f.p = (t, us) => {
+        if (t < 0 || t > cut) return 0;
+        const h = old(t, us);
+        if (t <= cut - fade) return h;
+        const u = (t - (cut - fade)) / fade;
+        return h * (1 - u * u * (3 - 2 * u));
+      };
+      f.L = cut;
+    }
     featRetarget(f);
   }
 }
