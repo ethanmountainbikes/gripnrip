@@ -1,8 +1,13 @@
 // Cloud saves + leaderboards: one SQLite-backed Durable Object (free plan, strongly consistent, no extra API permission).
 // Privacy: save codes are never stored, only SHA-256(pepper + code). No IPs, emails or free text are stored; rate limits
-// are kept in memory only. Names are two indices into the client's preset word lists.
+// are kept in memory only. Names are two indices into the client's preset word lists, plus an optional custom rider name
+// (3-12 ASCII letters / digits, checked by the shared filter in names.js) that is unique, reportable and reviewable.
 import TRAILS from './trails.json';
 import { validateLevel, publicCodeOk, levelName, rateLevel, makeCode, ALPHA } from '../../level.js';
+import { checkName, nameKey } from '../../names.js';
+
+export const NAME_CHANGE_MS = 20 * 3600 * 1000;   // about once a day
+export const NAME_REPORTS_HIDE = 3;              // reports (one per device) before a name is hidden pending review
 
 const SAVE_CODE_RE = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{16}$/;
 const ID_RE = /^[a-z0-9:_-]{1,40}$/;
@@ -74,7 +79,13 @@ export class Store {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS levels (code TEXT PRIMARY KEY, id TEXT, ver INTEGER, na INTEGER, nb INTEGER, nc INTEGER, diff TEXT, style TEXT, likes INTEGER, reports INTEGER, hidden INTEGER, data TEXT, created INTEGER, updated INTEGER)`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS level_likes (code TEXT, h TEXT, PRIMARY KEY (code, h))`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS level_reports (code TEXT, h TEXT, PRIMARY KEY (code, h))`);
-    this.sql.exec(`CREATE TABLE IF NOT EXISTS level_times (code TEXT, ver INTEGER, h TEXT, ms INTEGER, at INTEGER, PRIMARY KEY (code, ver, h))`); }
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS level_times (code TEXT, ver INTEGER, h TEXT, ms INTEGER, at INTEGER, PRIMARY KEY (code, ver, h))`);
+    // Custom rider names, keyed to the save (player). name / lower are NULL after "back to generated name"; the row keeps
+    // the last change time for the once-a-day limit. lower is unique, so names are unique ignoring case.
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS names (h TEXT PRIMARY KEY, name TEXT, lower TEXT UNIQUE, reports INTEGER NOT NULL DEFAULT 0, hidden INTEGER NOT NULL DEFAULT 0, changed INTEGER NOT NULL DEFAULT 0)`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS name_reports (lower TEXT, dev TEXT, at INTEGER, PRIMARY KEY (lower, dev))`);
+    // Level times can carry the racer's save so level boards show names. Older rows have none.
+    try { this.sql.exec(`ALTER TABLE level_times ADD COLUMN sh TEXT`); } catch {} }
   // upsert a stat if it beats the stored one (lower for asc categories)
   put(c, w, t, h, name, v) { const C = CATS[c], prev = this.sql.exec('SELECT v FROM stats WHERE c = ? AND w = ? AND t = ? AND h = ?', c, w, t, h).toArray()[0];
     const better = !prev || (C.asc ? v < prev.v : v > prev.v);
@@ -113,7 +124,7 @@ export class Store {
         return json({ ok: true }); }
       case '/save/delete': {   // "delete my cloud data": the save and every leaderboard entry made with it
         if (!h) return json({ error: 'badcode' }, 400);
-        this.sql.exec('DELETE FROM saves WHERE h = ?', h); this.sql.exec('DELETE FROM stats WHERE h = ?', h);
+        this.sql.exec('DELETE FROM saves WHERE h = ?', h); this.sql.exec('DELETE FROM stats WHERE h = ?', h); this.sql.exec('DELETE FROM names WHERE h = ?', h);
         return json({ ok: true }); }
       case '/save/get': {
         if (!h) return json({ error: 'badcode' }, 400);
@@ -160,13 +171,20 @@ export class Store {
         const c = CATS[body.cat] ? body.cat : 'time', C = CATS[c], w = C.per === 'g' ? 2 : body.world === 1 ? 1 : 0, t = C.per === 'trail' && int(body.trail, 0, 63) ? body.trail : 0;
         if (!this.limit('lbget:' + ip, 90)) return json({ error: 'slow down' }, 429);
         return json({ ok: true, cat: c, ...this.board(c, w, t, h) }); }
+      case '/name/get': return this.nameGet(h);
+      case '/name/set': return this.nameSet(h, body, ip);
+      case '/name/clear': return this.nameClear(h);
+      case '/name/report': return this.nameReport(body, ip);
+      case '/admin/names': return this.nameAdmin(body);
       case '/level/publish': return this.publish(body, ip);
       case '/level/get': return this.levelGet(body);
       case '/level/list': return this.levelList(body);
       case '/level/search': return this.levelSearch(body);
       case '/level/like': return this.levelLike(body);
       case '/level/report': return this.levelReport(body);
-      case '/level/time': return this.levelTime(body);
+      case '/level/time': {   // body.code is the level; the racer's save code (optional) goes in body.savecode to name the row
+        const sc = typeof body.savecode === 'string' ? body.savecode.toUpperCase().replace(/[^A-Z0-9]/g, '') : '';
+        return this.levelTime(body, SAVE_CODE_RE.test(sc) ? await sha((this.env.PEPPER || 'gnr') + ':' + sc) : null); }
     }
     return json({ error: 'not found' }, 404);
   }
@@ -238,7 +256,7 @@ export class Store {
     }
     return json({ ok: true, reports, hidden: !!hidden });
   }
-  async levelTime(body){
+  async levelTime(body, sh){
     const code = typeof body.code === 'string' ? body.code.toUpperCase() : '';
     const h = await this.deviceHash(body.device);
     if (!publicCodeOk(code) || !h) return json({ error: 'bad' }, 400);
@@ -250,13 +268,70 @@ export class Store {
     const ms = Math.round(time * 1000);
     const prev = this.sql.exec('SELECT ms FROM level_times WHERE code = ? AND ver = ? AND h = ?', code, row.ver, h).toArray()[0];
     const better = !prev || ms < prev.ms;
-    if (better) this.sql.exec('INSERT INTO level_times (code, ver, h, ms, at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(code, ver, h) DO UPDATE SET ms = excluded.ms, at = excluded.at', code, row.ver, h, ms, Date.now());
-    const top = this.sql.exec('SELECT ms FROM level_times WHERE code = ? AND ver = ? ORDER BY ms ASC LIMIT 20', code, row.ver).toArray().map((r, i) => ({ rank: i + 1, v: r.ms / 1000 }));
+    const own = sh && this.sql.exec('SELECT h FROM saves WHERE h = ?', sh).toArray()[0] ? sh : null;   // only a real save names the row
+    if (better) this.sql.exec('INSERT INTO level_times (code, ver, h, ms, at, sh) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(code, ver, h) DO UPDATE SET ms = excluded.ms, at = excluded.at, sh = COALESCE(excluded.sh, level_times.sh)', code, row.ver, h, ms, Date.now(), own);
+    else if (own) this.sql.exec('UPDATE level_times SET sh = ? WHERE code = ? AND ver = ? AND h = ?', own, code, row.ver, h);
+    const top = this.sql.exec('SELECT t.h AS h, t.ms AS ms, t.sh AS sh, s.data AS data, n.name AS cn, n.hidden AS hid FROM level_times t LEFT JOIN saves s ON s.h = t.sh LEFT JOIN names n ON n.h = t.sh WHERE t.code = ? AND t.ver = ? ORDER BY t.ms ASC LIMIT 20', code, row.ver).toArray()
+      .map((r, i) => { const e = { rank: i + 1, v: r.ms / 1000, me: r.h === h };
+        if (r.data) { try { e.name = cleanSave(JSON.parse(r.data)).name; } catch {} }
+        if (r.cn && !r.hid) e.custom = r.cn;
+        return e; });
     return json({ ok: true, improved: better, version: row.ver, top });
+  }
+  // ---- custom rider names
+  nameRow(h){ return h ? this.sql.exec('SELECT * FROM names WHERE h = ?', h).toArray()[0] || null : null; }
+  nameState(r){ const now = Date.now(), next = r && r.changed ? r.changed + NAME_CHANGE_MS : 0;
+    return { ok: true, name: r && r.name || null, hidden: !!(r && r.hidden), nextChange: next > now ? next : 0 }; }
+  nameGet(h){ if (!h) return json({ error: 'badcode' }, 400); return json(this.nameState(this.nameRow(h))); }
+  nameSet(h, body, ip){
+    if (!h || !this.sql.exec('SELECT h FROM saves WHERE h = ?', h).toArray()[0]) return json({ error: 'nosave' }, 400);
+    if (!this.limit('name:' + ip, 10)) return json({ error: 'slow down' }, 429);
+    const chk = checkName(body.name);
+    if (!chk.ok) return json({ error: chk.reason }, 422);
+    const lower = nameKey(chk.name), r = this.nameRow(h), now = Date.now();
+    if (r && r.name === chk.name) return json(this.nameState(r));
+    if (r && r.changed && now - r.changed < NAME_CHANGE_MS) return json({ error: 'soon', nextChange: r.changed + NAME_CHANGE_MS }, 429);
+    const other = this.sql.exec('SELECT h FROM names WHERE lower = ?', lower).toArray()[0];
+    if (other && other.h !== h) return json({ error: 'taken' }, 409);
+    // a new name starts with no reports; reports against the old spelling stay with that spelling
+    this.sql.exec('INSERT INTO names (h, name, lower, reports, hidden, changed) VALUES (?, ?, ?, 0, 0, ?) ON CONFLICT(h) DO UPDATE SET name = excluded.name, lower = excluded.lower, reports = (SELECT COUNT(*) FROM name_reports WHERE lower = excluded.lower), hidden = 0, changed = excluded.changed', h, chk.name, lower, now);
+    const hiddenAlready = this.sql.exec('SELECT reports FROM names WHERE h = ?', h).toArray()[0].reports >= NAME_REPORTS_HIDE;
+    if (hiddenAlready) this.sql.exec('UPDATE names SET hidden = 1 WHERE h = ?', h);
+    return json(this.nameState(this.nameRow(h)));
+  }
+  nameClear(h){   // back to the generated name: releases the claim, keeps the change time
+    if (!h) return json({ error: 'badcode' }, 400);
+    this.sql.exec('UPDATE names SET name = NULL, lower = NULL, reports = 0, hidden = 0 WHERE h = ?', h);
+    return json(this.nameState(this.nameRow(h)));
+  }
+  async nameReport(body, ip){
+    const dev = await this.deviceHash(body.device), chk = checkName(body.name);
+    if (!dev || typeof body.name !== 'string' || !/^[A-Za-z0-9]{3,12}$/.test(body.name)) return json({ error: 'bad' }, 400);
+    if (!this.limit('nrep:' + ip, 20)) return json({ error: 'slow down' }, 429);
+    const lower = nameKey(body.name), r = this.sql.exec('SELECT h, reports, hidden FROM names WHERE lower = ?', lower).toArray()[0];
+    if (!r) return json({ error: 'missing' }, 404);
+    const had = this.sql.exec('SELECT dev FROM name_reports WHERE lower = ? AND dev = ?', lower, dev).toArray()[0];
+    if (!had) this.sql.exec('INSERT INTO name_reports (lower, dev, at) VALUES (?, ?, ?)', lower, dev, Date.now());
+    const reports = this.sql.exec('SELECT COUNT(*) AS n FROM name_reports WHERE lower = ?', lower).toArray()[0].n;
+    const hidden = r.hidden || reports >= NAME_REPORTS_HIDE || !chk.ok ? 1 : 0;   // a name the current filter refuses hides at once
+    this.sql.exec('UPDATE names SET reports = ?, hidden = ? WHERE h = ?', reports, hidden, r.h);
+    return json({ ok: true, already: !!had, hidden: !!hidden });
+  }
+  // Reviewer: needs the ADMIN secret (wrangler secret put ADMIN). list = hidden or reported names; clear = keep the name and
+  // drop its reports; remove = take the name away (the player is back on the generated name).
+  nameAdmin(body){
+    if (!this.env.ADMIN || typeof body.key !== 'string' || body.key !== this.env.ADMIN) return json({ error: 'not found' }, 404);
+    const lower = typeof body.name === 'string' ? nameKey(body.name) : '';
+    if (body.action === 'list') return json({ ok: true, names: this.sql.exec('SELECT name, reports, hidden, changed FROM names WHERE name IS NOT NULL AND (hidden = 1 OR reports > 0) ORDER BY hidden DESC, reports DESC LIMIT 200').toArray() });
+    if (!lower) return json({ error: 'name needed' }, 400);
+    if (body.action === 'clear') { this.sql.exec('DELETE FROM name_reports WHERE lower = ?', lower); this.sql.exec('UPDATE names SET reports = 0, hidden = 0 WHERE lower = ?', lower); return json({ ok: true }); }
+    if (body.action === 'remove') { this.sql.exec('DELETE FROM name_reports WHERE lower = ?', lower); this.sql.exec('UPDATE names SET name = NULL, lower = NULL, reports = 0, hidden = 0 WHERE lower = ?', lower); return json({ ok: true }); }
+    return json({ error: 'unknown action' }, 400);
   }
   board(c, w, t, h) {
     const C = CATS[c], ord = C.asc ? 'ASC' : 'DESC', cmp = C.asc ? '<' : '>';
-    const top = this.sql.exec(`SELECT h, na, nb, v FROM stats WHERE c = ? AND w = ? AND t = ? ORDER BY v ${ord}, at ASC LIMIT 20`, c, w, t).toArray().map((r, i) => ({ rank: i + 1, name: [r.na, r.nb], v: r.v / C.scale, me: r.h === h }));
+    const top = this.sql.exec(`SELECT s.h AS h, s.na AS na, s.nb AS nb, s.v AS v, n.name AS cn, n.hidden AS hid FROM stats s LEFT JOIN names n ON n.h = s.h WHERE s.c = ? AND s.w = ? AND s.t = ? ORDER BY s.v ${ord}, s.at ASC LIMIT 20`, c, w, t).toArray()
+      .map((r, i) => ({ rank: i + 1, name: [r.na, r.nb], ...(r.cn && !r.hid ? { custom: r.cn } : {}), v: r.v / C.scale, me: r.h === h }));
     const total = this.sql.exec('SELECT COUNT(*) AS n FROM stats WHERE c = ? AND w = ? AND t = ?', c, w, t).toArray()[0].n;
     let me = null; if (h) { const r = this.sql.exec('SELECT v FROM stats WHERE c = ? AND w = ? AND t = ? AND h = ?', c, w, t, h).toArray()[0];
       if (r) me = { v: r.v / C.scale, rank: this.sql.exec(`SELECT COUNT(*) AS n FROM stats WHERE c = ? AND w = ? AND t = ? AND v ${cmp} ?`, c, w, t, r.v).toArray()[0].n + 1 }; }
