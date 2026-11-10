@@ -92,7 +92,7 @@ export function initCloud(g){   // g: {toast, worldIdx, onBoard(res), reload}
   return { st, push, restore, wipe, on:f => st.listeners.add(f),
     jump(air, dist, tricks){ if (air > 0.35){ stat('air', +air.toFixed(3)); stat('dist', +dist.toFixed(2), {air:+air.toFixed(3)}); if (tricks > 0) stat('tricks', tricks, {air:+air.toFixed(3)}); } },
     speed(kmh){ stat('speed', +kmh.toFixed(1)); },
-    park(score, dur){ if (score > 0) stat('park', Math.round(score), {dur:+dur.toFixed(2)}); },
+    park(score, dur, layout){ if (!(score > 0)) return; const key = layout ? 'park:' + layout : 'park'; if (!better(key, Math.round(score), false)) return; NB(CATS.find(c => c.id === 'park').label, CATS.find(c => c.id === 'park').fmt(score)); queue(key, '/lb/stat', {cat:'park', val:Math.round(score), dur:+dur.toFixed(2)}); },
     trail(w, t, name, time, cps, combo, layout){   // finish: time board (+ combo). layout versions the local best so a changed trail starts clean.
       const tag = layout ? ':' + layout : '';
       const tk = `time:${w}:${t}${tag}`, ck = `combo:${w}:${t}${tag}`, nt = better(tk, +time.toFixed(3), true), nc = combo > 0 && better(ck, Math.round(combo), false);

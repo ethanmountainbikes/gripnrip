@@ -324,7 +324,7 @@ if (!RAMP) { const d = PARK.dir, yaw = Math.atan2(-d[0], -d[1]), sx = -d[1], sz 
     const deck = t => { if (pad === null) pad = terrainH(PARK.x, PARK.z); const k = Math.floor(t*4), f = t*4 - k; return Math.max(0, raw(k)*(1-f) + raw(k+1)*f); };
     const prof = {L: LIP+KN+LL, wood:true, p: t => t<0 ? 0 : t<=LIP ? deck(t) : t<=LIP+KN ? HK : t<=LIP+KN+LL ? (u => HK*(1 - u*u*(3-2*u)))((t-LIP-KN)/LL) : 0};
     const f = addFeature('drop', ox, oz, yaw, 2.4, prof, -1);
-    f.tower = true; PARK.drop = {x:f.x, z:f.z, dx:f.dx, dz:f.dz, L:prof.L, lip:LIP, h:HT, off, name:'Big Drop'}; }
+    f.tower = true; f.park = 'Big Drop'; PARK.drop = {x:f.x, z:f.z, dx:f.dx, dz:f.dz, L:prof.L, lip:LIP, h:HT, off, name:'Big Drop'}; }
   const rollin = (H) => ({L: 4 + 3 + 4*H, p: t => t<0 ? 0 : t<=4 ? H*t/4 : t<=7 ? H : t<=7+4*H ? H*0.5*(1+Math.cos(Math.PI*(t-7)/(4*H))) : 0});   // steep back, deck, long smooth roll-in
   // roll-in mound with a pedal-up access ramp at its back (12% grade, straight behind the mound on the line's own axis, away from every line):
   // the ramp climbs from the pad to the 3 m deck, then the long smooth roll-in drops into the line. Riding it backwards is a gentle 12% descent.
@@ -334,18 +334,24 @@ if (!RAMP) { const d = PARK.dir, yaw = Math.atan2(-d[0], -d[1]), sx = -d[1], sz 
       if (u < 4) return Math.max(0, deck - G*(4 - u) - base(ox + d[0]*u, oz + d[1]*u));
       return R.p(u); }}; };
   for (const ln of lines){ let t = -92; const ox = PARK.x + d[0]*t + sx*ln.off, oz = PARK.z + d[1]*t + sz*ln.off, pr = rollinRamp(ln.roll, ox, oz);
-    const r = addFeature('roller', ox - d[0]*pr.ramp, oz - d[1]*pr.ramp, yaw, 2.6, pr, -1); r.rollin = true; r.rampLen = pr.ramp; ln.start = t + 5.5; ln.rampFoot = {x: ox - d[0]*pr.ramp, z: oz - d[1]*pr.ramp};
+    const r = addFeature('roller', ox - d[0]*pr.ramp, oz - d[1]*pr.ramp, yaw, 2.6, pr, -1); r.rollin = true; r.rampLen = pr.ramp; r.park = ln.name; ln.start = t + 5.5; ln.rampFoot = {x: ox - d[0]*pr.ramp, z: oz - d[1]*pr.ramp};
     t += r.L - pr.ramp + 6;
-    for (let k = 0; k < ln.items.length && t < 62; k++){ const [kind, p, yo] = ln.items[k](k);
-      const f = addFeature(kind === 'spine' ? 'table' : kind, PARK.x + d[0]*t + sx*ln.off, PARK.z + d[1]*t + sz*ln.off, yaw + (yo || 0), kind === 'berm' ? 5 : 2.4, p, -1); f.park = ln.name; if (kind === 'kicker' && yo) f.hip = Math.abs(yo);
+    for (let k = 0; k < ln.items.length && t < 62; k++){ const [kind, p] = ln.items[k](k);
+      if (kind === 'berm') continue;   // the linking berms are laid with the packed tread, aimed along the line
+      const f = addFeature(kind === 'spine' ? 'table' : kind, PARK.x + d[0]*t + sx*ln.off, PARK.z + d[1]*t + sz*ln.off, yaw, kind === 'berm' ? 5 : 2.4, p, -1); f.park = ln.name; f.hip = 0;
       t += p.L + (kind === 'roller' ? 1 : 9); } }
-  // pump-track loop: steeper rollers around an oval, berms at the ends. Speed comes from timed pumping, not a motor.
-  { const cx = PARK.x + sx*56, cz = PARK.z + sz*56, A = 28, B = 10;
-    for (let k = 0; k < 18; k++){ const a = k/18*Math.PI*2, x = cx + d[0]*A*Math.cos(a) + sx*B*Math.sin(a), z = cz + d[1]*A*Math.cos(a) + sz*B*Math.sin(a);
-      const tx = -d[0]*A*Math.sin(a) + sx*B*Math.cos(a), tz = -d[1]*A*Math.sin(a) + sz*B*Math.cos(a), ty = Math.atan2(-tx, -tz);
-      if (Math.abs(Math.cos(a)) > 0.92) addFeature('berm', x, z, ty, 4.2, PROF.berm(1.35, 7, Math.cos(a) > 0 ? -1 : 1, 4.2), -1).park = 'Pump Track';
-      else addFeature('roller', x, z, ty, 2.3, PROF.roller(0.78, 4.4), -1).park = 'Pump Track'; }
-    PARK.pump = {x:cx, z:cz}; } }
+  // pump-track loop: one continuous packed oval. Rollers and berms rise out of the tread, so the surface never drops back to the flat pad.
+  { const cx = PARK.x + sx*56, cz = PARK.z + sz*56, A = 28, B = 10, N = 40;
+    const at = a => [cx + d[0]*A*Math.cos(a) + sx*B*Math.sin(a), cz + d[1]*A*Math.cos(a) + sz*B*Math.sin(a)];
+    for (let k = 0; k < N; k++){ const a0 = k/N*Math.PI*2, a1 = (k+1)/N*Math.PI*2, mid = (a0+a1)/2;
+      const [x, z] = at(a0), [x2, z2] = at(a1), chord = Math.hypot(x2-x, z2-z), yaw = Math.atan2(-(x2-x), -(z2-z));
+      const tight = Math.abs(Math.cos(mid)), peak = 0.16 + (1-tight)*0.62, bank = tight > 0.4 ? 0.2 + tight*1.25 : 0.06;
+      const fdx = -Math.sin(yaw), fdz = -Math.cos(yaw), side = ((fdz)*((x+x2)/2-cx) + (-fdx)*((z+z2)/2-cz)) >= 0 ? 1 : -1;
+      const len = chord + 1.2;
+      const f = addFeature('roller', x, z, yaw, 2.55, {L: len, p: (t, us) => { if (t < 0 || t > len) return 0; const u = Math.min(1, Math.max(0, t/chord));
+        return 0.14 + peak*Math.sin(Math.PI*u)**2 + bank*Math.max(0, Math.min(1, (side*us + 0.3)/2.3)); }}, -1);
+      f.park = 'Pump Track'; f.groom = true; f.pump = true; }
+    PARK.pump = {x:cx, z:cz, A, B}; } }
 // Rock shapes are the collision shapes. Small rocks are ground the wheels climb (a jolt and some speed loss, no launch).
 // Big rocks are solid: head-on is a crash, a glance pushes you off. Rock Garden is packed low angular slabs
 // across almost the whole tread, with the tall rocks kept off the riding line. Other gardens stay rounded.
@@ -432,6 +438,13 @@ function featRetarget(f){
 const LAND_KIND = new Set(['kicker','table','double','gap','stepup','stepdown','drop','rockdrop']);
 const _near = [];
 export const landingFixes = [];
+export function parkLayoutTag(){
+  let h = 2166136261;
+  for (const f of features){ if (!(f.park || f.groom)) continue;
+    const s = `${f.park}|${f.kind}|${Math.round(f.x)}|${Math.round(f.z)}|${Math.round((f.L || 0) * 10)}|${f.groom ? 1 : 0}`;
+    for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619); }
+  return (h >>> 0).toString(36).slice(0, 6);
+}
 export function layoutTag(trailId){
   let h = 2166136261;
   for (const f of features){ if (f.trail !== trailId) continue;
@@ -510,6 +523,64 @@ function seatJumps(){
   }
 }
 seatJumps();
+// Packed tread through the dirt-jump lines and the paths that join them. Heights are a max, so the ribbon shows in the gaps and the jumps stay on top of it.
+function groomPark(){
+  if (RAMP || !PARK.lines) return;
+  const d = PARK.dir, sx = -d[1], sz = d[0];
+  const along = (x, z) => (x - PARK.x) * d[0] + (z - PARK.z) * d[1];
+  const latOf = (x, z) => (x - PARK.x) * -d[1] + (z - PARK.z) * d[0];
+  const XZ = (t, lat) => [PARK.x + d[0] * t + sx * lat, PARK.z + d[1] * t + sz * lat];
+  const addGroom = (x, z, yaw, len, hw, name, bank) => {
+    const f = addFeature('roller', x, z, yaw, hw, { L: len, p: (t, us) => {
+      if (t < 0 || t > len) return 0;
+      const ae = Math.abs(us), lip = ae <= hw * 0.52 ? 0 : Math.min(1, (ae - hw * 0.52) / (hw * 0.48));
+      let h = 0.08 + 0.36 * lip * lip;
+      if (bank) h += bank.h * Math.max(0, Math.min(1, (bank.side * us + hw * 0.15) / hw));
+      return h;
+    } }, -1);
+    f.groom = true; f.park = name; f.tread = true; return f;
+  };
+  const lay = (pts, hw, name) => { for (let i = 0; i < pts.length - 1; i++){ const [x, z] = pts[i], [x2, z2] = pts[i + 1], len = Math.hypot(x2 - x, z2 - z); if (len < 0.35) continue;
+    addGroom(x, z, Math.atan2(-(x2 - x), -(z2 - z)), len + (i < pts.length - 2 ? 1.7 : 0.4), hw, name); } };
+  const samples = (t0, t1, lat, step) => { const pts = []; const n = Math.max(1, Math.ceil(Math.abs(t1 - t0) / step)), dir = t1 >= t0 ? 1 : -1;
+    for (let i = 0; i <= n; i++) pts.push(XZ(t0 + dir * Math.abs(t1 - t0) * i / n, lat)); return pts; };
+  const groups = new Map();
+  for (const f of features){ if (!f.park || f.groom || f.pump) continue; let g = groups.get(f.park); if (!g) groups.set(f.park, g = []); g.push(f); }
+  const lines = [];
+  for (const [name, fs] of groups){
+    const lat = fs.reduce((s, f) => s + latOf(f.x, f.z), 0) / fs.length;
+    let t0 = 1e9, t1 = -1e9;
+    for (const f of fs){ t0 = Math.min(t0, along(f.x, f.z)); t1 = Math.max(t1, along(f.x + f.dx * f.L, f.z + f.dz * f.L)); }
+    lines.push({ name, lat, t0, t1, wood: fs.every(f => f.wood) });
+  }
+  lines.sort((a, b) => a.lat - b.lat);
+  const dirt = lines.filter(l => l.name !== 'Big Drop');
+  for (const ln of lines){
+    if (ln.wood){ lay(samples(ln.t0 - 16, ln.t0 + 2, ln.lat, 6), 2.3, ln.name); continue; }
+    lay(samples(ln.t0 - 4, ln.t1 + 12, ln.lat, 7), 3.15, ln.name);
+  }
+  // A half-turn. bulge +1 swings downhill, -1 swings uphill, so the berms don't cut back through the jumps.
+  const turn = (t, lat0, lat1, bulge) => { const R = Math.abs(lat1 - lat0) / 2, n = 7, pts = [];
+    for (let i = 0; i <= n; i++){ const u = i / n; pts.push(XZ(t + bulge * R * Math.sin(Math.PI * u), lat0 + (lat1 - lat0) * u)); }
+    return pts; };
+  for (let i = 0; i < dirt.length - 1; i++){
+    const a = dirt[i], b = dirt[i + 1], mid = (a.lat + b.lat) / 2;
+    lay(turn(a.t1 + 12, a.lat, mid, 1), 2.3, a.name);
+    lay(samples(a.t1 + 12, b.t0, mid, 8), 2.2, 'Park link');
+    lay(turn(b.t0, mid, b.lat, -1), 2.3, b.name);
+  }
+  if (dirt.length){
+    const first = dirt[0], last = dirt[dirt.length - 1], north = last.lat + 12;
+    const barT = Math.min(...dirt.map(l => l.t0)) - 6;
+    lay(turn(last.t1 + 12, last.lat, north, 1), 2.2, last.name);
+    lay(samples(last.t1 + 12, barT, north, 8), 2.1, 'Park return');
+    const lats = [first.lat, ...dirt.map(l => l.lat), north];
+    lay([...new Set(lats)].sort((p, q) => p - q).map(lat => XZ(barT, lat)), 2.2, 'Park access');
+    if (PARK.pump){ const plat = latOf(PARK.pump.x, PARK.pump.z) - (PARK.pump.B || 10);
+      lay([XZ(-6, last.lat + 4), XZ(-6, plat), XZ(8, plat)], 2.2, 'Pump Track'); }
+  }
+}
+groomPark();
 for (const f of features) put(featGrid, f.minx, f.maxx, f.minz, f.maxz, f);
 
 // nearest point on each trail within reach: returns [{t, s, d, h}] (t = trail id, s = distance along, d = lateral distance, h = path height)
@@ -789,7 +860,7 @@ function pathForbidden(x, z){
   if (!RAMP && Math.hypot(x - PARK.x, z - PARK.z) < PARK.r + 4) return 'park';
   if (PARK.pump){ const dx = x - PARK.pump.x, dz = z - PARK.pump.z, along = dx * PARK.dir[0] + dz * PARK.dir[1], lat = dx * -PARK.dir[1] + dz * PARK.dir[0];
     if ((along / 36) ** 2 + (lat / 18) ** 2 < 1) return 'pump'; }
-  for (const f of features){ if (f.kind === 'berm' || f.rollin) continue;
+  for (const f of features){ if (f.kind === 'berm' || f.rollin || f.groom) continue;
     const t = (x - f.x) * f.dx + (z - f.z) * f.dz, u = Math.abs((x - f.x) * f.dz - (z - f.z) * f.dx);
     if (t > 0.5 && t < (f.L || 0) - 0.5 && u < (f.hw || 2) + 1.2) return 'feat'; }
   return '';
@@ -810,7 +881,7 @@ function pushClear(x, z){
   }
   for (let it = 0; it < 3 && pathForbidden(px, pz); it++){
     let best = null, bd = 1e9;
-    for (const f of features){ if (f.kind === 'berm' || f.rollin) continue;
+    for (const f of features){ if (f.kind === 'berm' || f.rollin || f.groom) continue;
       const t = (px - f.x) * f.dx + (pz - f.z) * f.dz; if (t < -2 || t > (f.L || 0) + 2) continue;
       const lat = (px - f.x) * f.dz - (pz - f.z) * f.dx, d = Math.abs(lat);
       if (d < bd){ bd = d; best = { f, lat }; } }

@@ -12,7 +12,7 @@ import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featBase, featAxis, BOULDERS, boulderH, rockTop, rockContact, bigBouldersNear, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL, LIFTS, connectors, CW, SHOP, WORLD, RAMPAGE, trailDist, layoutTag } from './world.js';
+import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featBase, featAxis, BOULDERS, boulderH, rockTop, rockContact, bigBouldersNear, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL, LIFTS, connectors, CW, SHOP, WORLD, RAMPAGE, trailDist, layoutTag, parkLayoutTag } from './world.js';
 import { loadBinds, proposeBind, swapBind, conflict, keyLabel, padLabel, actionLabel, ACTIONS, KB_DEFAULT, PAD_DEFAULT, spawnHold, clearSpawn, respawnChoice, rankedRun } from './binds.js';
 import { initSfx, setSfxVolume, updateSfx, sfxLand, sfxCrash, sfxLiftStart } from './sfx.js';
 const RAMP = WORLD === 'rampage';   // Red Bull Rampage-inspired desert world
@@ -332,7 +332,7 @@ const farU = { value: new THREE.Vector3(0,0,0) }; let FARMESH = null;
       for (let i=0;i<=NT;i++) for (let k=0;k<=NU;k++){ const t = i/NT*f.L, u = -UW + k/NU*2*UW, [x,z] = at(t,u), fh = featBase(x,z);
         const edge = k === 0 || k === NU || i === 0 || i === NT;
         buf.push(x, meshH(x,z) + fh + (edge ? -0.03 : 0.025), z);
-        if (!rockSkin){ c.copy(C_DIRT).lerp(C_DIRT2, 0.3 + 0.4*Math.sin(t*1.7+u)*Math.sin(u*2.1)); if (f.road && fh < 0.05 && Math.abs(u) < f.hw+0.6) c.setRGB(0.16,0.16,0.17); if (fh < 0.05) c.lerp(C_GRASS, 0.0); dc.push(c.r,c.g,c.b); } }
+        if (!rockSkin){ c.copy(C_DIRT).lerp(C_DIRT2, 0.3 + 0.4*Math.sin(t*1.7+u)*Math.sin(u*2.1)); if (f.groom){ const e = Math.min(1, Math.abs(u)/(f.hw+0.2)); c.setRGB(0.20+0.16*(1-e), 0.10+0.07*(1-e), 0.045); } if (f.road && fh < 0.05 && Math.abs(u) < f.hw+0.6) c.setRGB(0.16,0.16,0.17); if (fh < 0.05) c.lerp(C_GRASS, 0.0); dc.push(c.r,c.g,c.b); } }
       const up = (() => { const [x0,z0] = at(0,-UW), [x1,z1] = at(0,UW), [x2,z2] = at(1,-UW); return ((x1-x0)*(z2-z0) - (z1-z0)*(x2-x0)) < 0; })();
       for (let i=0;i<NT;i++) for (let k=0;k<NU;k++){ const a = b0+i*(NU+1)+k, b = a+1, e = a+NU+1, g = e+1; if (up) iv.push(a,b,e, b,g,e); else iv.push(a,e,b, b,e,g); }
     }
@@ -2002,7 +2002,7 @@ function shopProximity(dt){ S.shopCool = Math.max(0, (S.shopCool||0) - dt);
   const dx = S.x - (SHOP_POS.x - Math.sin(SHOP_POS.yaw)*8), dz = S.z - (SHOP_POS.z - Math.cos(SHOP_POS.yaw)*8);   // porch steps
   if (!shopOpen && S.shopCool <= 0 && !S.air && dx*dx + dz*dz < 9) openShop(); }
 S.score = LS.get('trailDescent.dollahs', 0); S.savedScore = S.score; applyBike(); S.best = LS.get('trailDescent.best.' + WORLD, {});
-function endParkLine(){ if (S.parkLine && CLOUD) CLOUD.park(S.parkLine.pts, Math.max(0.5, S.time - S.parkLine.t0)); S.parkLine = null; }
+function endParkLine(){ if (S.parkLine && CLOUD) CLOUD.park(S.parkLine.pts, Math.max(0.5, S.time - S.parkLine.t0), parkLayoutTag()); S.parkLine = null; }
 // ---------- multiplayer (net.js): private rooms, remote riders; stays solo if the server can't be reached ----------
 // ---------- cloud save + leaderboards (cloud.js) ----------
 let cloudShow = false, cloudDel = false; const LBV = {cat:0, trail:0, res:undefined, seq:0};

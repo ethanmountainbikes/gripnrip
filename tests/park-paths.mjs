@@ -21,7 +21,7 @@ function hits(world){
     if (PARK.pump){ const dx = p[0] - PARK.pump.x, dz = p[1] - PARK.pump.z;
       const along = dx * PARK.dir[0] + dz * PARK.dir[1], lat = dx * -PARK.dir[1] + dz * PARK.dir[0];
       if ((along / 36) ** 2 + (lat / 18) ** 2 < 1) bad.push('pump'); }
-    for (const f of features){ if (f.kind === 'berm' || f.rollin) continue;
+    for (const f of features){ if (f.kind === 'berm' || f.rollin || f.groom) continue;
       const t = (p[0] - f.x) * f.dx + (p[1] - f.z) * f.dz, u = Math.abs((p[0] - f.x) * f.dz - (p[1] - f.z) * f.dx);
       if (t > 1 && t < (f.L || 0) - 1 && u < (f.hw || 2) + 1) bad.push(f.kind); }
   }
@@ -33,7 +33,7 @@ globalThis.localStorage = { getItem: () => '"rampage"', setItem(){} };
 const { connectors, features, PARK, pathsRerouted } = await import('./world.js');
 let bad = 0;
 for (const c of connectors) for (const p of c.pts){
-  for (const f of features){ if (f.kind==='berm'||f.rollin) continue;
+  for (const f of features){ if (f.kind==='berm'||f.rollin||f.groom) continue;
     const t=(p[0]-f.x)*f.dx+(p[1]-f.z)*f.dz, u=Math.abs((p[0]-f.x)*f.dz-(p[1]-f.z)*f.dx);
     if (t>1 && t<(f.L||0)-1 && u<(f.hw||2)+1) bad++; }
 }
