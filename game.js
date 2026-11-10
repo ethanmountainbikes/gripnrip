@@ -13,6 +13,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featBase, featAxis, BOULDERS, boulderH, rockTop, rockContact, bigBouldersNear, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL, LIFTS, connectors, CW, SHOP, WORLD, RAMPAGE, trailDist, layoutTag } from './world.js';
+import { loadBinds, proposeBind, swapBind, conflict, keyLabel, padLabel, actionLabel, ACTIONS, KB_DEFAULT, PAD_DEFAULT, markerHold } from './binds.js';
 import { initSfx, setSfxVolume, updateSfx, sfxLand, sfxCrash, sfxLiftStart } from './sfx.js';
 const RAMP = WORLD === 'rampage';   // Red Bull Rampage-inspired desert world
 
@@ -35,7 +36,13 @@ let seed = 7; const rnd = () => (seed = (seed*16807) % 2147483647) / 2147483647;
 
 // ---------- settings (quality, inverts, volume) ----------
 const SETTINGS = Object.assign({gfx:'low', tod:'noon', fpsOn:false, invertY:false, invertX:false, volume:0.8, musicOn:true, musicVol:0.5, droneSpeed:12, droneTilt:12, droneDist:8, droneHeight:4, droneFly:'follow'}, LS.get('trailDescent.settings', {}));
+SETTINGS.binds = loadBinds(SETTINGS.binds);
 const saveSettings = () => LS.set('trailDescent.settings', SETTINGS);
+const kbBind = id => SETTINGS.binds.kb[id] || KB_DEFAULT[id];
+const padBind = id => SETTINGS.binds.pad[id] || PAD_DEFAULT[id];
+const KB_ALIAS = { steerLeft: ['ArrowLeft', 'KeyJ'], steerRight: ['ArrowRight', 'KeyL'], pedal: ['ArrowUp'], brake: ['ArrowDown'] };
+function keyDown(id){ if (keys[kbBind(id)]) return true; for (const a of KB_ALIAS[id] || []) if (keys[a]) return true; return false; }
+function hitBind(id, code){ return code === kbBind(id) || code === padBind(id); }
 const QUALITY = { low:{pr:0.75, shadow:0, tex:256, grassR:0, grassCell:2, post:false, rocks:10, bushes:10},
                   med:{pr:1.0, shadow:1024, tex:256, grassR:38, grassCell:1.0, post:false, rocks:22, bushes:26},
                   high:{pr:1.5, shadow:2048, tex:512, grassR:55, grassCell:0.75, post:true, rocks:34, bushes:40} };
@@ -454,11 +461,11 @@ function padMap(gp){
   const ax = i => gp.axes[i] || 0;
   if (gp.mapping === 'standard'){
     return { lx:ax(0), rx:ax(2), ry:ax(3), lt:bv(6), rt:bv(7),
-      ly:ax(1), btn:{A:bv(0)>0.5, B:bv(1)>0.5, X:bv(2)>0.5, Y:bv(3)>0.5, LB:bv(4)>0.5, RB:bv(5)>0.5, RS:bv(11)>0.5, Back:bv(8)>0.5, Start:bv(9)>0.5, DL:bv(14)>0.5, DR:bv(15)>0.5, DU:bv(12)>0.5, DD:bv(13)>0.5} };
+      ly:ax(1), btn:{A:bv(0)>0.5, B:bv(1)>0.5, X:bv(2)>0.5, Y:bv(3)>0.5, LB:bv(4)>0.5, RB:bv(5)>0.5, LS:bv(10)>0.5, RS:bv(11)>0.5, Back:bv(8)>0.5, Start:bv(9)>0.5, DL:bv(14)>0.5, DR:bv(15)>0.5, DU:bv(12)>0.5, DD:bv(13)>0.5} };
   }
   if (gp.axes.length >= 6){   // Firefox XInput-style: triggers on axes 2 & 5
     return { lx:ax(0), rx:ax(3), ry:ax(4), lt:trigAxis(gp,2), rt:trigAxis(gp,5),
-      ly:ax(1), btn:{A:bv(0)>0.5, B:bv(1)>0.5, X:bv(2)>0.5, Y:bv(3)>0.5, LB:bv(4)>0.5, RB:bv(5)>0.5, RS:bv(9)>0.5, Back:bv(6)>0.5, Start:bv(7)>0.5, ...dpadNS(gp, bv, 13, 14)} };
+      ly:ax(1), btn:{A:bv(0)>0.5, B:bv(1)>0.5, X:bv(2)>0.5, Y:bv(3)>0.5, LB:bv(4)>0.5, RB:bv(5)>0.5, LS:bv(8)>0.5, RS:bv(9)>0.5, Back:bv(6)>0.5, Start:bv(7)>0.5, ...dpadNS(gp, bv, 13, 14)} };
   }
   // other non-standard layouts: right stick on 2,3, triggers as buttons 6,7
   return { lx:ax(0), rx:ax(2), ry:ax(3), lt:Math.max(bv(6), 0), rt:Math.max(bv(7), 0),
@@ -499,33 +506,37 @@ function readInput(){
     if (!knownPads[gp.index]){ knownPads[gp.index]=true; toast('🎮 Controller connected: ' + gp.id.slice(0,40)); }
     const m = padMap(gp), rx = dz(m.rx, 0.2), ry = dz(m.ry);
     inp.steer += dz(m.lx); inp.lean += dz(m.ly);
-    inp.pedal = Math.max(inp.pedal, dz(m.rt, 0.12)); inp.brake = Math.max(inp.brake, dz(m.lt, 0.12));   // trigger deadzone: a resting trigger that reads 0.05-0.1 must not pedal
+    inp.lt = m.lt; inp.rt = m.rt; inp.lsHeld = !!m.btn.LS;
+    const brakePad = padBind('brake'), pedalPad = padBind('pedal');
+    inp.pedal = Math.max(inp.pedal, pedalPad === 'RT' ? dz(m.rt, 0.12) : pedalPad === 'LT' ? dz(m.lt, 0.12) : (m.btn[pedalPad] ? 1 : 0));
+    inp.brake = Math.max(inp.brake, brakePad === 'LT' ? dz(m.lt, 0.12) : brakePad === 'RT' ? dz(m.rt, 0.12) : (m.btn[brakePad] ? 1 : 0));
     if (m.btn.LB){ const mag = Math.hypot(rx,ry);   // LB + right stick: 8 directions (diagonals = tuck no-hander, X-up, nac-nac, tailwhip), RS click = barspin; stick amount = trick strength
       if (m.btn.RS){ inp.trick = 'bar'; inp.trickAmt = 1; }
       else if (mag > 0.35){ const sec = Math.round(Math.atan2(ry, rx)/(Math.PI/4)); inp.trick = {0:'right', 1:'dr', 2:'down', 3:'dl', 4:'left', '-4':'left', '-3':'ul', '-2':'up', '-1':'ur'}[sec]; inp.trickAmt = Math.min(1, (mag-0.35)/0.6); } }
     else { if (ry > 0.5) inp.pumpHold = true; if (ry < -0.5) inp.counter = true; inp.bank = rx; inp.rsy = ry; inp.ry = ry; }
     inp.dpx = (m.btn.DR?1:0) - (m.btn.DL?1:0); inp.dpy = (m.btn.DD?1:0) - (m.btn.DU?1:0); inp.lsx = dz(m.lx); inp.lsy = dz(m.ly);
+    inp.pad = m.btn;
     inp.hold.DU = !!m.btn.DU; inp.hold.DD = !!m.btn.DD; inp.hold.DL = !!m.btn.DL; inp.hold.DR = !!m.btn.DR; inp.hold.Back = !!m.btn.Back;
-    for (const name of ['A','B','X','Y','Start','Back','DL','DR','DU','DD','LB','RB']){ const now=!!m.btn[name], key=gp.index+'_'+name; if(now && !prevBtn[key]) inp.pressed[name]=true; prevBtn[key]=now; }
+    for (const name of ['A','B','X','Y','Start','Back','DL','DR','DU','DD','LB','RB','LS','RS']){ const now=!!m.btn[name], key=gp.index+'_'+name; if(now && !prevBtn[key]) inp.pressed[name]=true; prevBtn[key]=now; }
     break; }
-  if (keys.KeyA||keys.ArrowLeft) inp.steer -= 1; if (keys.KeyD||keys.ArrowRight) inp.steer += 1;
-  if (keys.KeyW||keys.ArrowUp) inp.pedal = 1; if (keys.KeyS||keys.ArrowDown) inp.brake = 1;
-  if (keys.KeyI) inp.kbFlip -= 1; if (keys.KeyK) inp.kbFlip += 1;
-  if (keys.KeyJ) inp.steer -= 1; if (keys.KeyL) inp.steer += 1;
-  if (keys.ShiftLeft||keys.ShiftRight) inp.counter = true;
-  if (keys.KeyQ) inp.bank -= 1; if (keys.KeyE) inp.bank += 1;
-  if (keys.KeyC){ const u = keys.KeyI||keys.ArrowUp, d = keys.KeyK||keys.ArrowDown, l = keys.KeyJ||keys.ArrowLeft, r = keys.KeyL||keys.ArrowRight;
-    const t = keys.KeyU ? 'bar' : u && l ? 'ul' : u && r ? 'ur' : d && l ? 'dl' : d && r ? 'dr' : u ? 'up' : d ? 'down' : l ? 'left' : r ? 'right' : null; if (t){ inp.trick = t; inp.trickAmt = 1; } }
-  if (keys.Space) inp.pumpHold = true;
-  if (!keys.Space && kbSpacePrev) inp.pop = true;
-  kbSpacePrev = !!keys.Space;
+  if (keyDown('steerLeft')) inp.steer -= 1; if (keyDown('steerRight')) inp.steer += 1;
+  if (keyDown('pedal')) inp.pedal = 1; if (keyDown('brake')) inp.brake = 1;
+  if (keyDown('flipForward')) inp.kbFlip -= 1; if (keyDown('flipBack')) inp.kbFlip += 1;
+  if (keyDown('counter') || keys.ShiftRight) inp.counter = true;
+  if (keyDown('leanLeft')) inp.bank -= 1; if (keyDown('leanRight')) inp.bank += 1;
+  if (keyDown('trick')){ const u = keyDown('flipForward')||keys.ArrowUp, d = keyDown('flipBack')||keys.ArrowDown, l = keyDown('steerLeft'), r = keyDown('steerRight');
+    const t = keyDown('barspin') ? 'bar' : u && l ? 'ul' : u && r ? 'ur' : d && l ? 'dl' : d && r ? 'dr' : u ? 'up' : d ? 'down' : l ? 'left' : r ? 'right' : null; if (t){ inp.trick = t; inp.trickAmt = 1; } }
+  if (keyDown('pump')) inp.pumpHold = true;
+  if (!keyDown('pump') && kbSpacePrev) inp.pop = true;
+  kbSpacePrev = keyDown('pump');
+  inp.hold.T = keyDown('emote');
   inp.steer = THREE.MathUtils.clamp(inp.steer,-1,1); inp.lean = THREE.MathUtils.clamp(inp.lean + inp.kbFlip,-1,1);
   inp.bank = THREE.MathUtils.clamp(inp.bank || 0,-1,1); inp.tweak = THREE.MathUtils.clamp(inp.tweak,-1,1);
   inp.lyRaw = inp.lean; inp.bankRaw = inp.bank;
   if (SETTINGS.invertY) inp.lean = -inp.lean; if (SETTINGS.invertX) inp.bank = -inp.bank;   // Settings: invert options (input mapping only)
   // Physical stick up is negative Y. A wheelie arms only when both sticks leave center
   // together and stay up. A right-stick hop is down first, then up, and that up is not a wheelie.
-  // Left stick up on its own is just lean. Keyboard K is separate and unchanged.
+  // Left stick up on its own is just lean. The keyboard backflip key wheelies on the ground.
   const lyS = inp.lsy || 0, ryS = inp.ry || 0, nowMs = performance.now();
   const lsUp = lyS <= -0.62, rsUp = ryS <= -0.62, rsDown = ryS >= 0.5;
   if (rsDown){ stickGate.downAt = nowMs; stickGate.ready = false; }
@@ -534,7 +545,11 @@ function readInput(){
   else if ((lsUp || rsUp) && !(lsUp && rsUp)) stickGate.ready = false;
   if (rsUp && recentDown) inp.pop = true;
   inp.wheelieChord = lsUp && rsUp && stickGate.ready && !recentDown && !inp.trick;
-  inp.kbWheelie = !!keys.KeyK && !inp.trick;
+  inp.kbWheelie = keyDown('flipBack') && !inp.trick;
+  const held = name => name === 'LT' ? (inp.lt || 0) > 0.45 : name === 'RT' ? (inp.rt || 0) > 0.45 : name === 'LS' ? !!inp.lsHeld : !!(inp.pad && inp.pad[name]);
+  inp.markerClick = held(padBind('markerClick'));
+  inp.markerMod = held(padBind('markerMod'));
+  inp.droneHeld = held(padBind('drone'));
   if (inp.wheelieChord || inp.kbWheelie){ inp.pumpHold = false; inp.pop = false; inp.counter = false; }
   if (window.__forceInp) Object.assign(inp, window.__forceInp);
   return inp;
@@ -645,26 +660,25 @@ function onPress(code){
   if (shopOpen){ shopKey(code); return; }
   if (bigMap.open){ mapKey(code); return; }
   if (menu.open){ menuKey(code); return; }
-  if (code==='KeyM' && S.state==='riding' && !S.lift && !bigMap.open){ openMap(); return; }
+  if (hitBind('marker', code) && S.state==='riding'){ placeMarker(S.x, S.z); return; }
+  if (hitBind('map', code) && S.state==='riding' && !S.lift && !bigMap.open){ openMap(); return; }
   if (code==='Back' && bigMap.open){ closeMap(); return; }
-  if (code==='KeyZ' && S.state==='riding' && !menu.open && !shopOpen && !bigMap.open){ toggleDrone(); return; }
-  if (code==='Y' && S.paused){ $('help').classList.toggle('hidden'); return; }   // help moved into the pause menu on the controller
-  if ((code==='X'||code==='KeyO') && (S.state==='menu' || S.paused)){ openShop(); return; }
-  if (code==='KeyO' && S.state==='riding'){ openShop(); return; }
+  if (hitBind('drone', code) && S.state==='riding' && !menu.open && !shopOpen && !bigMap.open){ toggleDrone(); return; }
+  if (hitBind('help', code) || (code==='Y' && S.paused)){ $('help').classList.toggle('hidden'); return; }
+  if (code === kbBind('shop') && (S.state==='menu' || S.paused || S.state==='riding')){ openShop(); return; }
+  if (code === padBind('shop') && (S.state==='menu' || S.paused)){ openShop(); return; }
   if (code==='Enter' || code==='A'){ if (S.state==='menu'||S.state==='over'||S.state==='finished'){ resetGame(); return; } }
   if (code==='Space' && (S.state==='menu'||S.state==='over'||S.state==='finished')) { resetGame(); return; }
-  if (code==='KeyP'||code==='Escape'||code==='Start') togglePause();
-  if (code==='KeyV'||code==='Y'){   // (C is the keyboard trick modifier, so the camera stays on V)
+  if (hitBind('pause', code) || code==='Escape' || code==='Start') togglePause();
+  if (hitBind('camera', code)){
   camMode = (camMode+1)%CAM_NAMES.length; LS.set('trailDescent.cam', camMode); camInit = false; drone.t = 0; toast('🎥 Camera: ' + CAM_NAMES[camMode]); }
-  if (code==='KeyX'||code==='X') camInit = false;
-  if (code==='KeyH') $('help').classList.toggle('hidden');
-  if ((code==='KeyR'||code==='B') && S.state==='riding' && !S.paused) { respawnSafe(); flash('RESPAWN',0.8); }
-  // teleport between spots: D-pad ← → on the controller, [ ] / , . or 1-8 on the keyboard
-  if (S.state==='riding' && !S.paused && code==='KeyG') DRV.manual(+1);
-  if (S.state==='riding' && !S.paused && (code==='DD'||code==='KeyF')) DRV.manual(-1);
+  if (hitBind('camReset', code)) camInit = false;
+  if ((hitBind('respawn', code)) && S.state==='riding' && !S.paused) { respawnSafe(); flash('RESPAWN',0.8); }
+  if (S.state==='riding' && !S.paused && hitBind('gearUp', code)) DRV.manual(+1);
+  if (S.state==='riding' && !S.paused && hitBind('gearDown', code)) DRV.manual(-1);
   if (S.state==='riding' && !S.paused){
-    if (code==='DL'||code==='BracketLeft'||code==='Comma') teleport(nextOpen(spotI,-1));
-    if (code==='DR'||code==='BracketRight'||code==='Period') teleport(nextOpen(spotI,1));
+    if (hitBind('spotPrev', code) || code==='Comma') teleport(nextOpen(spotI,-1));
+    if (hitBind('spotNext', code) || code==='Period') teleport(nextOpen(spotI,1));
     const m = /^Digit([0-9])$/.exec(code), num = m ? (+m[1]||10) + (keys.ShiftLeft||keys.ShiftRight ? 10 : 0) : 0; if (m && num <= spots.length){ const j = num-1; /* 1-9,0 = spots 1-10; Shift+1-5 = spots 11-15 */ if (isOpen(j)) teleport(j); else toast(`🔒 ${spots[j].name} is locked — ${lockMsg(spotTrail(j))}`); }
   } else if (S.state==='menu' && (code==='DL'||code==='DR'||code==='BracketLeft'||code==='BracketRight')){
     spotI = nextOpen(spotI, code==='DL'||code==='BracketLeft' ? -1 : 1); $('overlayMsg').innerHTML = menuMsg(); }
@@ -693,8 +707,8 @@ function toggleDrone(){
   const fx = -Math.sin(S.yaw), fz = -Math.cos(S.yaw);
   D.x = S.x - fx * 3; D.z = S.z - fz * 3; D.y = Math.max(S.y + 3, groundH(D.x, D.z) + 2);
   FPV.group.visible = true;
-  if (D.manual){ S.speed = 0; S.vx = S.vz = S.vy = 0; S.air = false; S.y = groundH(S.x, S.z); toast('FPV drone — manual. Z or hold View to put it away'); }
-  else toast('FPV drone — following. Z or hold View to put it away');
+  if (D.manual){ S.speed = 0; S.vx = S.vz = S.vy = 0; S.air = false; S.y = groundH(S.x, S.z); toast('FPV drone — manual. ' + keyLabel(kbBind('drone')) + ' or hold ' + padLabel(padBind('drone')) + ' to put it away'); }
+  else toast('FPV drone — following. ' + keyLabel(kbBind('drone')) + ' or hold ' + padLabel(padBind('drone')) + ' to put it away');
 }
 function flyDrone(dt, inp){
   const D = FPV.state; if (!D.on){ FPV.group.visible = false; return; }
@@ -1134,9 +1148,10 @@ function frame(){
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, clock.getDelta());
   const inp = readInput(); if (Object.keys(inp.pressed).length) startMusic();
+  if (S.state === 'riding' && !menu.open && !shopOpen) markerFrame(inp);
   emoteFrame(dt, inp);
   for (const k in inp.pressed) onPress(k);
-  if (inp.hold && inp.hold.Back && S.state==='riding' && !menu.open && !shopOpen && !bigMap.open) backHold += dt;
+  if (inp.droneHeld && S.state==='riding' && !menu.open && !shopOpen && !bigMap.open) backHold += dt;
   else {
     if (backWas && S.state==='riding' && !menu.open && !shopOpen && !bigMap.open){
       if (backHold >= 0.45) toggleDrone();
@@ -1317,7 +1332,9 @@ function drawMinimap(){
     const tr = s.trail !== undefined ? trails[s.trail] : s.name.startsWith('Dirt') ? PARK : null;     // difficulty icon next to each spot
     if (tr){ const d = DIFF[tr.diff]; mmx.font = 'bold 9px Arial'; mmx.lineWidth = 2; mmx.strokeStyle = '#fff'; mmx.fillStyle = d.color; mmx.globalAlpha = open ? 1 : 0.6;
       mmx.strokeText(d.icon, px+12, pz+3); mmx.fillText(d.icon, px+12, pz+3); mmx.globalAlpha = 1; mmx.font = 'bold 10px Arial'; } });
-  waypoints.forEach(w => { const px = (w.x+HALF)/sc, pz = (w.z+HALF)/sc; mmx.fillStyle = '#3ef0ff'; mmx.strokeStyle = '#003'; mmx.lineWidth = 1.5; mmx.beginPath(); mmx.moveTo(px, pz-6); mmx.lineTo(px+5, pz); mmx.lineTo(px, pz+6); mmx.lineTo(px-5, pz); mmx.closePath(); mmx.fill(); mmx.stroke(); });
+  const pin = (x, z, fill) => { const px = (x+HALF)/sc, pz = (z+HALF)/sc; mmx.fillStyle = fill; mmx.strokeStyle = '#003'; mmx.lineWidth = 1.5; mmx.beginPath(); mmx.moveTo(px, pz-6); mmx.lineTo(px+5, pz); mmx.lineTo(px, pz+6); mmx.lineTo(px-5, pz); mmx.closePath(); mmx.fill(); mmx.stroke(); };
+  waypoints.forEach(w => pin(w.x, w.z, '#3ef0ff'));
+  if (personal) pin(personal.x, personal.z, '#ff9a3c');
   mmx.textAlign = 'start';
   mmx.save(); mmx.translate(a,b); mmx.rotate(-yw); mmx.fillStyle = '#ffd84d'; mmx.strokeStyle = '#000'; mmx.lineWidth = 1;
   mmx.beginPath(); mmx.moveTo(0,-7); mmx.lineTo(4.5,5); mmx.lineTo(-4.5,5); mmx.closePath(); mmx.fill(); mmx.stroke(); mmx.restore();
@@ -1326,9 +1343,36 @@ function drawMinimap(){
 const bigMap = { open:false, cx:0, cz:0, wasPaused:false, mouse:false };
 const WP_KEY = 'trailDescent.waypoints', WP_MAX = 3;
 const waypoints = (LS.get(WP_KEY, []) || []).filter(w => Number.isFinite(w.x) && Number.isFinite(w.z)).slice(0, WP_MAX);
+let personal = LS.get('trailDescent.marker', null);
+if (!personal || !Number.isFinite(personal.x) || !Number.isFinite(personal.z)) personal = null;
+const markerState = { marker: personal, latch: false };
 const wpBeacons = [];
 const beaconMat = new THREE.MeshBasicMaterial({color:0x3ef0ff, transparent:true, opacity:0.45, blending:THREE.AdditiveBlending, depthWrite:false, fog:false});
 const beaconCore = new THREE.MeshBasicMaterial({color:0xbaffff, transparent:true, opacity:0.8, blending:THREE.AdditiveBlending, depthWrite:false, fog:false});
+const markerMat = new THREE.MeshBasicMaterial({color:0xff9a3c, transparent:true, opacity:0.5, blending:THREE.AdditiveBlending, depthWrite:false, fog:false});
+const markerCore = new THREE.MeshBasicMaterial({color:0xffe0b0, transparent:true, opacity:0.85, blending:THREE.AdditiveBlending, depthWrite:false, fog:false});
+function syncPersonal(){
+  for (let i = wpBeacons.length - 1; i >= 0; i--) if (wpBeacons[i].personal){ scene.remove(wpBeacons[i].g); wpBeacons[i].el.remove(); wpBeacons.splice(i, 1); }
+  LS.set('trailDescent.marker', personal); markerState.marker = personal;
+  if (!personal) return;
+  const g = new THREE.Group(), y = terrainH(personal.x, personal.z);
+  const outer = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 260, 16, 1, true), markerMat); outer.position.y = 130; g.add(outer);
+  const core = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 260, 8, 1, true), markerCore); core.position.y = 130; g.add(core);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(3, 0.25, 6, 32), markerCore); ring.rotation.x = Math.PI/2; ring.position.y = 0.4; g.add(ring);
+  g.position.set(personal.x, y, personal.z); scene.add(g);
+  const el = document.createElement('div'); el.className = 'wpMarker'; el.innerHTML = '<b>★</b><span></span>'; $('wpMarkers').appendChild(el);
+  wpBeacons.push({g, ring, el, w: personal, personal: true});
+}
+function placeMarker(x, z){
+  const next = markerHold({ marker: personal, latch: false }, true, true, x, z);
+  personal = next.marker;
+  toast(next.event === 'remove' ? '★ Marker removed' : '★ Marker set');
+  syncPersonal();
+}
+function markerFrame(inp){
+  const r = markerHold(markerState, !!inp.markerClick, !!inp.markerMod, S.x, S.z);
+  if (r.event === 'place' || r.event === 'remove'){ personal = r.marker; toast(r.event === 'remove' ? '★ Marker removed' : '★ Marker set'); syncPersonal(); }
+}
 function syncBeacons(){ for (const b of wpBeacons) scene.remove(b.g); wpBeacons.length = 0; $('wpMarkers').innerHTML = '';
   waypoints.forEach((w, i) => { const g = new THREE.Group(), y = terrainH(w.x, w.z);
     const outer = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 260, 16, 1, true), beaconMat); outer.position.y = 130; g.add(outer);
@@ -1336,7 +1380,7 @@ function syncBeacons(){ for (const b of wpBeacons) scene.remove(b.g); wpBeacons.
     const ring = new THREE.Mesh(new THREE.TorusGeometry(3, 0.25, 6, 32), beaconCore); ring.rotation.x = Math.PI/2; ring.position.y = 0.4; g.add(ring);
     g.position.set(w.x, y, w.z); scene.add(g);
     const el = document.createElement('div'); el.className = 'wpMarker'; el.innerHTML = `<b>◆ ${i+1}</b><span></span>`; $('wpMarkers').appendChild(el);
-    wpBeacons.push({g, ring, el, w}); }); LS.set(WP_KEY, waypoints); }
+    wpBeacons.push({g, ring, el, w}); }); LS.set(WP_KEY, waypoints); syncPersonal(); }
 function toggleWaypointAt(x, z){ const scr = mapScale(); const hit = waypoints.findIndex(w => Math.hypot(w.x-x, w.z-z)*scr.s < 14);
   if (hit >= 0){ waypoints.splice(hit, 1); toast('◆ Waypoint removed'); }
   else { if (waypoints.length >= WP_MAX) waypoints.shift(); waypoints.push({x, z}); toast(`◆ Waypoint set (${waypoints.length}/${WP_MAX})`); }
@@ -1344,7 +1388,7 @@ function toggleWaypointAt(x, z){ const scr = mapScale(); const hit = waypoints.f
 const _wv = new THREE.Vector3();
 function updateWaypoints(dt){ const W_ = innerWidth, H_ = innerHeight;
   for (let i = wpBeacons.length-1; i >= 0; i--){ const b = wpBeacons[i], d = Math.hypot(S.x-b.w.x, S.z-b.w.z);
-    if (d < 12 && S.state === 'riding' && !S.lift){ waypoints.splice(waypoints.indexOf(b.w), 1); toast('◆ Waypoint reached!'); syncBeacons(); return; }
+    if (!b.personal && d < 12 && S.state === 'riding' && !S.lift){ waypoints.splice(waypoints.indexOf(b.w), 1); toast('◆ Waypoint reached!'); syncBeacons(); return; }
     b.ring.rotation.z += dt; b.ring.scale.setScalar(1 + 0.15*Math.sin(performance.now()/300));
     _wv.set(b.w.x, terrainH(b.w.x, b.w.z) + 4, b.w.z).project(camera);
     let x = (_wv.x*0.5 + 0.5)*W_, y = (-_wv.y*0.5 + 0.5)*H_; const behind = _wv.z > 1, m = 40;
@@ -1364,16 +1408,19 @@ function mapTeleport(){ const {s} = mapScale(); let best = -1, bd = 1e9; spots.f
   if (best < 0){ toast('Move the cursor onto a spot to teleport'); return; }
   if (!isOpen(best)){ toast(`🔒 ${spots[best].name} is locked — ${lockMsg(spotTrail(best))}`); return; }
   closeMap(); teleport(best); }
+function nearPersonal(){ if (!personal) return false; const {s} = mapScale(); return Math.hypot(personal.x - bigMap.cx, personal.z - bigMap.cz) * s < 16; }
+function mapPick(){ if (nearPersonal()){ personal = null; markerState.latch = false; toast('★ Marker removed'); syncPersonal(); return; } toggleWaypointAt(bigMap.cx, bigMap.cz); }
 function mapKey(code){
-  if (code==='B'||code==='KeyM'||code==='Back'||code==='Escape') closeMap();
+  if (hitBind('marker', code)){ placeMarker(S.x, S.z); return; }
+  if (code==='B'||code===kbBind('map')||code===padBind('map')||code==='Escape') closeMap();
   else if (code==='A'||code==='Enter'||code==='Space') mapTeleport();
-  else if (code==='X'||code==='KeyW') toggleWaypointAt(bigMap.cx, bigMap.cz); }
+  else if (code==='X'||code==='KeyW') mapPick(); }
 bm.addEventListener('mousemove', e => { const {s, ox, oy} = mapScale(); bigMap.cx = (e.clientX - ox)/s - HALF; bigMap.cz = (e.clientY - oy)/s - HALF; bigMap.mouse = true; });
-bm.addEventListener('click', e => { if (bigMap.open) toggleWaypointAt(bigMap.cx, bigMap.cz); });
+bm.addEventListener('click', e => { if (bigMap.open) mapPick(); });
 bm.addEventListener('dblclick', e => { if (bigMap.open) mapTeleport(); });
 function mapFrame(dt, inp){
   if (bm.width !== innerWidth || bm.height !== innerHeight){ bm.width = innerWidth; bm.height = innerHeight; }
-  const kx = (keys.ArrowRight?1:0) - (keys.ArrowLeft?1:0) + (keys.KeyD?1:0) - (keys.KeyA?1:0), ky = (keys.ArrowDown?1:0) - (keys.ArrowUp?1:0) + (keys.KeyS?1:0);
+  const kx = (keyDown('steerRight')?1:0) - (keyDown('steerLeft')?1:0), ky = (keyDown('brake')?1:0) - (keyDown('pedal')?1:0);
   const vx = (inp.lsx||0) + (inp.dpx||0) + kx, vz = (inp.lsy||0) + (inp.dpy||0) + ky, sp = 600;
   bigMap.cx = Math.max(-HALF, Math.min(HALF, bigMap.cx + vx*sp*dt)); bigMap.cz = Math.max(-HALF, Math.min(HALF, bigMap.cz + vz*sp*dt));
   const {s, ox, oy, sz} = mapScale(), P = (x, z) => [ox + (x+HALF)*s, oy + (z+HALF)*s], c = bmx;
@@ -1402,7 +1449,9 @@ function mapFrame(dt, inp){
   c.textAlign = 'center'; c.font = 'bold 11px "Barlow Condensed", sans-serif';
   spots.forEach((p, i) => { const [a,b] = P(p.x, p.z), open = isOpen(i); c.fillStyle = open ? '#fff' : 'rgba(60,60,60,.9)'; c.beginPath(); c.arc(a, b, 8, 0, 7); c.fill(); c.strokeStyle = '#000'; c.lineWidth = 1; c.stroke(); c.fillStyle = open ? '#000' : '#bbb'; c.fillText(open ? String(i+1) : '🔒', a, b+4); });
   // waypoints
-  waypoints.forEach((w, i) => { const [a,b] = P(w.x, w.z); c.fillStyle = '#3ef0ff'; c.strokeStyle = '#003'; c.lineWidth = 2; c.beginPath(); c.moveTo(a, b-9); c.lineTo(a+7, b); c.lineTo(a, b+9); c.lineTo(a-7, b); c.closePath(); c.fill(); c.stroke(); c.fillStyle = '#003'; c.fillText(String(i+1), a, b+4); });
+  const pinBig = (x, z, fill, label) => { const [a,b] = P(x, z); c.fillStyle = fill; c.strokeStyle = '#003'; c.lineWidth = 2; c.beginPath(); c.moveTo(a, b-9); c.lineTo(a+7, b); c.lineTo(a, b+9); c.lineTo(a-7, b); c.closePath(); c.fill(); c.stroke(); c.fillStyle = '#003'; c.fillText(label, a, b+4); };
+  waypoints.forEach((w, i) => pinBig(w.x, w.z, '#3ef0ff', String(i+1)));
+  if (personal) pinBig(personal.x, personal.z, '#ff9a3c', '★');
   // rider position + heading
   { const [a,b] = P(S.x, S.z); c.save(); c.translate(a, b); c.rotate(-(S.yaw + (S.spin||0))); c.fillStyle = '#ffd84d'; c.strokeStyle = '#000'; c.lineWidth = 1.5; c.beginPath(); c.moveTo(0,-11); c.lineTo(7,8); c.lineTo(-7,8); c.closePath(); c.fill(); c.stroke(); c.restore(); }
   // cursor + hover info
@@ -1411,13 +1460,13 @@ function mapFrame(dt, inp){
     const dist = Math.round(Math.hypot(bigMap.cx - S.x, bigMap.cz - S.z)); c.textAlign = 'left'; c.font = 'bold 13px "Barlow Condensed", sans-serif'; c.fillStyle = '#fff'; c.strokeStyle = '#000'; c.lineWidth = 3;
     const t = hov >= 0 ? `${spots[hov].name} — ${isOpen(hov) ? 'A / Enter: teleport' : '🔒 locked'}` : `${dist} m away`; c.strokeText(t, a+16, b-14); c.fillText(t, a+16, b-14); }
   // legend
-  const lx = innerWidth - 270, rows = [['━', '#fff', 'Trail (dashed + 🔒 = locked)'], ['▲', '#f2b800', 'Checkpoint'], ['■', '#e53935', 'Lift station (dashed line = lift)'], ['─', '#ebd7aa', 'Connector path'], ...(RAMP ? [['◯', '#d9772b', 'Finish corral']] : [['●', '#a06e3c', 'Dirt Jump Park']]), ['🚲', '#fff', 'Bike Shop'], ['①', '#fff', 'Teleport spot'], ['◆', '#3ef0ff', `Waypoint (max ${WP_MAX})`], ['▲', '#ffd84d', 'You']];
+  const lx = innerWidth - 270, rows = [['━', '#fff', 'Trail (dashed + 🔒 = locked)'], ['▲', '#f2b800', 'Checkpoint'], ['■', '#e53935', 'Lift station (dashed line = lift)'], ['─', '#ebd7aa', 'Connector path'], ...(RAMP ? [['◯', '#d9772b', 'Finish corral']] : [['●', '#a06e3c', 'Dirt Jump Park']]), ['🚲', '#fff', 'Bike Shop'], ['①', '#fff', 'Teleport spot'], ['◆', '#3ef0ff', `Waypoint (max ${WP_MAX})`], ['★', '#ff9a3c', 'Your marker'], ['▲', '#ffd84d', 'You']];
   c.fillStyle = 'rgba(26,22,15,.88)'; c.fillRect(lx-12, 20, 262, 46 + rows.length*20 + 140); c.textAlign = 'left'; c.font = '28px "Bebas Neue", sans-serif'; c.fillStyle = '#d9772b'; c.fillText('MAP', lx, 44);
   c.font = '13px "Barlow Condensed", sans-serif'; rows.forEach(([ic, col, label], k) => { c.fillStyle = col; c.fillText(ic, lx, 70 + k*20); c.fillStyle = '#ddd'; c.fillText(label, lx + 26, 70 + k*20); });
   let y = 80 + rows.length*20; c.fillStyle = '#fff'; c.font = 'bold 13px "Barlow Condensed", sans-serif'; c.fillText('Difficulty', lx, y); c.font = '13px "Barlow Condensed", sans-serif';
   for (const k of ['green','blue','black','dblack', ...(trails.some(t => t.diff === 'pro3') ? ['pro3'] : [])]){ y += 18; c.fillStyle = /^#(000|111|222)/.test(DIFF[k].color) || DIFF[k].color==='black' ? '#eee' : DIFF[k].color; c.fillText(`${DIFF[k].icon} ${DIFF[k].label}`, lx, y); }
   y += 26; c.fillStyle = '#bbb'; c.font = '12px "Barlow Condensed", sans-serif';
-  for (const l of ['Stick / D-pad / arrows / mouse: move cursor', 'A / Enter / double-click: teleport', 'X / W / click: set or remove waypoint', 'B / M / View: close']){ c.fillText(l, lx, y); y += 16; }
+  for (const l of ['Stick / D-pad / arrows / mouse: move cursor', 'A / Enter / double-click: teleport', 'X / W / click: set or remove waypoint', keyLabel(kbBind('marker')) + ' / ' + padLabel(padBind('markerClick')) + '+' + padLabel(padBind('markerMod')) + ': marker at you', 'B / M / View: close']){ c.fillText(l, lx, y); y += 16; }
 }
 syncBeacons();
 // ---------- music: shuffled CC0 playlist (starts after the first user input, per browser autoplay rules) ----------
@@ -1481,6 +1530,7 @@ const PAGES = {
     {label:'Follow height', value:(SETTINGS.droneHeight||4) + ' m', adj:d => { SETTINGS.droneHeight = Math.max(2, Math.min(12, (SETTINGS.droneHeight||4) + d)); saveSettings(); }},
     {label:'Rider name', value:(() => { const n = mpName(); return `${NAME_A[n[0]]} ${NAME_B[n[1]]}`.toUpperCase(); })(), sub:'Preset words only. ← → changes it. No typing. Friends see it next time you join a room.', adj:d => { const n = mpName(), k = (n[0]*NAME_B.length + n[1] + d*7 + NAME_A.length*NAME_B.length) % (NAME_A.length*NAME_B.length); LS.set('trailDescent.mpName', [Math.floor(k/NAME_B.length), k % NAME_B.length]); }, act:() => { LS.set('trailDescent.mpName', [Math.floor(Math.random()*NAME_A.length), Math.floor(Math.random()*NAME_B.length)]); }},
     {label:'Rider look', value:legacyRider ? 'CLASSIC' : 'ATHLETIC', sub:'Athletic is the lean rider. Classic is the original. Reloads.', act:() => { LS.set('trailDescent.legacyRider', !legacyRider); toast(legacyRider ? 'Athletic rider — reloading…' : 'Classic rider — reloading…'); setTimeout(() => location.reload(), 500); }},
+    {label:'Controls', sub:'Rebind every keyboard and controller action', act:() => go('controls')},
     {label:'Controls / help', value:$('help').classList.contains('hidden') ? 'SHOW' : 'HIDE', act:() => $('help').classList.toggle('hidden')},
     {label:'‹ Back', act:back} ]}),
   multi: () => { const st = NET ? NET.st : {status:'off'}, inRoom = st.status === 'in', host = inRoom && st.id === st.host, nm = mpName();
@@ -1514,10 +1564,11 @@ const PAGES = {
     <p><b>Trick references:</b> Red Bull slopestyle trick dictionary, X Games BMX Tricktionary, riding.guide.</p>
     <p><b>Graphics Medium/High/Max:</b> CC0 textures & HDRIs from Poly Haven (polyhaven.com): sparse_grass, brown_mud_leaves_01, aerial_rocks_02, bark_brown_02, gravel, aerial_sand, red_dirt_mud_01, dry_riverbed_rock; skies pizzo_pernice_puresky (Mountain), quarry_01_puresky (Rampage).</p>
     <p><b>Engine:</b> three.js (MIT).</p></div>`, items:[{label:'‹ Back', act:back}]}),
+  controls: () => ({title:'CONTROLS', html:'<p class="mpNote">Select a row, then press the new key or button. A shared control (map and drone, camera reset and shop, shift-up and emote, brake and the marker modifier) is not a conflict. Wheelie, hop, and stick tricks stay on the sticks.</p>', items: controlItems()}),
   pause: () => ({title:'PAUSED', items:[
     {label:'Resume', act:() => togglePause()},
-    {label:'Map', sub:'View / M', act:() => { closeMenu(); openMap(); bigMap.wasPaused = false; }},
-    {label:'FPV drone', sub:'Z, or hold View. Off during a timed run.', act:() => { closeMenu(); S.paused = false; toggleDrone(); }},
+    {label:'Map', sub: padLabel(padBind('map')) + ' / ' + keyLabel(kbBind('map')), act:() => { closeMenu(); openMap(); bigMap.wasPaused = false; }},
+    {label:'FPV drone', sub: keyLabel(kbBind('drone')) + ', or hold ' + padLabel(padBind('drone')) + '. Off during a timed run.', act:() => { closeMenu(); S.paused = false; toggleDrone(); }},
     {label:'Bike Shop', act:() => openShop()},
     {label:'Multiplayer', value:NET && NET.st.status === 'in' ? 'ROOM ' + NET.st.code : undefined, act:() => go('multi')},
     {label:'Leaderboards', act:() => openBoards()},
@@ -1528,8 +1579,8 @@ const PAGES = {
 };
 function renderMenu(){ const P = PAGES[menu.page](), el = $('menuPanel');
   menu.items = P.items; menu.sel = Math.max(0, Math.min(menu.sel, P.items.length-1));
-  el.innerHTML = (P.title ? `<h2>${P.title}</h2>` : '') + (P.html || '') + `<ul class="mItems${menu.page === 'trails' ? ' scroll' : ''}">` + P.items.map((it, k) =>
-    `<li data-k="${k}" class="${k === menu.sel ? 'sel' : ''}${it.disabled ? ' dis' : ''}"><span class="mLabel">${it.label}</span>${it.value !== undefined ? `<span class="mVal">${it.adj ? '‹ ' : ''}${it.value}${it.adj ? ' ›' : ''}</span>` : ''}${it.sub ? `<small>${it.sub}</small>` : ''}</li>`).join('') + '</ul>';
+  el.innerHTML = (P.title ? `<h2>${P.title}</h2>` : '') + (P.html || '') + `<ul class="mItems${menu.page === 'trails' || menu.page === 'controls' ? ' scroll' : ''}">` + P.items.map((it, k) =>
+    `<li data-k="${k}" class="${k === menu.sel ? 'sel' : ''}${it.disabled ? ' dis' : ''}"><span class="mLabel">${esc(it.label)}</span>${it.value !== undefined ? `<span class="mVal">${it.adj ? '‹ ' : ''}${esc(it.value)}${it.adj ? ' ›' : ''}</span>` : ''}${it.sub ? `<small>${esc(it.sub)}</small>` : ''}</li>`).join('') + '</ul>';
   $('menuLogo').style.display = menu.page === 'main' ? '' : 'none';
   el.querySelectorAll('li').forEach(li => { const k = +li.dataset.k; li.onmouseenter = () => { if (menu.sel !== k){ menu.sel = k; renderMenu(); } }; li.onclick = () => { menu.sel = k; menuKey('Enter'); }; });
   const s = el.querySelector('li.sel'); if (s && s.scrollIntoView) s.scrollIntoView({block:'nearest'});
@@ -1541,7 +1592,77 @@ function back(){ if (!menu.stack.length){ if (menu.page === 'pause') togglePause
 function switchWorld(){ LS.set('trailDescent.world', RAMP ? 'mountain' : 'rampage'); $('loading').classList.remove('done'); $('loading').textContent = RAMP ? 'LOADING THE MOUNTAIN…' : 'LOADING RAMPAGE…'; setTimeout(() => location.reload(), 50); }
 function startRide(){ closeMenu(); resetGame(); }
 function toMainMenu(){ S.paused = false; S.state = 'menu'; S.run = null; S.lift = null; myChair.visible = false; $('liftRide').style.display = 'none'; camInit = false; openMenu('main'); $('loading').classList.add('done'); }
-function menuKey(code){ const it = menu.items[menu.sel];
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const PAD_CODES = new Set(['A','B','X','Y','Start','Back','LB','RB','LS','RS','DU','DD','DL','DR','LT','RT']);
+let bindCapture = null;
+function bindName(id){ return id === 'markerClick' ? 'Marker click' : id === 'markerMod' ? 'Marker modifier' : actionLabel(id); }
+function bindLabel(device, code){ return device === 'pad' ? padLabel(code) : keyLabel(code); }
+function startBind(id, device){ bindCapture = { id, device, phase: 'listen', trig: true }; }
+function cancelBind(){ bindCapture = null; toast('Bind cancelled'); if (menu.open) renderMenu(); }
+function applyBind(next, msg){ SETTINGS.binds = next; saveSettings(); renderHelp(); bindCapture = null; toast(msg); if (menu.open) renderMenu(); }
+function finishBind(code){
+  const cap = bindCapture; if (!cap) return;
+  if (cap.phase === 'conflict'){
+    if (code === 'A' || code === 'Enter' || code === 'KeyA') applyBind(swapBind(SETTINGS.binds, cap.device, cap.id, cap.code), 'Swapped ' + bindName(cap.id) + ' and ' + bindName(cap.other));
+    else if (code === 'B' || code === 'KeyB' || code === 'Escape' || code === 'Backspace' || code === 'Start') cancelBind();
+    return;
+  }
+  const hit = proposeBind(SETTINGS.binds, cap.device, cap.id, code);
+  if (!hit.ok){ cap.phase = 'conflict'; cap.code = code; cap.other = hit.other; toast(bindLabel(cap.device, code) + ' is used by ' + bindName(hit.other) + '. A swaps, B or Esc cancels.'); if (menu.open) renderMenu(); return; }
+  applyBind(hit.binds, bindName(cap.id) + ' → ' + bindLabel(cap.device, code));
+}
+function captureKey(code){
+  const cap = bindCapture;
+  if (cap.phase === 'conflict'){ finishBind(code); return; }
+  if (code === 'Escape' || code === 'Backspace' || code === 'Start'){ cancelBind(); return; }
+  if (cap.device === 'kb' && PAD_CODES.has(code)) return;
+  if (cap.device === 'pad' && !PAD_CODES.has(code)) return;
+  finishBind(code);
+}
+function controlItems(){
+  const rows = [{ label:'Reset to defaults', sub:'Restores every keyboard and controller bind', act:() => { SETTINGS.binds = loadBinds(null); saveSettings(); renderHelp(); toast('Controls reset'); } }];
+  const row = (id, device) => ({ label: bindName(id) + (device === 'kb' ? ' — keyboard' : ' — controller'), value: device === 'kb' ? keyLabel(kbBind(id)) : padLabel(padBind(id)), sub: bindCapture && bindCapture.id === id && bindCapture.device === device ? (bindCapture.phase === 'conflict' ? bindLabel(device, bindCapture.code) + ' is ' + bindName(bindCapture.other) + '. A swaps, B cancels.' : 'Press the new ' + (device === 'kb' ? 'key' : 'button') + '. Esc cancels.') : (device === 'kb' ? 'Select, then press a key' : 'Select, then press a button'), act: () => startBind(id, device) });
+  for (const [id] of ACTIONS){ rows.push(row(id, 'kb')); if (id in PAD_DEFAULT) rows.push(row(id, 'pad')); }
+  rows.push(row('markerClick', 'pad'));
+  rows.push(row('markerMod', 'pad'));
+  rows.push({ label:'Wheelie', value:'BOTH STICKS UP', sub:'Fixed. On the ground only: both sticks leave center together and stay up.' });
+  rows.push({ label:'Hop', value:'RS DOWN, THEN UP', sub:'Fixed. The up flick hops only after the stick was down.' });
+  rows.push({ label:'Tricks', value:'LB + RIGHT STICK', sub:'Fixed. Eight directions. RS click is a barspin. Keyboard uses the trick modifier.' });
+  rows.push({ label:'‹ Back', act: back });
+  return rows;
+}
+function renderHelp(){
+  const k = id => keyLabel(kbBind(id)), p = id => padLabel(padBind(id));
+  const rows = [
+    ['Steer (spin in air)', 'Left stick ← →', k('steerLeft') + ' / ' + k('steerRight') + ' or ← →'],
+    ['In the air, stick down / back is a backflip (nose up) and stick up / forward is a frontflip (nose down). On the ground this stick only shifts your weight. A wheelie still needs both sticks up, and only while the wheels are on the ground.', 'Left stick ↓ backflip · ↑ frontflip', k('flipBack') + ' backflip · ' + k('flipForward') + ' frontflip'],
+    ['Accelerate / pedal', p('pedal'), k('pedal') + ' or ↑'],
+    ['Brake (+steer = slide). Holding the marker modifier alone still brakes.', p('brake'), k('brake') + ' or ↓'],
+    ['Pump / preload (bend down)', 'Right stick ↓ (hold)', k('pump') + ' (hold)'],
+    ['Bunny hop. The up flick only hops if the stick was down first.', 'Right stick ↓ then ↑', 'release ' + k('pump')],
+    ['Counter-pump (stretch up)', 'Right stick ↑', k('counter')],
+    ['Lean the bike into a turn. Matching the steer tightens the turn. Leaning the wrong way widens it. In the air it is a style tilt. Landing leaned much past 30° bails.', 'Right stick ← →', k('leanLeft') + ' / ' + k('leanRight')],
+    ['Tricks (stick amount = strength)', 'LB + right stick. RS click = barspin', k('trick') + ' + direction, ' + k('trick') + ' + ' + k('barspin') + ' = barspin'],
+    ['Respawn', p('respawn'), k('respawn')],
+    ['Camera / reset camera', p('camera') + ' / ' + p('camReset'), k('camera') + ' / ' + k('camReset')],
+    ['Shift gear up / down. A short tap shifts. Holding the emote button opens emotes.', p('gearUp') + ' / ' + p('gearDown'), k('gearUp') + ' / ' + k('gearDown')],
+    ['Pause', p('pause') + ' / Esc', k('pause') + ' / Esc'],
+    ['Full-screen map. A short press opens it. Hold the drone button for the FPV drone.', p('map') + ' (tap)', k('map')],
+    ['FPV drone. Off during a timed run.', 'Hold ' + p('drone'), k('drone')],
+    ['Bike shop. The controller button opens it from the title or pause menu.', p('shop'), k('shop')],
+    ['Map marker at your current position. Press again nearby to remove it, or farther away to move it. One marker, saved on this device only.', p('markerClick') + ' + ' + p('markerMod'), k('marker')],
+    ['Wheelie. Both sticks up together from center, then balance with the left stick. Ground only.', 'Both sticks ↑', k('flipBack') + ' while rolling'],
+    ['Emotes, only in a room, stopped or on a lift. Hold to open the wheel.', 'Hold ' + p('emote'), 'Hold ' + k('emote')],
+    ['Teleport to prev / next spot', p('spotPrev') + ' / ' + p('spotNext'), k('spotPrev') + ' / ' + k('spotNext')],
+  ];
+  const table = document.querySelector('#help table');
+  if (table) table.innerHTML = '<tr><th></th><th>Xbox controller</th><th>Keyboard</th></tr>' + rows.map(r => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td><td>${esc(r[2])}</td></tr>`).join('');
+  const head = document.querySelector('#help h3');
+  if (head) head.innerHTML = `CONTROLS <small>(${k('help')}, or Y in the pause menu, toggles · rebind in Settings → Controls)</small>`;
+  const foot = document.querySelector('#help p');
+  if (foot) foot.textContent = `Pump: compress into backsides, extend over faces to gain speed. Lean with the right stick (${k('leanLeft')} / ${k('leanRight')}) to carve. Land straight and not leaned past 30°. Your marker is ${k('marker')} or ${p('markerClick')}+${p('markerMod')}. Controller: press any button so Firefox detects it.`;
+}
+function menuKey(code){ if (bindCapture){ captureKey(code); return; } const it = menu.items[menu.sel];
   if (menu.page === 'boards' && ['LB','RB','KeyQ','KeyE'].includes(code)){ lbMove(['LB','KeyQ'].includes(code) ? -1 : 1, 1); return; }
   if (['DU','ArrowUp','KeyW'].includes(code)){ do { menu.sel = (menu.sel - 1 + menu.items.length) % menu.items.length; } while (menu.items[menu.sel].disabled && menu.items.some(i => !i.disabled) && false); renderMenu(); }
   else if (['DD','ArrowDown','KeyS'].includes(code)){ menu.sel = (menu.sel + 1) % menu.items.length; renderMenu(); }
@@ -1550,6 +1671,14 @@ function menuKey(code){ const it = menu.items[menu.sel];
   else if (['B','Escape','Backspace'].includes(code)) back();
   else if ((code === 'Start' || code === 'KeyP') && menu.page === 'pause') togglePause(); }
 function menuFrame(dt, inp){ // analog stick navigation with repeat
+  if (bindCapture){
+    if (bindCapture.phase === 'listen' && bindCapture.device === 'pad'){
+      const cap = bindCapture, lt = (inp.lt || 0) > 0.6, rt = (inp.rt || 0) > 0.6;
+      if (!lt && !rt) cap.trig = false;
+      else if (!cap.trig){ cap.trig = true; finishBind(lt ? 'LT' : 'RT'); }
+    }
+    return;
+  }
   const y = inp.lsy || 0; menu.repeatT -= dt;
   if (Math.abs(y) > 0.6 && menu.repeatT <= 0){ menuKey(y > 0 ? 'DD' : 'DU'); menu.repeatT = 0.22; } else if (Math.abs(y) < 0.3) menu.repeatT = 0;
   const x = inp.lsx || 0; if (Math.abs(x) > 0.7 && (menu.xT = (menu.xT || 0) - dt) <= 0){ menuKey(x > 0 ? 'DR' : 'DL'); menu.xT = 0.3; } else if (Math.abs(x) < 0.3) menu.xT = 0; }
@@ -1927,4 +2056,5 @@ window.__sim = (secs, inp) => { const h=1/120; const base={steer:0,pedal:0,brake
 if (SETTINGS.gfx && SETTINGS.gfx !== 'low') import('./gfx.js').then(m => { GFX = m.initGfx({level:SETTINGS.gfx, renderer, scene, camera, sun, SUN_DIR, skyDome, TEX, terrainMat, trunkMat, frameMat, RAMP, S, groundH, terrainH, getCam:() => camMode, toast, tod:SETTINGS.tod, coneG, trunkG, bushG, rockG, folMat, bushMat, rockMat, farU, farMesh:FARMESH, grassMesh:grassField.mesh, chunks, treesInCell, TCELL, HALF, LOAD_R, isDirt, featH, trailDist, groundColor,
     setGrass:(r, c) => { Q = {...Q, grassR:r, grassCell:c}; grassField.rebuild(true); }}); composer = null; window.__gfx = GFX; }).catch(e => { console.warn('graphics upgrade failed, using Low', e); });
 window.__gfxLevel = SETTINGS.gfx;
+renderHelp();
 frame();window.__shop = { open: openShop, key: shopKey, close: closeShop };
