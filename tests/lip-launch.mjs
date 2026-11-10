@@ -1,7 +1,7 @@
 // Medium and large jumps launch in a neutral stance. Preload is only a modest extra.
 import { spawn } from 'node:child_process';
 const PORT = 8914;
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: '/workspace', stdio: 'ignore' });
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore' });
 const chrome = spawn('google-chrome', ['--headless=new','--no-sandbox','--disable-dev-shm-usage','--use-gl=angle','--use-angle=swiftshader','--remote-debugging-port=9514',`--user-data-dir=/tmp/gnr-lip-${Date.now()}`,'--window-size=1280,720','about:blank'], { stdio: 'ignore' });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const fail = [];

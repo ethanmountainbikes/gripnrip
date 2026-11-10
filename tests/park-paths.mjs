@@ -28,7 +28,7 @@ function hits(world){
   return { world, rerouted: pathsRerouted, bad: bad.length, sample: bad.slice(0, 6) };
 }
 const mountain = hits('mountain');
-const ramp = spawnSync(process.execPath, ['--experimental-default-type=module', '-e', `
+const ramp = spawnSync(process.execPath, ['--input-type=module', '-e', `
 globalThis.localStorage = { getItem: () => '"rampage"', setItem(){} };
 const { connectors, features, PARK, pathsRerouted } = await import('./world.js');
 let bad = 0;

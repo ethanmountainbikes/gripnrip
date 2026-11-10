@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
-const PORT = 8813, ART = '/opt/cursor/artifacts';
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: '/workspace', stdio: 'ignore' });
+const PORT = 8813, ART = process.env.ARTIFACTS || '/opt/cursor/artifacts';
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore' });
 const chrome = spawn('google-chrome', ['--headless=new','--no-sandbox','--disable-dev-shm-usage','--use-gl=angle','--use-angle=swiftshader','--remote-debugging-port=9417',`--user-data-dir=/tmp/gnr-shot-${Date.now()}`,'--window-size=1280,800','about:blank'], { stdio: 'ignore' });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function list(){ for (let i=0;i<40;i++){ try { const r=await fetch('http://127.0.0.1:9417/json/list'); if (r.ok) return await r.json(); } catch {} await sleep(200);} throw new Error('no chrome'); }

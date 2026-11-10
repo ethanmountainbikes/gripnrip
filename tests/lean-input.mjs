@@ -2,7 +2,7 @@
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 const PORT = 8882;
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: '/workspace', stdio: 'ignore' });
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore' });
 const chrome = spawn('google-chrome', ['--headless=new','--no-sandbox','--disable-dev-shm-usage','--use-gl=angle','--use-angle=swiftshader','--remote-debugging-port=9482',`--user-data-dir=/tmp/gnr-lean-${Date.now()}`,'about:blank'], { stdio: 'ignore' });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const fail = [];
@@ -86,7 +86,7 @@ try {
     return {right:num(right), left:num(left), dead:num(dead), down:num(down), downRight:num(downRight), upAlone:num(upAlone), up:num(up), steer:num(steer), forward:num(forward), both:num(both), back:num(back), lb:num(lb), keyE:num(keyE), keyQ:num(keyQ), emo,
       yaw:{into:+into.toFixed(3), against:+against.toFixed(3), straight:+straight.toFixed(3)}, slip:{good, bad}, bailed, safe};
   })()`);
-  const help = readFileSync('/workspace/index.html','utf8');
+  const help = readFileSync(new URL('../index.html', import.meta.url),'utf8');
   check('help lists Q / E lean', help.includes('Right stick ← →') && help.includes('Q / E'), 'missing');
   check('stick right leans right and does not steer', out.right.bank > 0.4 && out.right.steer === 0 && !out.right.pump && !out.right.pop && !out.right.chord, JSON.stringify(out.right));
   check('stick left leans left', out.left.bank < -0.4 && out.left.steer === 0, JSON.stringify(out.left));

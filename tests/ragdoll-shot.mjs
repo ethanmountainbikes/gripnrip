@@ -1,8 +1,8 @@
 // In-game bail: ragdoll stays finite, helmet cam pulls back, respawn restores the rider, follow drone keeps filming.
 import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
-const PORT = 8894, ART = '/opt/cursor/artifacts';
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: '/workspace', stdio: 'ignore' });
+const PORT = 8894, ART = process.env.ARTIFACTS || '/opt/cursor/artifacts';
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore' });
 const chrome = spawn('google-chrome', ['--headless=new','--no-sandbox','--disable-dev-shm-usage','--use-gl=angle','--use-angle=swiftshader','--remote-debugging-port=9494',`--user-data-dir=/tmp/gnr-rag-${Date.now()}`,'--window-size=1280,800','about:blank'], { stdio: 'ignore' });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const fail = [];

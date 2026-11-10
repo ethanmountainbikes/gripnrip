@@ -1,8 +1,8 @@
 // Helmet view and a close tree after the hotfix.
 import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
-const PORT = 8916, ART = '/opt/cursor/artifacts';
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: '/workspace', stdio: 'ignore' });
+const PORT = 8916, ART = process.env.ARTIFACTS || '/opt/cursor/artifacts';
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore' });
 const chrome = spawn('google-chrome', ['--headless=new','--no-sandbox','--disable-dev-shm-usage','--use-gl=angle','--use-angle=swiftshader','--remote-debugging-port=9516',`--user-data-dir=/tmp/gnr-hot-${Date.now()}`,'--window-size=1280,800','about:blank'], { stdio: 'ignore' });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 let n = 0, wait = new Map();

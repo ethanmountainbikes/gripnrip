@@ -3,9 +3,9 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 
 const PORT = 8765;
-const ART = '/opt/cursor/artifacts';
+const ART = process.env.ARTIFACTS || '/opt/cursor/artifacts';
 mkdirSync(ART, { recursive: true });
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: '/workspace', stdio: 'ignore' });
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore' });
 const chrome = spawn('google-chrome', [
   '--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--use-gl=angle', '--use-angle=swiftshader',
   '--remote-debugging-port=9222', '--user-data-dir=/tmp/gnr-chrome-' + Date.now(), '--window-size=1280,800', 'about:blank',

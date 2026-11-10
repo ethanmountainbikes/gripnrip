@@ -47,7 +47,7 @@ for (const L of LIFTS){
 }
 if (signWorst > 0.35) fail.push('sign post exposed ' + signWorst.toFixed(3) + ' m');
 
-const ramp = spawnSync(process.execPath, ['--experimental-default-type=module', '-e', `
+const ramp = spawnSync(process.execPath, ['--input-type=module', '-e', `
 globalThis.localStorage = { getItem: () => '"rampage"', setItem(){} };
 const { SHOP, terrainH, LIFTS, spots, localXZ, trails } = await import('./world.js');
 const LIM = 0.05;

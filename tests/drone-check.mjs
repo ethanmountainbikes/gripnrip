@@ -1,8 +1,8 @@
 // FPV drone: toggle, settings, bounds, soft collision, and no fight with gear or lean.
 import { spawn } from 'node:child_process';
 import { writeFileSync, readFileSync } from 'node:fs';
-const PORT = 8886, ART = '/opt/cursor/artifacts';
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: '/workspace', stdio: 'ignore' });
+const PORT = 8886, ART = process.env.ARTIFACTS || '/opt/cursor/artifacts';
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore' });
 const chrome = spawn('google-chrome', ['--headless=new','--no-sandbox','--disable-dev-shm-usage','--use-gl=angle','--use-angle=swiftshader','--remote-debugging-port=9486',`--user-data-dir=/tmp/gnr-drone-${Date.now()}`,'--window-size=1280,800','about:blank'], { stdio: 'ignore' });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const fail = [];

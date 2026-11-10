@@ -1,7 +1,7 @@
 // Ride every named trail at a slow, typical and fast speed. A real jump must touch down on a downslope or a deck.
 import { spawn } from 'node:child_process';
 const PORT = 8876;
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: '/workspace', stdio: 'ignore' });
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore' });
 const chrome = spawn('google-chrome', ['--headless=new','--no-sandbox','--disable-dev-shm-usage','--use-gl=angle','--use-angle=swiftshader','--remote-debugging-port=9476',`--user-data-dir=/tmp/gnr-land-${Date.now()}`,'about:blank'], { stdio: 'ignore' });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 let n=0, wait=new Map();

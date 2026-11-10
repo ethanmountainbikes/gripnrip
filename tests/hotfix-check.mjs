@@ -2,7 +2,7 @@
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 const PORT = 8807;
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: '/workspace', stdio: 'ignore' });
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore' });
 const chrome = spawn('google-chrome', ['--headless=new','--no-sandbox','--disable-dev-shm-usage','--use-gl=angle','--use-angle=swiftshader','--remote-debugging-port=9403',`--user-data-dir=/tmp/gnr-hot-${Date.now()}`,'about:blank'], { stdio: 'ignore' });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function list(){ for (let i=0;i<40;i++){ try { const r=await fetch('http://127.0.0.1:9403/json/list'); if (r.ok) return await r.json(); } catch {} await sleep(200);} throw new Error('no chrome'); }
@@ -121,11 +121,11 @@ try {
         lb:{trick:lb.trick, chord:!!lb.wheelieChord, pump:!!lb.pumpHold},
         key:{kb:!!key.kbWheelie, lean:+key.lean.toFixed(2), pump:!!key.pumpHold, pop:!!key.pop}}};
   })()`);
-  const sfx = readFileSync('/workspace/sfx.js','utf8');
+  const sfx = readFileSync(new URL('../sfx.js', import.meta.url),'utf8');
   check('coast gain 0.20', sfx.includes('click(0.20)'), 'missing');
   check('pedal click stays 0.12', sfx.includes('click(0.12)'), 'missing');
   check('tire gain unchanged', sfx.includes('set(roll, Math.min(0.5, sp/18)*0.5*surf[0])'), 'roll line changed');
-  const mp3 = readFileSync('/workspace/music/lofi-switchback.mp3');
+  const mp3 = readFileSync(new URL('../music/lofi-switchback.mp3', import.meta.url));
   check('lofi file', mp3.length > 40000 && mp3.length < 200000, String(mp3.length));
   const head = await fetch(`http://127.0.0.1:${PORT}/music/lofi-switchback.mp3`);
   const servedBytes = head.ok ? (await head.arrayBuffer()).byteLength : 0;

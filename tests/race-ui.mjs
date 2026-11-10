@@ -1,7 +1,7 @@
 // The start gate is free ride until a race is chosen, and race stays locked until the trail is cleared.
 import { spawn } from 'node:child_process';
 const PORT = 8928;
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: '/workspace', stdio: 'ignore' });
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore' });
 const chrome = spawn('google-chrome', ['--headless=new','--no-sandbox','--disable-dev-shm-usage','--use-gl=angle','--use-angle=swiftshader','--remote-debugging-port=9528',`--user-data-dir=/tmp/gnr-race-${Date.now()}`,'about:blank'], { stdio: 'ignore' });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const fail = [];

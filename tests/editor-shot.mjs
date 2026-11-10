@@ -1,8 +1,8 @@
 // Open the level editor, place a start gate and a jump, and test-ride from the gate.
 import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
-const PORT = 8930, ART = '/opt/cursor/artifacts';
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: '/workspace', stdio: 'ignore' });
+const PORT = 8930, ART = process.env.ARTIFACTS || '/opt/cursor/artifacts';
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore' });
 const chrome = spawn('google-chrome', ['--headless=new','--no-sandbox','--disable-dev-shm-usage','--use-gl=angle','--use-angle=swiftshader','--remote-debugging-port=9530',`--user-data-dir=/tmp/gnr-ed-${Date.now()}`,'--window-size=1400,900','about:blank'], { stdio: 'ignore' });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const fail = [];

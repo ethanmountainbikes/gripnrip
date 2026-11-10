@@ -3,10 +3,10 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync, readdirSync, unlinkSync } from 'node:fs';
 
 const PORT = 8777;
-const ART = '/opt/cursor/artifacts';
+const ART = process.env.ARTIFACTS || '/opt/cursor/artifacts';
 mkdirSync(ART, { recursive: true });
 for (const f of readdirSync(ART)) if (/\.(png|json)$/.test(f)) unlinkSync(`${ART}/${f}`);
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: '/workspace', stdio: 'ignore' });
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore' });
 const chrome = spawn('google-chrome', [
   '--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--use-gl=angle', '--use-angle=swiftshader',
   '--remote-debugging-port=9344', `--user-data-dir=/tmp/gnr-final-${Date.now()}`, '--window-size=1280,800', 'about:blank',

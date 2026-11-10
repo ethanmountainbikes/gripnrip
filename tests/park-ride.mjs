@@ -1,7 +1,7 @@
 // Ride a dirt-jump line and the pump-track straight at a normal speed. The surface under the wheels stays packed.
 import { spawn } from 'node:child_process';
 const PORT = 8926;
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: '/workspace', stdio: 'ignore' });
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore' });
 const chrome = spawn('google-chrome', ['--headless=new','--no-sandbox','--disable-dev-shm-usage','--use-gl=angle','--use-angle=swiftshader','--remote-debugging-port=9526',`--user-data-dir=/tmp/gnr-ride-${Date.now()}`,'about:blank'], { stdio: 'ignore' });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const fail = [];
