@@ -1,4 +1,4 @@
-// Control bindings and the personal map marker. No Three.js, so the node tests can import it.
+// Control bindings and the personal respawn point. No Three.js, so the node tests can import it.
 // A saved settings object may omit binds entirely. Missing actions use these defaults.
 
 export const KB_DEFAULT = {
@@ -11,7 +11,7 @@ export const KB_DEFAULT = {
   respawn: 'KeyR', camera: 'KeyV', camReset: 'KeyX',
   gearUp: 'KeyG', gearDown: 'KeyF',
   pause: 'KeyP', map: 'KeyM', drone: 'KeyZ', help: 'KeyH', shop: 'KeyO',
-  marker: 'KeyN', emote: 'KeyT',
+  spawn: 'KeyN', emote: 'KeyT',
   spotPrev: 'BracketLeft', spotNext: 'BracketRight',
 };
 
@@ -20,12 +20,12 @@ export const PAD_DEFAULT = {
   map: 'Back', drone: 'Back', shop: 'X',
   gearUp: 'DU', gearDown: 'DD', spotPrev: 'DL', spotNext: 'DR', emote: 'DU',
   brake: 'LT', pedal: 'RT',
-  markerClick: 'LS', markerMod: 'LT',
+  spawnClick: 'LS', spawnMod: 'LT',
 };
 
 // Same physical control on purpose: tap versus hold, or a two-button combo.
 const SHARE = [
-  ['map', 'drone'], ['camReset', 'shop'], ['gearUp', 'emote'], ['brake', 'markerMod'],
+  ['map', 'drone'], ['camReset', 'shop'], ['gearUp', 'emote'], ['brake', 'spawnMod'],
 ];
 
 export const ACTIONS = [
@@ -38,16 +38,24 @@ export const ACTIONS = [
   ['respawn', 'Respawn'], ['camera', 'Next camera'], ['camReset', 'Reset camera'],
   ['gearUp', 'Shift up'], ['gearDown', 'Shift down'],
   ['pause', 'Pause'], ['map', 'Map'], ['drone', 'FPV drone'], ['help', 'Controls help'], ['shop', 'Bike shop'],
-  ['marker', 'Map marker'], ['emote', 'Emote wheel'],
+  ['spawn', 'Respawn point'], ['emote', 'Emote wheel'],
   ['spotPrev', 'Previous teleport'], ['spotNext', 'Next teleport'],
 ];
 
-const PAD_ONLY = new Set(['markerClick', 'markerMod']);
+const PAD_ONLY = new Set(['spawnClick', 'spawnMod']);
+const LEGACY = { spawn: 'marker', spawnClick: 'markerClick', spawnMod: 'markerMod' };
+
+function savedCode(bag, id) {
+  const v = bag?.[id];
+  if (typeof v === 'string' && v) return v;
+  const old = bag?.[LEGACY[id]];
+  return typeof old === 'string' && old ? old : '';
+}
 
 export function loadBinds(saved) {
   const kb = {}, pad = {};
-  for (const id of Object.keys(KB_DEFAULT)) kb[id] = typeof saved?.kb?.[id] === 'string' && saved.kb[id] ? saved.kb[id] : KB_DEFAULT[id];
-  for (const id of Object.keys(PAD_DEFAULT)) pad[id] = typeof saved?.pad?.[id] === 'string' && saved.pad[id] ? saved.pad[id] : PAD_DEFAULT[id];
+  for (const id of Object.keys(KB_DEFAULT)) kb[id] = savedCode(saved?.kb, id) || KB_DEFAULT[id];
+  for (const id of Object.keys(PAD_DEFAULT)) pad[id] = savedCode(saved?.pad, id) || PAD_DEFAULT[id];
   return { kb, pad };
 }
 
@@ -93,20 +101,55 @@ export function actionLabel(id) {
   return (ACTIONS.find(([k]) => k === id) || [id, id])[1];
 }
 
-// One personal marker. Pressing again within `near` metres clears it. Farther away replaces it.
-// `latch` stops a held combo from firing every frame. LT by itself never places a marker.
-export function markerHold(state, click, mod, x, z, near = 18) {
-  if (!state) state = { marker: null, latch: false };
-  if (click && mod) {
-    if (state.latch) return { marker: state.marker, event: 'held', state };
-    state.latch = true;
-    const had = state.marker;
-    const close = had && Math.hypot(had.x - x, had.z - z) < near;
-    state.marker = close ? null : { x, z };
-    return { marker: state.marker, event: close ? 'remove' : 'place', state };
-  }
+// Stopped or rolling slower than this can set a respawn point. Faster than this is still riding.
+export const SPAWN_SLOW = 3;
+
+// Why a point cannot be set, or null when the rider is stopped on rideable ground.
+export function spawnDenied(rider) {
+  if (!rider || rider.air) return 'air';
+  if (rider.lift) return 'lift';
+  if ((rider.speed || 0) > SPAWN_SLOW) return 'speed';
+  if (rider.blocked) return 'blocked';
+  if (rider.rideable === false) return 'ground';
+  if (rider.timed) return 'timed';
+  return null;
+}
+
+// One personal respawn point. `pressed` is the whole combo (L3+LT, or the keyboard key).
+// Pressing again while standing on it clears it. A held combo fires once.
+// A timed run cannot set one. LT by itself is not `pressed`.
+export function spawnHold(state, pressed, rider, near = 4) {
+  if (!state) state = { point: null, latch: false };
+  if (!pressed) { state.latch = false; return { point: state.point, event: null, state }; }
+  if (state.latch) return { point: state.point, event: 'held', state };
+  state.latch = true;
+  const reason = spawnDenied(rider);
+  if (reason) return { point: state.point, event: 'reject', reason, state };
+  const had = state.point;
+  const close = had && Math.hypot(had.x - rider.x, had.z - rider.z) <= near;
+  if (close) { state.point = null; return { point: null, event: 'clear', state }; }
+  state.point = { x: rider.x, z: rider.z, yaw: rider.yaw || 0 };
+  return { point: state.point, event: 'set', state };
+}
+
+export function clearSpawn(state) {
+  if (!state) state = { point: null, latch: false };
+  state.point = null;
   state.latch = false;
-  return { marker: state.marker, event: null, state };
+  return { point: null, event: 'clear', state };
+}
+
+// A set point replaces the checkpoint. Using it during a timed run is unranked.
+export function respawnChoice(spawn, fallback, timed) {
+  if (spawn && Number.isFinite(spawn.x) && Number.isFinite(spawn.z) && Number.isFinite(spawn.yaw)) {
+    return { x: spawn.x, z: spawn.z, yaw: spawn.yaw, via: 'spawn', unranked: !!timed };
+  }
+  return { x: fallback.x, z: fallback.z, yaw: fallback.yaw, via: fallback.via || 'checkpoint', unranked: false };
+}
+
+// Cloud and local bests. A drone run is already unranked. A respawn point makes it unranked too.
+export function rankedRun(run, droneOut) {
+  return !!run && !droneOut && !run.unranked && !run.spawnUsed;
 }
 
 export function devicesFor(id) {

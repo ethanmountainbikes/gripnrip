@@ -13,7 +13,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featBase, featAxis, BOULDERS, boulderH, rockTop, rockContact, bigBouldersNear, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL, LIFTS, connectors, CW, SHOP, WORLD, RAMPAGE, trailDist, layoutTag } from './world.js';
-import { loadBinds, proposeBind, swapBind, conflict, keyLabel, padLabel, actionLabel, ACTIONS, KB_DEFAULT, PAD_DEFAULT, markerHold } from './binds.js';
+import { loadBinds, proposeBind, swapBind, conflict, keyLabel, padLabel, actionLabel, ACTIONS, KB_DEFAULT, PAD_DEFAULT, spawnHold, clearSpawn, respawnChoice, rankedRun } from './binds.js';
 import { initSfx, setSfxVolume, updateSfx, sfxLand, sfxCrash, sfxLiftStart } from './sfx.js';
 const RAMP = WORLD === 'rampage';   // Red Bull Rampage-inspired desert world
 
@@ -424,7 +424,7 @@ bike.traverse(o=>{ if(o.isMesh) o.castShadow=true; });
 
 // ---------- Input ----------
 const keys = {};
-addEventListener('keydown', e => { keys[e.code]=true; if(['Space','Tab','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault(); onPress(e.code); });
+addEventListener('keydown', e => { keys[e.code]=true; if(['Space','Tab','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault(); if (e.repeat && e.code === kbBind('spawn')) return; onPress(e.code); });
 addEventListener('keyup', e => { keys[e.code]=false; });
 // focus loss (alt-tab, clicking outside, Cmd-shortcuts) swallows keyup: clear every held key so W can't stay stuck and pedal forever
 const releaseKeys = () => { for (const k in keys) keys[k] = false; };
@@ -547,8 +547,8 @@ function readInput(){
   inp.wheelieChord = lsUp && rsUp && stickGate.ready && !recentDown && !inp.trick;
   inp.kbWheelie = keyDown('flipBack') && !inp.trick;
   const held = name => name === 'LT' ? (inp.lt || 0) > 0.45 : name === 'RT' ? (inp.rt || 0) > 0.45 : name === 'LS' ? !!inp.lsHeld : !!(inp.pad && inp.pad[name]);
-  inp.markerClick = held(padBind('markerClick'));
-  inp.markerMod = held(padBind('markerMod'));
+  inp.spawnClick = held(padBind('spawnClick'));
+  inp.spawnMod = held(padBind('spawnMod'));
   inp.droneHeld = held(padBind('drone'));
   if (inp.wheelieChord || inp.kbWheelie){ inp.pumpHold = false; inp.pop = false; inp.counter = false; }
   if (window.__forceInp) Object.assign(inp, window.__forceInp);
@@ -660,7 +660,7 @@ function onPress(code){
   if (shopOpen){ shopKey(code); return; }
   if (bigMap.open){ mapKey(code); return; }
   if (menu.open){ menuKey(code); return; }
-  if (hitBind('marker', code) && S.state==='riding'){ placeMarker(S.x, S.z); return; }
+  if (hitBind('spawn', code) && S.state==='riding'){ trySetSpawn(); return; }
   if (hitBind('map', code) && S.state==='riding' && !S.lift && !bigMap.open){ openMap(); return; }
   if (code==='Back' && bigMap.open){ closeMap(); return; }
   if (hitBind('drone', code) && S.state==='riding' && !menu.open && !shopOpen && !bigMap.open){ toggleDrone(); return; }
@@ -673,7 +673,7 @@ function onPress(code){
   if (hitBind('camera', code)){
   camMode = (camMode+1)%CAM_NAMES.length; LS.set('trailDescent.cam', camMode); camInit = false; drone.t = 0; toast('🎥 Camera: ' + CAM_NAMES[camMode]); }
   if (hitBind('camReset', code)) camInit = false;
-  if ((hitBind('respawn', code)) && S.state==='riding' && !S.paused) { respawnSafe(); flash('RESPAWN',0.8); }
+  if ((hitBind('respawn', code)) && S.state==='riding' && !S.paused) { if (respawnSafe() !== 'spawn') flash('RESPAWN',0.8); }
   if (S.state==='riding' && !S.paused && hitBind('gearUp', code)) DRV.manual(+1);
   if (S.state==='riding' && !S.paused && hitBind('gearDown', code)) DRV.manual(-1);
   if (S.state==='riding' && !S.paused){
@@ -773,12 +773,43 @@ function teleport(i, quiet){
   if (!quiet){ flash(s.name, 1.6); } toast(`📍 ${spotI+1}/${spots.length} ${s.name} ·${spotTag(spotI)}  ·  ${spots.filter((_,j)=>isOpen(j)).length} spots unlocked  ·  D-pad ← → to teleport`);
 }
 const OOB = HALF - 60, inside = (x,z) => Math.max(Math.abs(x), Math.abs(z)) < OOB - 90;
+const SPAWN_KEY = 'trailDescent.spawn';
+let spawn = LS.get(SPAWN_KEY, null);
+if (!spawn || ![spawn.x, spawn.z, spawn.yaw].every(Number.isFinite)) spawn = null;
+try { localStorage.removeItem('trailDescent.marker'); } catch (e) {}
+const spawnState = { point: spawn, latch: false };
+const SPAWN_WHY = { air:'Land first', lift:'Not on the lift', speed:'Stop or slow down', blocked:'Not inside a rock or tree', ground:'Get onto rideable ground', timed:'Off during a timed run' };
+function spawnBlocked(x, z){
+  for (const t of nearTrees(x, z)) if ((t.x - x)**2 + (t.z - z)**2 < 0.56) return true;
+  for (const b of bigBouldersNear(x, z)) if (rockContact(b, x, z)) return true;
+  return false;
+}
+function riderForSpawn(){
+  return { x:S.x, z:S.z, yaw:S.yaw || 0, speed:S.speed || 0, air:!!S.air || S.crashT > 0, lift:!!S.lift, blocked:spawnBlocked(S.x, S.z), rideable:!S.air && !S.lift && S.crashT <= 0, timed:!!S.run };
+}
+function saveSpawn(){ spawn = spawnState.point; LS.set(SPAWN_KEY, spawn); }
+function applySpawnResult(r){
+  if (r.event === 'set'){ saveSpawn(); flash('RESPAWN POINT', 1.1); toast('↩ Respawn point set. Pause to clear it, or press it again while standing on it.'); }
+  else if (r.event === 'clear'){ saveSpawn(); flash('CLEARED', 0.8); toast('↩ Respawn point cleared. Bails use checkpoints again.'); }
+  else if (r.event === 'reject') toast('↩ ' + (SPAWN_WHY[r.reason] || 'Cannot set that here'));
+}
+function trySetSpawn(){ const r = spawnHold(spawnState, true, riderForSpawn()); spawnState.latch = false; applySpawnResult(r); }
+function spawnFrame(inp){ const r = spawnHold(spawnState, !!inp.spawnClick && !!inp.spawnMod, riderForSpawn()); if (r.event && r.event !== 'held') applySpawnResult(r); }
+function clearSpawnPoint(){ applySpawnResult(clearSpawn(spawnState)); }
 function respawnSafe(){
   const prefer = savedCam(); if (prefer !== camMode){ camMode = prefer; camInit = false; }
   if (S.failedRun !== undefined && S.failedRun !== null){ const tr = trails[S.failedRun]; S.failedRun = null;   // failed run: back to just above that trail's START arch
-    placeAt(tr.pts[0][0], tr.pts[0][1], tr.yaw[0]); S.crumbs = []; S.crumbT = 0; camInit = false; return; }
+    placeAt(tr.pts[0][0], tr.pts[0][1], tr.yaw[0]); S.crumbs = []; S.crumbT = 0; camInit = false; return 'start'; }
+  if (spawn){ const tr = S.run && trails[S.run.t];
+    const cp = tr ? (S.run.cp != null ? tr.cps[S.run.cp] : {x:tr.pts[3][0], z:tr.pts[3][1], yaw:tr.yaw[3]}) : { x:S.x, z:S.z, yaw:S.yaw, via:'here' };
+    const choice = respawnChoice(spawn, cp, !!S.run);
+    if (S.run && choice.unranked){ S.run.unranked = true; S.run.spawnUsed = true; }
+    updateChunks(choice.x, choice.z, 1e9, 160); placeAt(choice.x, choice.z, choice.yaw); S.crumbs = []; S.crumbT = 0; camInit = false;
+    flash(S.run ? 'RESPAWN POINT — UNRANKED' : 'RESPAWN POINT', 1.2);
+    if (S.run) toast('⏱ Respawn point used. This run will not be ranked.');
+    return 'spawn'; }
   if (S.run){ const tr = trails[S.run.t], cp = S.run.cp != null ? tr.cps[S.run.cp] : {x:tr.pts[3][0], z:tr.pts[3][1], yaw:tr.yaw[3]};   // run: last checkpoint (or the start), timer keeps going
-    updateChunks(cp.x, cp.z, 1e9, 160); placeAt(cp.x, cp.z, cp.yaw); S.speed = 3.5; S.crumbs = []; S.crumbT = 0; camInit = false; return; }
+    updateChunks(cp.x, cp.z, 1e9, 160); placeAt(cp.x, cp.z, cp.yaw); S.speed = 3.5; S.crumbs = []; S.crumbT = 0; camInit = false; return 'checkpoint'; }
   // inside the dirt jump park: back to the top of the roll-in of the line you were on (nearest by lateral offset), facing down it, stopped
   if (!RAMP && PARK.lines && inPark(S.x, S.z)){ const d = PARK.dir, sx = -d[1], sz = d[0], lat = (S.x-PARK.x)*sx + (S.z-PARK.z)*sz;
     const opts = [...PARK.lines.map(l => ({off:l.off, t:l.start})), ...(PARK.drop ? [{off:PARK.drop.off, x:PARK.drop.x + PARK.drop.dx*3, z:PARK.drop.z + PARK.drop.dz*3}] : [])];
@@ -810,9 +841,9 @@ function trackWorld(dt){
       const cps = tr.cps || []; while ((S.run.cp ?? -1) + 1 < cps.length && cur.s >= cps[(S.run.cp ?? -1) + 1].s - 2 && cur.s < cps[(S.run.cp ?? -1) + 1].s + 25){ S.run.cp = (S.run.cp ?? -1) + 1; (S.run.cpt ||= [])[S.run.cp] = S.time - S.run.start; toast(`🚩 Checkpoint ${S.run.cp+1}/${cps.length} · ${tr.name}`); flash('CHECKPOINT', 1.0); }
       if (cur.s > tr.len - 8){ const time = S.time - S.run.start, bonus = Math.round((1000 + tr.len/2)*EARN);
         S.finishes++; S.score += bonus; flash('FINISH!', 2.5); trickEl.textContent = `${tr.name} in ${fmtTime(time)}  +$${bonus}`; S.trickMsgT = 3.5;
-        S.best ||= {}; if (!S.best[tr.name] || time < S.best[tr.name]){ S.best[tr.name] = time; LS.set('trailDescent.best.' + WORLD, S.best); toast(`⭐ NEW BEST! ${tr.name}: ${fmtTime(time)}`); }
+        S.best ||= {}; if (!S.run.spawnUsed && (!S.best[tr.name] || time < S.best[tr.name])){ S.best[tr.name] = time; LS.set('trailDescent.best.' + WORLD, S.best); toast(`⭐ NEW BEST! ${tr.name}: ${fmtTime(time)}`); }
         { const cps = tr.cps || [], cpt = S.run.cpt || [];
-          if (FPV.state.on || S.run.unranked) toast('Drone was out — this run is not ranked');
+          if (!rankedRun(S.run, FPV.state.on)) toast(S.run.spawnUsed ? 'Respawn point was used — this run is not ranked' : 'Drone was out — this run is not ranked');
           else if (CLOUD && cps.length === cpt.filter(x => x != null).length) CLOUD.trail(RAMP ? 1 : 0, S.run.t, tr.name, time, cpt, S.run.combo || 0, layoutTag(tr.id));
           else if (CLOUD) setTimeout(() => toast('Leaderboard: missed a checkpoint, so this time is not ranked'), 2500); }
         if (!unlocked.has(tr.name)){ const pro = trails.find(o => o.unlockAny && o !== tr), wasPro = pro && anyOtherDone(pro); unlocked.add(tr.name); saveUnlocks(); setTimeout(()=>toast(`🔓 Unlocked: ${tr.name} — teleport there any time`), 1200);
@@ -1148,7 +1179,7 @@ function frame(){
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, clock.getDelta());
   const inp = readInput(); if (Object.keys(inp.pressed).length) startMusic();
-  if (S.state === 'riding' && !menu.open && !shopOpen) markerFrame(inp);
+  if (S.state === 'riding' && !menu.open && !shopOpen && !bigMap.open) spawnFrame(inp);
   emoteFrame(dt, inp);
   for (const k in inp.pressed) onPress(k);
   if (inp.droneHeld && S.state==='riding' && !menu.open && !shopOpen && !bigMap.open) backHold += dt;
@@ -1332,9 +1363,7 @@ function drawMinimap(){
     const tr = s.trail !== undefined ? trails[s.trail] : s.name.startsWith('Dirt') ? PARK : null;     // difficulty icon next to each spot
     if (tr){ const d = DIFF[tr.diff]; mmx.font = 'bold 9px Arial'; mmx.lineWidth = 2; mmx.strokeStyle = '#fff'; mmx.fillStyle = d.color; mmx.globalAlpha = open ? 1 : 0.6;
       mmx.strokeText(d.icon, px+12, pz+3); mmx.fillText(d.icon, px+12, pz+3); mmx.globalAlpha = 1; mmx.font = 'bold 10px Arial'; } });
-  const pin = (x, z, fill) => { const px = (x+HALF)/sc, pz = (z+HALF)/sc; mmx.fillStyle = fill; mmx.strokeStyle = '#003'; mmx.lineWidth = 1.5; mmx.beginPath(); mmx.moveTo(px, pz-6); mmx.lineTo(px+5, pz); mmx.lineTo(px, pz+6); mmx.lineTo(px-5, pz); mmx.closePath(); mmx.fill(); mmx.stroke(); };
-  waypoints.forEach(w => pin(w.x, w.z, '#3ef0ff'));
-  if (personal) pin(personal.x, personal.z, '#ff9a3c');
+  waypoints.forEach(w => { const px = (w.x+HALF)/sc, pz = (w.z+HALF)/sc; mmx.fillStyle = '#3ef0ff'; mmx.strokeStyle = '#003'; mmx.lineWidth = 1.5; mmx.beginPath(); mmx.moveTo(px, pz-6); mmx.lineTo(px+5, pz); mmx.lineTo(px, pz+6); mmx.lineTo(px-5, pz); mmx.closePath(); mmx.fill(); mmx.stroke(); });
   mmx.textAlign = 'start';
   mmx.save(); mmx.translate(a,b); mmx.rotate(-yw); mmx.fillStyle = '#ffd84d'; mmx.strokeStyle = '#000'; mmx.lineWidth = 1;
   mmx.beginPath(); mmx.moveTo(0,-7); mmx.lineTo(4.5,5); mmx.lineTo(-4.5,5); mmx.closePath(); mmx.fill(); mmx.stroke(); mmx.restore();
@@ -1343,36 +1372,9 @@ function drawMinimap(){
 const bigMap = { open:false, cx:0, cz:0, wasPaused:false, mouse:false };
 const WP_KEY = 'trailDescent.waypoints', WP_MAX = 3;
 const waypoints = (LS.get(WP_KEY, []) || []).filter(w => Number.isFinite(w.x) && Number.isFinite(w.z)).slice(0, WP_MAX);
-let personal = LS.get('trailDescent.marker', null);
-if (!personal || !Number.isFinite(personal.x) || !Number.isFinite(personal.z)) personal = null;
-const markerState = { marker: personal, latch: false };
 const wpBeacons = [];
 const beaconMat = new THREE.MeshBasicMaterial({color:0x3ef0ff, transparent:true, opacity:0.45, blending:THREE.AdditiveBlending, depthWrite:false, fog:false});
 const beaconCore = new THREE.MeshBasicMaterial({color:0xbaffff, transparent:true, opacity:0.8, blending:THREE.AdditiveBlending, depthWrite:false, fog:false});
-const markerMat = new THREE.MeshBasicMaterial({color:0xff9a3c, transparent:true, opacity:0.5, blending:THREE.AdditiveBlending, depthWrite:false, fog:false});
-const markerCore = new THREE.MeshBasicMaterial({color:0xffe0b0, transparent:true, opacity:0.85, blending:THREE.AdditiveBlending, depthWrite:false, fog:false});
-function syncPersonal(){
-  for (let i = wpBeacons.length - 1; i >= 0; i--) if (wpBeacons[i].personal){ scene.remove(wpBeacons[i].g); wpBeacons[i].el.remove(); wpBeacons.splice(i, 1); }
-  LS.set('trailDescent.marker', personal); markerState.marker = personal;
-  if (!personal) return;
-  const g = new THREE.Group(), y = terrainH(personal.x, personal.z);
-  const outer = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 260, 16, 1, true), markerMat); outer.position.y = 130; g.add(outer);
-  const core = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 260, 8, 1, true), markerCore); core.position.y = 130; g.add(core);
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(3, 0.25, 6, 32), markerCore); ring.rotation.x = Math.PI/2; ring.position.y = 0.4; g.add(ring);
-  g.position.set(personal.x, y, personal.z); scene.add(g);
-  const el = document.createElement('div'); el.className = 'wpMarker'; el.innerHTML = '<b>★</b><span></span>'; $('wpMarkers').appendChild(el);
-  wpBeacons.push({g, ring, el, w: personal, personal: true});
-}
-function placeMarker(x, z){
-  const next = markerHold({ marker: personal, latch: false }, true, true, x, z);
-  personal = next.marker;
-  toast(next.event === 'remove' ? '★ Marker removed' : '★ Marker set');
-  syncPersonal();
-}
-function markerFrame(inp){
-  const r = markerHold(markerState, !!inp.markerClick, !!inp.markerMod, S.x, S.z);
-  if (r.event === 'place' || r.event === 'remove'){ personal = r.marker; toast(r.event === 'remove' ? '★ Marker removed' : '★ Marker set'); syncPersonal(); }
-}
 function syncBeacons(){ for (const b of wpBeacons) scene.remove(b.g); wpBeacons.length = 0; $('wpMarkers').innerHTML = '';
   waypoints.forEach((w, i) => { const g = new THREE.Group(), y = terrainH(w.x, w.z);
     const outer = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 260, 16, 1, true), beaconMat); outer.position.y = 130; g.add(outer);
@@ -1380,7 +1382,7 @@ function syncBeacons(){ for (const b of wpBeacons) scene.remove(b.g); wpBeacons.
     const ring = new THREE.Mesh(new THREE.TorusGeometry(3, 0.25, 6, 32), beaconCore); ring.rotation.x = Math.PI/2; ring.position.y = 0.4; g.add(ring);
     g.position.set(w.x, y, w.z); scene.add(g);
     const el = document.createElement('div'); el.className = 'wpMarker'; el.innerHTML = `<b>◆ ${i+1}</b><span></span>`; $('wpMarkers').appendChild(el);
-    wpBeacons.push({g, ring, el, w}); }); LS.set(WP_KEY, waypoints); syncPersonal(); }
+    wpBeacons.push({g, ring, el, w}); }); LS.set(WP_KEY, waypoints); }
 function toggleWaypointAt(x, z){ const scr = mapScale(); const hit = waypoints.findIndex(w => Math.hypot(w.x-x, w.z-z)*scr.s < 14);
   if (hit >= 0){ waypoints.splice(hit, 1); toast('◆ Waypoint removed'); }
   else { if (waypoints.length >= WP_MAX) waypoints.shift(); waypoints.push({x, z}); toast(`◆ Waypoint set (${waypoints.length}/${WP_MAX})`); }
@@ -1388,7 +1390,7 @@ function toggleWaypointAt(x, z){ const scr = mapScale(); const hit = waypoints.f
 const _wv = new THREE.Vector3();
 function updateWaypoints(dt){ const W_ = innerWidth, H_ = innerHeight;
   for (let i = wpBeacons.length-1; i >= 0; i--){ const b = wpBeacons[i], d = Math.hypot(S.x-b.w.x, S.z-b.w.z);
-    if (!b.personal && d < 12 && S.state === 'riding' && !S.lift){ waypoints.splice(waypoints.indexOf(b.w), 1); toast('◆ Waypoint reached!'); syncBeacons(); return; }
+    if (d < 12 && S.state === 'riding' && !S.lift){ waypoints.splice(waypoints.indexOf(b.w), 1); toast('◆ Waypoint reached!'); syncBeacons(); return; }
     b.ring.rotation.z += dt; b.ring.scale.setScalar(1 + 0.15*Math.sin(performance.now()/300));
     _wv.set(b.w.x, terrainH(b.w.x, b.w.z) + 4, b.w.z).project(camera);
     let x = (_wv.x*0.5 + 0.5)*W_, y = (-_wv.y*0.5 + 0.5)*H_; const behind = _wv.z > 1, m = 40;
@@ -1408,15 +1410,12 @@ function mapTeleport(){ const {s} = mapScale(); let best = -1, bd = 1e9; spots.f
   if (best < 0){ toast('Move the cursor onto a spot to teleport'); return; }
   if (!isOpen(best)){ toast(`🔒 ${spots[best].name} is locked — ${lockMsg(spotTrail(best))}`); return; }
   closeMap(); teleport(best); }
-function nearPersonal(){ if (!personal) return false; const {s} = mapScale(); return Math.hypot(personal.x - bigMap.cx, personal.z - bigMap.cz) * s < 16; }
-function mapPick(){ if (nearPersonal()){ personal = null; markerState.latch = false; toast('★ Marker removed'); syncPersonal(); return; } toggleWaypointAt(bigMap.cx, bigMap.cz); }
 function mapKey(code){
-  if (hitBind('marker', code)){ placeMarker(S.x, S.z); return; }
   if (code==='B'||code===kbBind('map')||code===padBind('map')||code==='Escape') closeMap();
   else if (code==='A'||code==='Enter'||code==='Space') mapTeleport();
-  else if (code==='X'||code==='KeyW') mapPick(); }
+  else if (code==='X'||code==='KeyW') toggleWaypointAt(bigMap.cx, bigMap.cz); }
 bm.addEventListener('mousemove', e => { const {s, ox, oy} = mapScale(); bigMap.cx = (e.clientX - ox)/s - HALF; bigMap.cz = (e.clientY - oy)/s - HALF; bigMap.mouse = true; });
-bm.addEventListener('click', e => { if (bigMap.open) mapPick(); });
+bm.addEventListener('click', e => { if (bigMap.open) toggleWaypointAt(bigMap.cx, bigMap.cz); });
 bm.addEventListener('dblclick', e => { if (bigMap.open) mapTeleport(); });
 function mapFrame(dt, inp){
   if (bm.width !== innerWidth || bm.height !== innerHeight){ bm.width = innerWidth; bm.height = innerHeight; }
@@ -1449,9 +1448,7 @@ function mapFrame(dt, inp){
   c.textAlign = 'center'; c.font = 'bold 11px "Barlow Condensed", sans-serif';
   spots.forEach((p, i) => { const [a,b] = P(p.x, p.z), open = isOpen(i); c.fillStyle = open ? '#fff' : 'rgba(60,60,60,.9)'; c.beginPath(); c.arc(a, b, 8, 0, 7); c.fill(); c.strokeStyle = '#000'; c.lineWidth = 1; c.stroke(); c.fillStyle = open ? '#000' : '#bbb'; c.fillText(open ? String(i+1) : '🔒', a, b+4); });
   // waypoints
-  const pinBig = (x, z, fill, label) => { const [a,b] = P(x, z); c.fillStyle = fill; c.strokeStyle = '#003'; c.lineWidth = 2; c.beginPath(); c.moveTo(a, b-9); c.lineTo(a+7, b); c.lineTo(a, b+9); c.lineTo(a-7, b); c.closePath(); c.fill(); c.stroke(); c.fillStyle = '#003'; c.fillText(label, a, b+4); };
-  waypoints.forEach((w, i) => pinBig(w.x, w.z, '#3ef0ff', String(i+1)));
-  if (personal) pinBig(personal.x, personal.z, '#ff9a3c', '★');
+  waypoints.forEach((w, i) => { const [a,b] = P(w.x, w.z); c.fillStyle = '#3ef0ff'; c.strokeStyle = '#003'; c.lineWidth = 2; c.beginPath(); c.moveTo(a, b-9); c.lineTo(a+7, b); c.lineTo(a, b+9); c.lineTo(a-7, b); c.closePath(); c.fill(); c.stroke(); c.fillStyle = '#003'; c.fillText(String(i+1), a, b+4); });
   // rider position + heading
   { const [a,b] = P(S.x, S.z); c.save(); c.translate(a, b); c.rotate(-(S.yaw + (S.spin||0))); c.fillStyle = '#ffd84d'; c.strokeStyle = '#000'; c.lineWidth = 1.5; c.beginPath(); c.moveTo(0,-11); c.lineTo(7,8); c.lineTo(-7,8); c.closePath(); c.fill(); c.stroke(); c.restore(); }
   // cursor + hover info
@@ -1460,13 +1457,13 @@ function mapFrame(dt, inp){
     const dist = Math.round(Math.hypot(bigMap.cx - S.x, bigMap.cz - S.z)); c.textAlign = 'left'; c.font = 'bold 13px "Barlow Condensed", sans-serif'; c.fillStyle = '#fff'; c.strokeStyle = '#000'; c.lineWidth = 3;
     const t = hov >= 0 ? `${spots[hov].name} — ${isOpen(hov) ? 'A / Enter: teleport' : '🔒 locked'}` : `${dist} m away`; c.strokeText(t, a+16, b-14); c.fillText(t, a+16, b-14); }
   // legend
-  const lx = innerWidth - 270, rows = [['━', '#fff', 'Trail (dashed + 🔒 = locked)'], ['▲', '#f2b800', 'Checkpoint'], ['■', '#e53935', 'Lift station (dashed line = lift)'], ['─', '#ebd7aa', 'Connector path'], ...(RAMP ? [['◯', '#d9772b', 'Finish corral']] : [['●', '#a06e3c', 'Dirt Jump Park']]), ['🚲', '#fff', 'Bike Shop'], ['①', '#fff', 'Teleport spot'], ['◆', '#3ef0ff', `Waypoint (max ${WP_MAX})`], ['★', '#ff9a3c', 'Your marker'], ['▲', '#ffd84d', 'You']];
+  const lx = innerWidth - 270, rows = [['━', '#fff', 'Trail (dashed + 🔒 = locked)'], ['▲', '#f2b800', 'Checkpoint'], ['■', '#e53935', 'Lift station (dashed line = lift)'], ['─', '#ebd7aa', 'Connector path'], ...(RAMP ? [['◯', '#d9772b', 'Finish corral']] : [['●', '#a06e3c', 'Dirt Jump Park']]), ['🚲', '#fff', 'Bike Shop'], ['①', '#fff', 'Teleport spot'], ['◆', '#3ef0ff', `Waypoint (max ${WP_MAX})`], ['▲', '#ffd84d', 'You']];
   c.fillStyle = 'rgba(26,22,15,.88)'; c.fillRect(lx-12, 20, 262, 46 + rows.length*20 + 140); c.textAlign = 'left'; c.font = '28px "Bebas Neue", sans-serif'; c.fillStyle = '#d9772b'; c.fillText('MAP', lx, 44);
   c.font = '13px "Barlow Condensed", sans-serif'; rows.forEach(([ic, col, label], k) => { c.fillStyle = col; c.fillText(ic, lx, 70 + k*20); c.fillStyle = '#ddd'; c.fillText(label, lx + 26, 70 + k*20); });
   let y = 80 + rows.length*20; c.fillStyle = '#fff'; c.font = 'bold 13px "Barlow Condensed", sans-serif'; c.fillText('Difficulty', lx, y); c.font = '13px "Barlow Condensed", sans-serif';
   for (const k of ['green','blue','black','dblack', ...(trails.some(t => t.diff === 'pro3') ? ['pro3'] : [])]){ y += 18; c.fillStyle = /^#(000|111|222)/.test(DIFF[k].color) || DIFF[k].color==='black' ? '#eee' : DIFF[k].color; c.fillText(`${DIFF[k].icon} ${DIFF[k].label}`, lx, y); }
   y += 26; c.fillStyle = '#bbb'; c.font = '12px "Barlow Condensed", sans-serif';
-  for (const l of ['Stick / D-pad / arrows / mouse: move cursor', 'A / Enter / double-click: teleport', 'X / W / click: set or remove waypoint', keyLabel(kbBind('marker')) + ' / ' + padLabel(padBind('markerClick')) + '+' + padLabel(padBind('markerMod')) + ': marker at you', 'B / M / View: close']){ c.fillText(l, lx, y); y += 16; }
+  for (const l of ['Stick / D-pad / arrows / mouse: move cursor', 'A / Enter / double-click: teleport', 'X / W / click: set or remove waypoint', 'B / M / View: close']){ c.fillText(l, lx, y); y += 16; }
 }
 syncBeacons();
 // ---------- music: shuffled CC0 playlist (starts after the first user input, per browser autoplay rules) ----------
@@ -1564,12 +1561,13 @@ const PAGES = {
     <p><b>Trick references:</b> Red Bull slopestyle trick dictionary, X Games BMX Tricktionary, riding.guide.</p>
     <p><b>Graphics Medium/High/Max:</b> CC0 textures & HDRIs from Poly Haven (polyhaven.com): sparse_grass, brown_mud_leaves_01, aerial_rocks_02, bark_brown_02, gravel, aerial_sand, red_dirt_mud_01, dry_riverbed_rock; skies pizzo_pernice_puresky (Mountain), quarry_01_puresky (Rampage).</p>
     <p><b>Engine:</b> three.js (MIT).</p></div>`, items:[{label:'‹ Back', act:back}]}),
-  controls: () => ({title:'CONTROLS', html:'<p class="mpNote">Select a row, then press the new key or button. A shared control (map and drone, camera reset and shop, shift-up and emote, brake and the marker modifier) is not a conflict. Wheelie, hop, and stick tricks stay on the sticks.</p>', items: controlItems()}),
+  controls: () => ({title:'CONTROLS', html:'<p class="mpNote">Select a row, then press the new key or button. A shared control (map and drone, camera reset and shop, shift-up and emote, brake and the respawn modifier) is not a conflict. Wheelie, hop, and stick tricks stay on the sticks.</p>', items: controlItems()}),
   pause: () => ({title:'PAUSED', items:[
     {label:'Resume', act:() => togglePause()},
     {label:'Map', sub: padLabel(padBind('map')) + ' / ' + keyLabel(kbBind('map')), act:() => { closeMenu(); openMap(); bigMap.wasPaused = false; }},
     {label:'FPV drone', sub: keyLabel(kbBind('drone')) + ', or hold ' + padLabel(padBind('drone')) + '. Off during a timed run.', act:() => { closeMenu(); S.paused = false; toggleDrone(); }},
     {label:'Bike Shop', act:() => openShop()},
+    {label:'Clear respawn point', sub: spawn ? 'Bails go back to the last checkpoint' : 'None set', act: () => { if (!spawn){ toast('↩ No respawn point set'); return; } clearSpawnPoint(); }},
     {label:'Multiplayer', value:NET && NET.st.status === 'in' ? 'ROOM ' + NET.st.code : undefined, act:() => go('multi')},
     {label:'Leaderboards', act:() => openBoards()},
     {label:'Skip song', sub: music.started && SETTINGS.musicOn && music.i >= 0 ? `Now: ${TRACKS[music.order[music.i]].title} — ${TRACKS[music.order[music.i]].artist}` : 'Music is off or not started', act:() => { if (!music.started){ music.started = true; } nextSong(); }},
@@ -1595,7 +1593,7 @@ function toMainMenu(){ S.paused = false; S.state = 'menu'; S.run = null; S.lift 
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const PAD_CODES = new Set(['A','B','X','Y','Start','Back','LB','RB','LS','RS','DU','DD','DL','DR','LT','RT']);
 let bindCapture = null;
-function bindName(id){ return id === 'markerClick' ? 'Marker click' : id === 'markerMod' ? 'Marker modifier' : actionLabel(id); }
+function bindName(id){ return id === 'spawnClick' ? 'Respawn click' : id === 'spawnMod' ? 'Respawn modifier' : actionLabel(id); }
 function bindLabel(device, code){ return device === 'pad' ? padLabel(code) : keyLabel(code); }
 function startBind(id, device){ bindCapture = { id, device, phase: 'listen', trig: true }; }
 function cancelBind(){ bindCapture = null; toast('Bind cancelled'); if (menu.open) renderMenu(); }
@@ -1623,8 +1621,8 @@ function controlItems(){
   const rows = [{ label:'Reset to defaults', sub:'Restores every keyboard and controller bind', act:() => { SETTINGS.binds = loadBinds(null); saveSettings(); renderHelp(); toast('Controls reset'); } }];
   const row = (id, device) => ({ label: bindName(id) + (device === 'kb' ? ' — keyboard' : ' — controller'), value: device === 'kb' ? keyLabel(kbBind(id)) : padLabel(padBind(id)), sub: bindCapture && bindCapture.id === id && bindCapture.device === device ? (bindCapture.phase === 'conflict' ? bindLabel(device, bindCapture.code) + ' is ' + bindName(bindCapture.other) + '. A swaps, B cancels.' : 'Press the new ' + (device === 'kb' ? 'key' : 'button') + '. Esc cancels.') : (device === 'kb' ? 'Select, then press a key' : 'Select, then press a button'), act: () => startBind(id, device) });
   for (const [id] of ACTIONS){ rows.push(row(id, 'kb')); if (id in PAD_DEFAULT) rows.push(row(id, 'pad')); }
-  rows.push(row('markerClick', 'pad'));
-  rows.push(row('markerMod', 'pad'));
+  rows.push(row('spawnClick', 'pad'));
+  rows.push(row('spawnMod', 'pad'));
   rows.push({ label:'Wheelie', value:'BOTH STICKS UP', sub:'Fixed. On the ground only: both sticks leave center together and stay up.' });
   rows.push({ label:'Hop', value:'RS DOWN, THEN UP', sub:'Fixed. The up flick hops only after the stick was down.' });
   rows.push({ label:'Tricks', value:'LB + RIGHT STICK', sub:'Fixed. Eight directions. RS click is a barspin. Keyboard uses the trick modifier.' });
@@ -1637,7 +1635,7 @@ function renderHelp(){
     ['Steer (spin in air)', 'Left stick ← →', k('steerLeft') + ' / ' + k('steerRight') + ' or ← →'],
     ['In the air, stick down / back is a backflip (nose up) and stick up / forward is a frontflip (nose down). On the ground this stick only shifts your weight. A wheelie still needs both sticks up, and only while the wheels are on the ground.', 'Left stick ↓ backflip · ↑ frontflip', k('flipBack') + ' backflip · ' + k('flipForward') + ' frontflip'],
     ['Accelerate / pedal', p('pedal'), k('pedal') + ' or ↑'],
-    ['Brake (+steer = slide). Holding the marker modifier alone still brakes.', p('brake'), k('brake') + ' or ↓'],
+    ['Brake (+steer = slide). Holding the respawn modifier alone still brakes.', p('brake'), k('brake') + ' or ↓'],
     ['Pump / preload (bend down)', 'Right stick ↓ (hold)', k('pump') + ' (hold)'],
     ['Bunny hop. The up flick only hops if the stick was down first.', 'Right stick ↓ then ↑', 'release ' + k('pump')],
     ['Counter-pump (stretch up)', 'Right stick ↑', k('counter')],
@@ -1650,7 +1648,7 @@ function renderHelp(){
     ['Full-screen map. A short press opens it. Hold the drone button for the FPV drone.', p('map') + ' (tap)', k('map')],
     ['FPV drone. Off during a timed run.', 'Hold ' + p('drone'), k('drone')],
     ['Bike shop. The controller button opens it from the title or pause menu.', p('shop'), k('shop')],
-    ['Map marker at your current position. Press again nearby to remove it, or farther away to move it. One marker, saved on this device only.', p('markerClick') + ' + ' + p('markerMod'), k('marker')],
+    ['Respawn point at your position and facing. Stopped or slow, on the ground, not on a lift or inside a rock or tree. Press again while standing on it to clear it, or use the pause menu. Using it during a timed run makes that run unranked. Saved on this device only.', p('spawnClick') + ' + ' + p('spawnMod'), k('spawn')],
     ['Wheelie. Both sticks up together from center, then balance with the left stick. Ground only.', 'Both sticks ↑', k('flipBack') + ' while rolling'],
     ['Emotes, only in a room, stopped or on a lift. Hold to open the wheel.', 'Hold ' + p('emote'), 'Hold ' + k('emote')],
     ['Teleport to prev / next spot', p('spotPrev') + ' / ' + p('spotNext'), k('spotPrev') + ' / ' + k('spotNext')],
@@ -1660,7 +1658,7 @@ function renderHelp(){
   const head = document.querySelector('#help h3');
   if (head) head.innerHTML = `CONTROLS <small>(${k('help')}, or Y in the pause menu, toggles · rebind in Settings → Controls)</small>`;
   const foot = document.querySelector('#help p');
-  if (foot) foot.textContent = `Pump: compress into backsides, extend over faces to gain speed. Lean with the right stick (${k('leanLeft')} / ${k('leanRight')}) to carve. Land straight and not leaned past 30°. Your marker is ${k('marker')} or ${p('markerClick')}+${p('markerMod')}. Controller: press any button so Firefox detects it.`;
+  if (foot) foot.textContent = `Pump: compress into backsides, extend over faces to gain speed. Lean with the right stick (${k('leanLeft')} / ${k('leanRight')}) to carve. Land straight and not leaned past 30°. Respawn point is ${k('spawn')} or ${p('spawnClick')}+${p('spawnMod')}. Controller: press any button so Firefox detects it.`;
 }
 function menuKey(code){ if (bindCapture){ captureKey(code); return; } const it = menu.items[menu.sel];
   if (menu.page === 'boards' && ['LB','RB','KeyQ','KeyE'].includes(code)){ lbMove(['LB','KeyQ'].includes(code) ? -1 : 1, 1); return; }
