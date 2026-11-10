@@ -7,6 +7,7 @@ export const HALF = RAMP ? 760 : 1380;             // world is 2.76 km x 2.76 km
 const CORE = RAMP ? 640 : 1200;                    // original map half-size: trail/lift layout stays inside it so nothing moves
 const BLEND = W + 7;                  // trail bench blends back into the hillside over this distance
 const PADS = [];                       // level pads under the shop and lift stations; filled once those spots exist
+let editorOn = false;                  // level-editor pad. Off during normal play, so the mountain is unchanged.
 
 // ---------- noise ----------
 function mulberry(a){ return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
@@ -602,7 +603,7 @@ export function nearTrails(x, z){
 }
 export function trailDist(x,z){ let m = 1e9; for (const n of nearTrails(x,z)) m = Math.min(m, n.d); return m; }
 export function inPark(x,z){ return Math.hypot(x-PARK.x, z-PARK.z) <= PARK.r+6; }
-export function isDirt(x,z){ return trailDist(x,z) <= W+0.3 || inPark(x,z) || Math.hypot(x-PARK.x, z-PARK.z) <= PARK.r+35 || featH(x,z) > 0.05 || connDist(x,z) <= CW; }   // wooden decks and connector paths ride like trail
+export function isDirt(x,z){ return editorDirt(x, z) || trailDist(x,z) <= W+0.3 || inPark(x,z) || Math.hypot(x-PARK.x, z-PARK.z) <= PARK.r+35 || featH(x,z) > 0.05 || connDist(x,z) <= CW; }   // wooden decks and connector paths ride like trail
 
 // Level pads under the shop and the lift stations. Filled after those spots are chosen, from the raw hillside.
 function padWeight(dx, dz, p){
@@ -634,6 +635,7 @@ function terrainRaw(x, z){
 }
 // terrain without features: hillside with benched trails cut in, plus a flat pad under each building
 export function terrainH(x, z){
+  if (editorOn && editorPad(x, z)) return EDITOR_BASE + sculptAt(x, z);
   const raw = terrainRaw(x, z);
   if (!PADS.length) return raw.h;
   let acc = 0, wsum = 0, solid = 0;
@@ -652,13 +654,14 @@ export function terrainH(x, z){
   return raw.h * (1 - w) + (acc / wsum) * w;
 }
 function featHq(x, z, withRocks){
-  const fs = featGrid.get(key(Math.floor(x/CELL), Math.floor(z/CELL))); if (!fs) return 0; let h = 0;
+  const fs = featGrid.get(key(Math.floor(x/CELL), Math.floor(z/CELL))) || []; let h = 0;
   for (const f of fs){ if (x<f.minx||x>f.maxx||z<f.minz||z>f.maxz) continue;
     const rx = x-f.x, rz = z-f.z, t = rx*f.dx + rz*f.dz, us = rx*f.dz - rz*f.dx, u = Math.abs(us);
     if (t < 0 || t > f.L || u > f.hw + (f.wood ? 0 : 1.2)) continue;
     if (f.boulders){ if (!withRocks) continue; for (const b of f.boulders){ if (b.big) continue; const v = rockTop(b, x, z); if (v > h) h = v; } continue; }
     let v = f.p(t, us); if (!f.wood && u > f.hw) v *= 0.5*(1+Math.cos(Math.PI*(u-f.hw)/1.2));   // dirt jumps have rounded sides
     if (v > h) h = v; }
+  if (editorOn) h = Math.max(h, editorHeight(x, z));
   return h;
 }
 export const featH = (x, z) => featHq(x, z, true), featBase = (x, z) => featHq(x, z, false);
@@ -1007,3 +1010,155 @@ export function liftLayoutProblems(){ const out = [];
   if (!RAMP) for (const t of trails){ let worst = 1e9, wp = null; for (const p of t.pts){ const d = Math.hypot(p[0]-PARK.x, p[1]-PARK.z) - PARK.r; if (d < worst){ worst = d; wp = p; } }
     if (worst < 15) out.push(`trail ${t.name} passes ${worst.toFixed(1)} m from the park at (${wp[0].toFixed(0)},${wp[1].toFixed(0)})`); }
   return out; }
+
+// ---------- level editor runtime (a flat pad the mountain never uses) ----------
+export const EDITOR_ORIGIN = { x: 2400, z: 2400 };
+const EDITOR_BASE = 48, EDITOR_R = 180, EDITOR_CELL = 4;
+const editorFeats = [];
+const editorTrees = [];
+let editorPaths = [];
+const sculpt = new Map();
+export function inEditorPad(x, z){ return editorOn && Math.hypot(x - EDITOR_ORIGIN.x, z - EDITOR_ORIGIN.z) < EDITOR_R; }
+function editorPad(x, z){ return Math.hypot(x - EDITOR_ORIGIN.x, z - EDITOR_ORIGIN.z) < EDITOR_R; }
+function sculptAt(x, z){
+  const ix = (x - EDITOR_ORIGIN.x) / EDITOR_CELL, iz = (z - EDITOR_ORIGIN.z) / EDITOR_CELL;
+  const i0 = Math.floor(ix), j0 = Math.floor(iz), fx = ix - i0, fz = iz - j0;
+  const g = (i, j) => sculpt.get(i + ',' + j) || 0;
+  return g(i0, j0) * (1 - fx) * (1 - fz) + g(i0 + 1, j0) * fx * (1 - fz) + g(i0, j0 + 1) * (1 - fx) * fz + g(i0 + 1, j0 + 1) * fx * fz;
+}
+function editorHeight(x, z){
+  let h = 0;
+  for (const f of editorFeats){
+    if (x < f.minx || x > f.maxx || z < f.minz || z > f.maxz) continue;
+    const rx = x - f.x, rz = z - f.z, t = rx * f.dx + rz * f.dz, us = rx * f.dz - rz * f.dx, u = Math.abs(us);
+    if (t < 0 || t > f.L || u > f.hw + 1.2) continue;
+    let v = f.p(t, us); if (u > f.hw) v *= 0.5 * (1 + Math.cos(Math.PI * (u - f.hw) / 1.2));
+    if (v > h) h = v;
+  }
+  return h;
+}
+function editorDirt(x, z){
+  if (!editorOn) return false;
+  for (const path of editorPaths) for (let i = 1; i < path.length; i++){
+    const a = path[i - 1], b = path[i], ex = b[0] - a[0], ez = b[1] - a[1], L2 = ex * ex + ez * ez || 1;
+    let u = ((x - a[0]) * ex + (z - a[1]) * ez) / L2; u = u < 0 ? 0 : u > 1 ? 1 : u;
+    if (Math.hypot(x - (a[0] + ex * u), z - (a[1] + ez * u)) < 3.2) return true;
+  }
+  return false;
+}
+export function editorTrunks(x, z){
+  if (!editorOn) return [];
+  return editorTrees.filter(t => Math.abs(t.x - x) < 2 && Math.abs(t.z - z) < 2);
+}
+function bounds(f){
+  f.minx = Math.min(f.x, f.x + f.dx * f.L) - f.hw - 2; f.maxx = Math.max(f.x, f.x + f.dx * f.L) + f.hw + 2;
+  f.minz = Math.min(f.z, f.z + f.dz * f.L) - f.hw - 2; f.maxz = Math.max(f.z, f.z + f.dz * f.L) + f.hw + 2;
+}
+// Same landing ramp the trail jumps get: a slope that is still descending where a normal speed lands.
+export function fitLanding(f, speed = 9){
+  if (!f || typeof f.p !== 'function' || !(f.L > 1)) return f;
+  const old = f.p, oldL = f.L, v = speed;
+  let lipT = 0, lipH = -1;
+  for (let i = 1; i <= 36; i++){ const t = oldL * i / 36 * 0.8, h = old(t, 0); if (h >= lipH){ lipH = h; lipT = t; } }
+  if (lipH < 0.55) return f;
+  const face = Math.max(0.08, (old(lipT, 0) - old(Math.max(0, lipT - 0.5), 0)) / 0.5);
+  const grade = 0.05;
+  let lo = 1e9, hi = 0;
+  for (const spd of [v * 0.75, v, Math.min(16, v * 1.15)]){
+    const vy = face * spd + 0.45; let hit = lipT + spd * 2.2;
+    for (let t = 0.1; t < 3.2; t += 0.02){
+      const dist = lipT + spd * t, y = lipH + vy * t - 0.5 * 9.81 * t * t + grade * spd * t;
+      const gnd = dist <= oldL ? old(dist, 0) : 0;
+      if (y <= gnd + 0.05){ hit = dist; break; }
+    }
+    lo = Math.min(lo, hit); hi = Math.max(hi, hit);
+  }
+  let deckEnd = lipT;
+  for (let t = lipT; t < oldL; t += 0.35) if (old(t, 0) > lipH * 0.72) deckEnd = t;
+  const drop = Math.tan(30 * Math.PI / 180);
+  const start = Math.max(deckEnd + 0.3, lo - 1.5);
+  let end = Math.max(start + 4, hi + 2);
+  let h0 = Math.min(2.2, Math.max(1.1, drop * Math.min(8, end - start)));
+  end = Math.min(end, start + h0 / drop + 0.5);
+  if (end <= start + 1) return f;
+  f.p = (t, us) => {
+    const base = t <= oldL ? old(Math.min(Math.max(t, 0), oldL), us) : 0;
+    if (t <= deckEnd || t > end) return base;
+    if (t < start){ const u = Math.max(0, (t - (start - h0 / 0.55)) / (h0 / 0.55)); return Math.max(base, h0 * Math.min(1, u)); }
+    return Math.max(base, Math.max(0, h0 - drop * (t - start)));
+  };
+  f.L = Math.max(oldL, end); f.landed = true; bounds(f); return f;
+}
+export function aimOnTrail(f, pts, halfW = 2.4){
+  if (!f || !pts || pts.length < 2) return f;
+  let bi = 0, bd = 1e9;
+  for (let i = 1; i < pts.length; i++){
+    const a = pts[i - 1], b = pts[i], ex = b[0] - a[0], ez = b[1] - a[1], L2 = ex * ex + ez * ez || 1;
+    let u = ((f.x - a[0]) * ex + (f.z - a[1]) * ez) / L2; u = u < 0 ? 0 : u > 1 ? 1 : u;
+    const d = Math.hypot(f.x - (a[0] + ex * u), f.z - (a[1] + ez * u));
+    if (d < bd){ bd = d; bi = i; }
+  }
+  if (bd > halfW + 1.5) return f;
+  const a = pts[Math.max(0, bi - 1)], b = pts[Math.min(pts.length - 1, bi + 1)];
+  f.yaw = Math.atan2(-(b[0] - a[0]), -(b[1] - a[1]));
+  f.dx = -Math.sin(f.yaw); f.dz = -Math.cos(f.yaw);
+  const near = (x, z) => { let m = 1e9, yaw = f.yaw; for (let i = 0; i < pts.length; i++){ const d = Math.hypot(pts[i][0] - x, pts[i][1] - z); if (d < m){ m = d; const p = pts[Math.max(0, i - 1)], q = pts[Math.min(pts.length - 1, i + 1)]; yaw = Math.atan2(-(q[0] - p[0]), -(q[1] - p[1])); } } return { d: m, yaw }; };
+  let keep = 0;
+  for (let t = 0; t <= f.L + 1e-6; t += 0.5){
+    const n = near(f.x + f.dx * t, f.z + f.dz * t);
+    const ang = Math.atan2(Math.sin(Math.atan2(-f.dx, -f.dz) - n.yaw), Math.cos(Math.atan2(-f.dx, -f.dz) - n.yaw));
+    if (n.d > halfW + 0.3 || Math.abs(ang) > 0.2) break;
+    keep = t;
+  }
+  if (keep >= 3 && keep < f.L - 0.25) f.L = keep;
+  bounds(f); return f;
+}
+function specFeature(o){
+  const s = Math.max(0.4, Math.min(2.4, o.size || 1));
+  const x = EDITOR_ORIGIN.x + o.x, z = EDITOR_ORIGIN.z + o.z;
+  let yaw = o.yaw || 0, kind, hw = 2.2 * Math.min(s, 1.6), prof;
+  if (o.kind === 'jump'){ kind = 'kicker'; prof = PROF.kicker(1.15 * s, 5 * s); prof = { ...prof, wood: false }; }
+  else if (o.kind === 'table'){ kind = 'table'; prof = PROF.table(1.05 * s, 4 * s, 3.2 * s, 4 * s); }
+  else if (o.kind === 'hip'){ kind = 'kicker'; yaw += 0.32; prof = PROF.kicker(1.1 * s, 5 * s); prof = { ...prof, wood: false }; }
+  else if (o.kind === 'drop'){ kind = 'drop'; prof = PROF.drop(1.3 * s, 3.5 * s, 2.2 * s); prof = { ...prof, wood: false }; }
+  else if (o.kind === 'ramp'){ kind = 'kicker'; prof = PROF.kicker(0.55 * s, 9 * s); prof = { ...prof, wood: false }; hw = 2.4; }
+  else if (o.kind === 'rock'){ kind = 'rocks'; const R = 1.5 * s; prof = { L: R * 2, p: (t, us) => { const d = Math.hypot(t - R, us); return d < R ? (R - d) * 0.65 : 0; } }; hw = R; }
+  else if (o.kind === 'log'){ kind = 'roller'; prof = { L: 5 * s, p: (t, us) => Math.abs(us) < 0.4 ? 0.42 * s : 0 }; hw = 0.7; }
+  else return null;
+  const f = { kind, x, z, yaw, dx: -Math.sin(yaw), dz: -Math.cos(yaw), hw, ...prof, trail: -1, editor: true, hip: o.kind === 'hip' };
+  bounds(f); return f;
+}
+function trailRibbon(pts){
+  const out = [];
+  for (let i = 1; i < pts.length; i++){
+    const a = pts[i - 1], b = pts[i], len = Math.hypot(b[0] - a[0], b[1] - a[1]); if (len < 0.4) continue;
+    const yaw = Math.atan2(-(b[0] - a[0]), -(b[1] - a[1])), hw = 3.1;
+    const f = { kind: 'roller', x: a[0], z: a[1], yaw, dx: -Math.sin(yaw), dz: -Math.cos(yaw), hw, L: len + 1.2, trail: -1, editor: true, groom: true,
+      p: (t, us) => { if (t < 0 || t > len + 1.2) return 0; const lip = Math.abs(us) <= hw * 0.55 ? 0 : Math.min(1, (Math.abs(us) - hw * 0.55) / (hw * 0.45)); return 0.07 + 0.28 * lip * lip; } };
+    bounds(f); out.push(f);
+  }
+  return out;
+}
+export function loadEditorLevel(level){
+  editorFeats.length = 0; editorTrees.length = 0; editorPaths = []; sculpt.clear(); editorOn = true;
+  const trails = level?.trails || [];
+  const worldPts = trails.map(tr => (tr.pts || []).map(p => [EDITOR_ORIGIN.x + p[0], EDITOR_ORIGIN.z + p[1]]));
+  editorPaths = worldPts;
+  for (const pts of worldPts) editorFeats.push(...trailRibbon(pts));
+  const allPts = worldPts.flat();
+  for (const o of level?.objects || []){
+    if (o.kind === 'tree'){ editorTrees.push({ x: EDITOR_ORIGIN.x + o.x, z: EDITOR_ORIGIN.z + o.z, h: 6 * (o.size || 1) }); continue; }
+    if (o.kind === 'start' || o.kind === 'finish') continue;
+    const f = specFeature(o); if (!f) continue;
+    if (o.kind !== 'hip') aimOnTrail(f, allPts);
+    if (o.kind === 'jump' || o.kind === 'table' || o.kind === 'hip' || o.kind === 'drop' || o.kind === 'ramp') fitLanding(f, 8 + (o.size || 1) * 2);
+    editorFeats.push(f);
+  }
+  for (const c of level?.sculpt || []){
+    if (!Array.isArray(c) || c.length < 3) continue;
+    sculpt.set(Math.round(c[0]) + ',' + Math.round(c[1]), Math.max(-6, Math.min(6, +c[2] || 0)));
+  }
+  return { features: editorFeats.length, trees: editorTrees.length };
+}
+export function clearEditorLevel(){ editorOn = false; editorFeats.length = 0; editorTrees.length = 0; editorPaths = []; sculpt.clear(); }
+export function editorActive(){ return editorOn; }

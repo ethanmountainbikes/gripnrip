@@ -2,6 +2,7 @@
 // Privacy: save codes are never stored, only SHA-256(pepper + code). No IPs, emails or free text are stored; rate limits
 // are kept in memory only. Names are two indices into the client's preset word lists.
 import TRAILS from './trails.json';
+import { validateLevel, publicCodeOk, levelName, rateLevel, makeCode, ALPHA } from '../../level.js';
 
 const SAVE_CODE_RE = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{16}$/;
 const ID_RE = /^[a-z0-9:_-]{1,40}$/;
@@ -69,7 +70,11 @@ export class Store {
   constructor(state, env) { this.state = state; this.env = env; this.sql = state.storage.sql; this.rl = new Map();
     this.sql.exec(`CREATE TABLE IF NOT EXISTS saves (h TEXT PRIMARY KEY, data TEXT NOT NULL, updated INTEGER NOT NULL)`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS stats (c TEXT, w INTEGER, t INTEGER, h TEXT, na INTEGER, nb INTEGER, v INTEGER, at INTEGER, PRIMARY KEY (c, w, t, h))`);
-    this.sql.exec(`CREATE INDEX IF NOT EXISTS stats_rank ON stats (c, w, t, v)`); }
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS stats_rank ON stats (c, w, t, v)`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS levels (code TEXT PRIMARY KEY, id TEXT, ver INTEGER, na INTEGER, nb INTEGER, nc INTEGER, diff TEXT, style TEXT, likes INTEGER, reports INTEGER, hidden INTEGER, data TEXT, created INTEGER, updated INTEGER)`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS level_likes (code TEXT, h TEXT, PRIMARY KEY (code, h))`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS level_reports (code TEXT, h TEXT, PRIMARY KEY (code, h))`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS level_times (code TEXT, ver INTEGER, h TEXT, ms INTEGER, at INTEGER, PRIMARY KEY (code, ver, h))`); }
   // upsert a stat if it beats the stored one (lower for asc categories)
   put(c, w, t, h, name, v) { const C = CATS[c], prev = this.sql.exec('SELECT v FROM stats WHERE c = ? AND w = ? AND t = ? AND h = ?', c, w, t, h).toArray()[0];
     const better = !prev || (C.asc ? v < prev.v : v > prev.v);
@@ -80,7 +85,8 @@ export class Store {
   async fetch(req) {
     const url = new URL(req.url), ip = req.headers.get('CF-Connecting-IP') || 'x';
     if (!this.limit('ip:' + ip, 120)) return json({ error: 'slow down' }, 429);
-    let body; try { const t = await req.text(); if (t.length > 16000) return json({ error: 'too big' }, 413); body = JSON.parse(t || '{}'); } catch { return json({ error: 'bad json' }, 400); }
+    const cap = url.pathname.startsWith('/level') ? 70000 : 16000;
+    let body; try { const t = await req.text(); if (t.length > cap) return json({ error: 'too big' }, 413); body = JSON.parse(t || '{}'); } catch { return json({ error: 'bad json' }, 400); }
     const code = typeof body.code === 'string' ? body.code.toUpperCase().replace(/[^A-Z0-9]/g, '') : '';
     const h = SAVE_CODE_RE.test(code) ? await sha((this.env.PEPPER || 'gnr') + ':' + code) : null;
     const row = h ? this.sql.exec('SELECT data FROM saves WHERE h = ?', h).toArray()[0] : null;
@@ -154,8 +160,99 @@ export class Store {
         const c = CATS[body.cat] ? body.cat : 'time', C = CATS[c], w = C.per === 'g' ? 2 : body.world === 1 ? 1 : 0, t = C.per === 'trail' && int(body.trail, 0, 63) ? body.trail : 0;
         if (!this.limit('lbget:' + ip, 90)) return json({ error: 'slow down' }, 429);
         return json({ ok: true, cat: c, ...this.board(c, w, t, h) }); }
+      case '/level/publish': return this.publish(body, ip);
+      case '/level/get': return this.levelGet(body);
+      case '/level/list': return this.levelList(body);
+      case '/level/search': return this.levelSearch(body);
+      case '/level/like': return this.levelLike(body);
+      case '/level/report': return this.levelReport(body);
+      case '/level/time': return this.levelTime(body);
     }
     return json({ error: 'not found' }, 404);
+  }
+  deviceHash(device){ return typeof device === 'string' && [...device].every(c => ALPHA.includes(c)) && device.length === 16 ? sha((this.env.PEPPER || 'gnr') + ':dev:' + device) : Promise.resolve(null); }
+  card(r){ return { code: r.code, id: r.id, version: r.ver, name: [r.na, r.nb, r.nc], title: levelName([r.na, r.nb, r.nc]), diff: r.diff, style: r.style, likes: r.likes, reports: r.reports }; }
+  async publish(body, ip){
+    if (!this.limit('lvpub:' + ip, 10)) return json({ error: 'slow down' }, 429);
+    const check = validateLevel(body.level);
+    if (!check.ok) return json({ error: 'invalid', reasons: check.errors }, 422);
+    const lv = body.level, rated = rateLevel(lv);
+    let code = typeof body.code === 'string' ? body.code.toUpperCase() : '';
+    const row = publicCodeOk(code) ? this.sql.exec('SELECT id, ver FROM levels WHERE code = ?', code).toArray()[0] : null;
+    const ver = row ? row.ver + 1 : 1;
+    const id = row ? row.id : (typeof lv.id === 'string' && lv.id.length >= 6 && lv.id.length <= 16 ? lv.id : makeCode());
+    if (!row){ code = makeCode(); for (let n = 0; n < 8 && this.sql.exec('SELECT code FROM levels WHERE code = ?', code).toArray()[0]; n++) code = makeCode(); }
+    const data = JSON.stringify({ ...lv, version: ver, id });
+    if (data.length > 60000) return json({ error: 'too big' }, 413);
+    const now = Date.now();
+    if (row) this.sql.exec('UPDATE levels SET ver = ?, na = ?, nb = ?, nc = ?, diff = ?, style = ?, data = ?, updated = ?, hidden = 0 WHERE code = ?', ver, lv.name[0], lv.name[1], lv.name[2], rated.diff, rated.style, data, now, code);
+    else this.sql.exec('INSERT INTO levels (code, id, ver, na, nb, nc, diff, style, likes, reports, hidden, data, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?)', code, id, ver, lv.name[0], lv.name[1], lv.name[2], rated.diff, rated.style, data, now, now);
+    return json({ ok: true, code, id, version: ver, title: levelName(lv.name), ...rated });
+  }
+  levelGet(body){
+    const code = typeof body.code === 'string' ? body.code.toUpperCase() : '';
+    if (!publicCodeOk(code)) return json({ error: 'badcode' }, 400);
+    const r = this.sql.exec('SELECT * FROM levels WHERE code = ?', code).toArray()[0];
+    if (!r || r.hidden) return json({ error: r && r.hidden ? 'hidden' : 'missing' }, r && r.hidden ? 403 : 404);
+    return json({ ok: true, ...this.card(r), level: JSON.parse(r.data) });
+  }
+  levelList(body){
+    const liked = body.sort === 'liked';
+    const rows = this.sql.exec(`SELECT * FROM levels WHERE hidden = 0 ORDER BY ${liked ? 'likes DESC, created DESC' : 'created DESC'} LIMIT 20`).toArray();
+    return json({ ok: true, levels: rows.map(r => this.card(r)) });
+  }
+  levelSearch(body){
+    const rows = this.sql.exec('SELECT * FROM levels WHERE hidden = 0 ORDER BY created DESC LIMIT 200').toArray();
+    const words = Array.isArray(body.words) ? body.words.filter(n => Number.isInteger(n)) : [];
+    const out = rows.filter(r => {
+      if (body.diff && body.diff !== 'any' && r.diff !== body.diff) return false;
+      if (body.style && body.style !== 'any' && r.style !== body.style) return false;
+      if (words.length && !words.some(w => w === r.na || w === r.nb || w === r.nc)) return false;
+      return true;
+    }).slice(0, 20);
+    return json({ ok: true, levels: out.map(r => this.card(r)) });
+  }
+  async levelLike(body){
+    const code = typeof body.code === 'string' ? body.code.toUpperCase() : '';
+    const h = await this.deviceHash(body.device);
+    if (!publicCodeOk(code) || !h) return json({ error: 'bad' }, 400);
+    const row = this.sql.exec('SELECT hidden FROM levels WHERE code = ?', code).toArray()[0];
+    if (!row || row.hidden) return json({ error: 'missing' }, 404);
+    const had = this.sql.exec('SELECT h FROM level_likes WHERE code = ? AND h = ?', code, h).toArray()[0];
+    if (!had){ this.sql.exec('INSERT INTO level_likes (code, h) VALUES (?, ?)', code, h); this.sql.exec('UPDATE levels SET likes = likes + 1 WHERE code = ?', code); }
+    const likes = this.sql.exec('SELECT likes FROM levels WHERE code = ?', code).toArray()[0].likes;
+    return json({ ok: true, likes, already: !!had });
+  }
+  async levelReport(body){
+    const code = typeof body.code === 'string' ? body.code.toUpperCase() : '';
+    const h = await this.deviceHash(body.device);
+    if (!publicCodeOk(code) || !h) return json({ error: 'bad' }, 400);
+    const row = this.sql.exec('SELECT hidden, reports FROM levels WHERE code = ?', code).toArray()[0];
+    if (!row) return json({ error: 'missing' }, 404);
+    const had = this.sql.exec('SELECT h FROM level_reports WHERE code = ? AND h = ?', code, h).toArray()[0];
+    let reports = row.reports, hidden = row.hidden;
+    if (!had && !hidden){
+      this.sql.exec('INSERT INTO level_reports (code, h) VALUES (?, ?)', code, h);
+      reports += 1; hidden = reports >= 3 ? 1 : 0;
+      this.sql.exec('UPDATE levels SET reports = ?, hidden = ? WHERE code = ?', reports, hidden, code);
+    }
+    return json({ ok: true, reports, hidden: !!hidden });
+  }
+  async levelTime(body){
+    const code = typeof body.code === 'string' ? body.code.toUpperCase() : '';
+    const h = await this.deviceHash(body.device);
+    if (!publicCodeOk(code) || !h) return json({ error: 'bad' }, 400);
+    const row = this.sql.exec('SELECT ver, hidden, data FROM levels WHERE code = ?', code).toArray()[0];
+    if (!row || row.hidden) return json({ error: 'missing' }, 404);
+    if (body.version !== row.ver) return json({ error: 'old version', version: row.ver }, 409);
+    const time = body.time;
+    if (typeof time !== 'number' || !(time > 1 && time < 3600)) return json({ error: 'bad time' }, 400);
+    const ms = Math.round(time * 1000);
+    const prev = this.sql.exec('SELECT ms FROM level_times WHERE code = ? AND ver = ? AND h = ?', code, row.ver, h).toArray()[0];
+    const better = !prev || ms < prev.ms;
+    if (better) this.sql.exec('INSERT INTO level_times (code, ver, h, ms, at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(code, ver, h) DO UPDATE SET ms = excluded.ms, at = excluded.at', code, row.ver, h, ms, Date.now());
+    const top = this.sql.exec('SELECT ms FROM level_times WHERE code = ? AND ver = ? ORDER BY ms ASC LIMIT 20', code, row.ver).toArray().map((r, i) => ({ rank: i + 1, v: r.ms / 1000 }));
+    return json({ ok: true, improved: better, version: row.ver, top });
   }
   board(c, w, t, h) {
     const C = CATS[c], ord = C.asc ? 'ASC' : 'DESC', cmp = C.asc ? '<' : '>';

@@ -19,7 +19,7 @@ export default {
     const url = new URL(req.url), parts = url.pathname.split('/').filter(Boolean);
     if (url.pathname === '/health') return json({ ok: true });
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
-    if (parts[0] === 'save' || parts[0] === 'lb' || parts[0] === 'admin') {   // cloud saves + leaderboards (POST JSON)
+    if (parts[0] === 'save' || parts[0] === 'lb' || parts[0] === 'admin' || parts[0] === 'level') {   // cloud saves, leaderboards, shared levels (POST JSON)
       if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
       return env.STORE.get(env.STORE.idFromName('global')).fetch(req); }
     if (parts[0] === 'new') {

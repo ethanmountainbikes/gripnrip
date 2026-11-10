@@ -12,9 +12,10 @@ import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featBase, featAxis, BOULDERS, boulderH, rockTop, rockContact, bigBouldersNear, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL, LIFTS, connectors, CW, SHOP, WORLD, RAMPAGE, trailDist, layoutTag, parkLayoutTag } from './world.js';
+import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featBase, featAxis, BOULDERS, boulderH, rockTop, rockContact, bigBouldersNear, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL, LIFTS, connectors, CW, SHOP, WORLD, RAMPAGE, trailDist, layoutTag, parkLayoutTag, editorTrunks, inEditorPad } from './world.js';
 import { loadBinds, proposeBind, swapBind, conflict, keyLabel, padLabel, actionLabel, ACTIONS, KB_DEFAULT, PAD_DEFAULT, spawnHold, clearSpawn, respawnChoice } from './binds.js';
 import { isRaceUnlocked, migrateCleared, advanceCheckpoint, checkpointsDone, shouldSubmit, clearKey } from './race.js';
+import { createEditor } from './editor.js';
 import { initSfx, setSfxVolume, updateSfx, sfxLand, sfxCrash, sfxLiftStart } from './sfx.js';
 const RAMP = WORLD === 'rampage';   // Red Bull Rampage-inspired desert world
 
@@ -659,6 +660,10 @@ function emoteFrame(dt, inp){
   window.__emote = { wheel: !!emoteWheel, tHold: +tHold.toFixed(2), can: !!can };
 }
 function onPress(code){
+  if (editorApi && editorApi.isOpen()){
+    if (editorApi.isRiding()){ if (code === 'Escape' || hitBind('editorTest', code) || code === 'Start'){ editorApi.stopRide(); return; } }
+    else { if (code === 'Start'){ editorApi.testRide(); return; } editorApi.onPress(code); return; }
+  }
   if (emoteWheel){
     if (/^Digit[1-4]$/.test(code)){ sendEmote(+code.slice(5) - 1); return; }
     if (code === 'DR' || code === 'DD' || code === 'DL'){ sendEmote({ DR: 1, DD: 2, DL: 3 }[code]); return; }
@@ -898,7 +903,7 @@ function trackWorld(dt){
         if (racing) S.run = null; else S.free = null; } } }
   // map boundary: warning as you approach, then a bail + respawn at your last safe spot inside (counts as a crash only during a trail run)
   const edge = Math.max(Math.abs(S.x), Math.abs(S.z));
-  if (S.crashT <= 0){
+  if (S.crashT <= 0 && !inEditorPad(S.x, S.z)){
     if (edge > OOB){ S.oob = true; crash('Out of bounds!'); }
     else if (edge > OOB - 70){ if ((S.oobWarnT||0) <= 0){ flash('⚠ OUT OF BOUNDS — TURN BACK', 1.2); S.oobWarnT = 1.5; } }
   }
@@ -1108,6 +1113,7 @@ function step(dt, inp){
     if (hitBoulders()) return;
     if (bodyHazards()) return;
     if (S.speed > 4) for (const t of nearTrees(S.x, S.z)) if ((t.x-S.x)**2 + (t.z-S.z)**2 < 0.55) { crash('Hit a tree!'); return; }
+    if (S.speed > 4) for (const t of editorTrunks(S.x, S.z)) if ((t.x-S.x)**2 + (t.z-S.z)**2 < 0.55) { crash('Hit a tree!'); return; }
   } else {
     // One pop if the stick comes up just after the lip, while the preload was still charged. Not again after that.
     if (S.lipHop && !S.lipHop.used && inp.pop && !inp.pumpHold && !(inp.wheelieChord || inp.kbWheelie) && S.airT <= S.lipHop.until){
@@ -1226,6 +1232,7 @@ function frame(){
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, clock.getDelta());
   const inp = readInput(); if (Object.keys(inp.pressed).length) startMusic();
+  if (editorApi && editorApi.isOpen()) editorApi.tick(dt, inp);
   if (S.state === 'riding' && !menu.open && !shopOpen && !bigMap.open) spawnFrame(inp);
   emoteFrame(dt, inp);
   for (const k in inp.pressed) onPress(k);
@@ -1350,6 +1357,7 @@ function frame(){
       legs: ['thighL','thighR','shinL','shinR','kneeL','kneeR','footL','footR'].map(k => !!(BR.parts[k] && BR.parts[k].visible)),
       hands: ['handL','handR'].map(n => { const o = BR.root.getObjectByName(n); return !!(o && o.visible && o.parent === BR.root); }),
       head: BR.head.visible, torso: !!BR.parts.torso?.visible, spd: +((S.speed||0)).toFixed(2) }; }
+  if (editorApi && editorApi.ownsCamera()) editorApi.applyCamera(camera);
   if (FPV.state.on && S.state==='riding' && !menu.open && !shopOpen && !bigMap.open && !window.__camSide) droneCamera();
   if (window.__camSide){ const o = window.__camSide, c = Math.cos(S.yaw), s_ = Math.sin(S.yaw); camera.position.set(S.x + c*o.d + Math.sin(S.yaw)*(o.b||0), S.y + (o.h||1.2), S.z - s_*o.d + Math.cos(S.yaw)*(o.b||0)); camera.up.set(0,1,0); camera.lookAt(S.x, S.y + 0.9, S.z); }   // test hook: side camera for pose screenshots
   if (flyF) flyover(0);
@@ -1557,6 +1565,7 @@ function trailItems(){ return trails.map((tr, i) => { const d = DIFF[tr.diff], o
 const PAGES = {
   main: () => ({title:null, items:[
     {label:'Ride', sub:RAMP ? 'Free roam from the Valley Overlook' : 'Free roam from the base plaza', act:() => { spotI = spots.findIndex(s => s.name.startsWith(RAMP ? 'Valley Overlook' : 'Valley Base')); startRide(); }},
+    {label:'Level Editor', sub:'Build a trail, test ride it, save it on this device', act:() => editorApi && editorApi.open()},
     {label:'World', value:RAMP ? 'RAMPAGE' : 'MOUNTAIN', sub:RAMP ? 'Utah desert freeride venue (Red Bull Rampage style)' : 'Alpine bike park', adj:() => switchWorld(), act:() => switchWorld()},
     {label:'Trails', sub:`${trails.filter((_, i) => isOpen(i)).length}/${trails.length} unlocked — drop in at a trail start`, act:() => go('trails')},
     {label:'Bike Shop', sub:`$${S.score.toLocaleString()} DOLLAHS`, act:() => openShop()},
@@ -2103,11 +2112,20 @@ function askCode(){ const ov = document.createElement('div'); ov.id = 'mpAsk';
 try { NET = initNet({THREE, scene, camera, S, bike, buildBikeRider: makeRider, skinTo:skinRemote, mySkin, myName:mpName, worldIdx:() => RAMP ? 1 : 0, toast, trickKeys:Object.keys(BR.TRICK_OF), drive:() => DRV,
   onWorld:(w, code) => { LS.set('trailDescent.world', w ? 'rampage' : 'mountain'); toast(`Room is on ${w ? 'RAMPAGE' : 'THE MOUNTAIN'} — switching world…`); setTimeout(() => location.reload(), 900); } });
   NET.on(() => { if (menu.open && menu.page === 'multi') renderMenu(); }); window.__net = NET; } catch (e) { console.warn('multiplayer unavailable', e); NET = null; }
+let editorApi = null;
+editorApi = createEditor({
+  THREE, scene, toast, getS: () => S, placeAt, updateChunks,
+  lsGet: (k, d) => LS.get(k, d), lsSet: (k, v) => LS.set(k, v),
+  hit: hitBind, bindLabel: id => keyLabel(kbBind(id)),
+  closeMenu, mainMenu: () => { S.paused = false; S.state = 'menu'; openMenu('main'); },
+  camera: () => camera, view: () => renderer.domElement.getBoundingClientRect(),
+});
 openMenu('main'); setTimeout(() => $('loading').classList.add('done'), 300);
 teleport(spotI, true);
 window.__features = features; window.__respawn = () => respawnSafe(); window.__game = S; window.__readInput = readInput; window.__emoteFrame = emoteFrame;
 window.__drone = FPV.state; window.__droneToggle = toggleDrone; window.__droneFly = (dt, inp) => flyDrone(dt, inp || {steer:0, lyRaw:0, bankRaw:0, rsy:0}); window.__saveSettings = saveSettings; window.__settings = SETTINGS; window.__bail = () => crash('Bail!'); window.__ragdoll = rag; window.__ragdollReport = () => rag.on ? ragdollReport(rag, groundH) : null; window.__groundH = groundH; window.__lift = i => startLift(i); window.__world = { LIFTS, connectors, trails, features, spots, PARK, SHOP, terrainH, featH, isDirt, nearTrails, base, inPark, treesInCell, trailDist };
 window.__race = { open: raceOpen, mark: markCleared, cleared: () => cleared, submit: run => shouldSubmit(run, false) };
+window.__editor = editorApi;
 window.__setCam = m => { camMode = ((m % CAM_NAMES.length) + CAM_NAMES.length) % CAM_NAMES.length; camInit = false; camHead = S.travel ?? S.yaw; };
 window.__BR = BR; window.__teleport = i => teleport(i); window.__unlocked = unlocked; window.__isOpen = isOpen; window.__chunks = () => chunks.size; window.__renderer = renderer; window.__place = (x, z, yaw) => { placeAt(x, z, yaw); S.air = false; };
 window.__sim = (secs, inp) => { const h=1/120; const base={steer:0,pedal:0,brake:0,jump:false,tx:0,ty:0}; for(let t=0;t<secs;t+=h){ step(h, Object.assign({}, base, typeof inp==='function'?inp(t):inp)); trackWorld(h); } return {x:S.x, z:S.z, kmh:S.speed*3.6, air:S.air, lives:S.lives, clean:S.clean, score:S.score}; };

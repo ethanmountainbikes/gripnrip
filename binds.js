@@ -12,6 +12,8 @@ export const KB_DEFAULT = {
   gearUp: 'KeyG', gearDown: 'KeyF',
   pause: 'KeyP', map: 'KeyM', drone: 'KeyZ', help: 'KeyH', shop: 'KeyO',
   spawn: 'KeyN', emote: 'KeyT',
+  editorUndo: 'F6', editorRedo: 'F7', editorTest: 'F8', editorRotate: 'F9',
+  editorBigger: 'Equal', editorSmaller: 'Minus',
   spotPrev: 'BracketLeft', spotNext: 'BracketRight',
 };
 
@@ -21,6 +23,7 @@ export const PAD_DEFAULT = {
   gearUp: 'DU', gearDown: 'DD', spotPrev: 'DL', spotNext: 'DR', emote: 'DU',
   brake: 'LT', pedal: 'RT',
   spawnClick: 'LS', spawnMod: 'LT',
+  editorBigger: 'LB', editorSmaller: 'RB', editorRotate: 'RS',
 };
 
 // Same physical control on purpose: tap versus hold, or a two-button combo.
@@ -39,6 +42,8 @@ export const ACTIONS = [
   ['gearUp', 'Shift up'], ['gearDown', 'Shift down'],
   ['pause', 'Pause'], ['map', 'Map'], ['drone', 'FPV drone'], ['help', 'Controls help'], ['shop', 'Bike shop'],
   ['spawn', 'Respawn point'], ['emote', 'Emote wheel'],
+  ['editorUndo', 'Editor undo'], ['editorRedo', 'Editor redo'], ['editorTest', 'Editor test ride'],
+  ['editorRotate', 'Editor rotate'], ['editorBigger', 'Editor bigger'], ['editorSmaller', 'Editor smaller'],
   ['spotPrev', 'Previous teleport'], ['spotNext', 'Next teleport'],
 ];
 
