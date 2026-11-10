@@ -1768,7 +1768,7 @@ const SHOP_POS = {x:SHOP.x, z:SHOP.z, yaw:SHOP.yaw};   // placed in world.js >= 
     const bg = new THREE.BufferGeometry(); bg.setAttribute('position', new THREE.BufferAttribute(pos,3)); bg.setAttribute('normal', new THREE.BufferAttribute(nor,3));
     const mesh = new THREE.Mesh(bg, mat); mesh.castShadow = mesh.receiveShadow = !(mat.isMeshBasicMaterial); g.add(mesh); }
   const lamp = new THREE.PointLight(0xffb85c, 6, 14, 2); lamp.position.set(0, 3.0, -Dp/2-1.2); g.add(lamp);
-  g.position.set(SHOP_POS.x, y-0.15, SHOP_POS.z); g.rotation.y = SHOP_POS.yaw; scene.add(g); }
+  g.position.set(SHOP_POS.x, y, SHOP_POS.z); g.rotation.y = SHOP_POS.yaw; scene.add(g); }
 // ---------- connector paths (narrow gravel ribbons draped on the terrain) ----------
 { const v = [], idx = [], col = []; const c1 = new THREE.Color(0xb59a6e), c2 = new THREE.Color(0x9c845c);
   for (const c of connectors){ const P = c.pts, b0 = v.length/3;

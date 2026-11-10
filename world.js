@@ -6,6 +6,7 @@ export const W = 3.6;                 // trail half width (same as the original 
 export const HALF = RAMP ? 760 : 1380;             // world is 2.76 km x 2.76 km (7.6 km², ~32% more than the original 2.4 km)
 const CORE = RAMP ? 640 : 1200;                    // original map half-size: trail/lift layout stays inside it so nothing moves
 const BLEND = W + 7;                  // trail bench blends back into the hillside over this distance
+const PADS = [];                       // level pads under the shop and lift stations; filled once those spots exist
 
 // ---------- noise ----------
 function mulberry(a){ return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
@@ -532,8 +533,25 @@ export function trailDist(x,z){ let m = 1e9; for (const n of nearTrails(x,z)) m 
 export function inPark(x,z){ return Math.hypot(x-PARK.x, z-PARK.z) <= PARK.r+6; }
 export function isDirt(x,z){ return trailDist(x,z) <= W+0.3 || inPark(x,z) || Math.hypot(x-PARK.x, z-PARK.z) <= PARK.r+35 || featH(x,z) > 0.05 || connDist(x,z) <= CW; }   // wooden decks and connector paths ride like trail
 
-// terrain without features: hillside with benched trails cut in, plus small off-trail bumps
-export function terrainH(x, z){
+// Level pads under the shop and the lift stations. Filled after those spots are chosen, from the raw hillside.
+function padWeight(dx, dz, p){
+  const lx = dx * p.c - dz * p.s, lz = dx * p.s + dz * p.c;
+  const ox = lx < p.x0 ? p.x0 - lx : lx > p.x1 ? lx - p.x1 : 0;
+  const oz = lz < p.z0 ? p.z0 - lz : lz > p.z1 ? lz - p.z1 : 0;
+  const outside = Math.hypot(ox, oz);
+  if (outside >= p.blend) return 0;
+  if (outside <= 0) return 1;
+  return 1 - smooth(0, p.blend, outside);
+}
+function addPad(x, z, yaw, x0, x1, z0, z1, blend){
+  const reach = Math.hypot(Math.max(Math.abs(x0), Math.abs(x1)), Math.max(Math.abs(z0), Math.abs(z1))) + blend;
+  PADS.push({ x, z, yaw, x0, x1, z0, z1, blend, h: terrainRaw(x, z).h, r2: reach * reach, c: Math.cos(yaw), s: Math.sin(yaw) });
+}
+// World point of a building-local offset. yaw is the three.js Y rotation (local -Z is the door / downhill of a lift).
+export function localXZ(x, z, yaw, lx, lz){
+  return [x + lx * Math.cos(yaw) + lz * Math.sin(yaw), z - lx * Math.sin(yaw) + lz * Math.cos(yaw)];
+}
+function terrainRaw(x, z){
   const b = base(x,z); let ws = 0, hs = 0, wmax = 0, dmin = 1e9;
   for (const n of nearTrails(x,z)){ const w = 1 - smooth(W+0.6, BLEND, n.d); if (w > 0){ const k = w**8; ws += k; hs += k*n.h; if (w > wmax) wmax = w; } if (n.d < dmin) dmin = n.d; }
   // the closest trail dominates (sharp weights), so a neighbouring trail's bench never tilts the one you're riding
@@ -541,7 +559,26 @@ export function terrainH(x, z){
   if (CANYONS.length) h += canyonCut(x, z);
   const rough = Math.min(1, Math.max(0, (dmin-W)/4)) * (1 - parkMask(x,z));
   if (rough > 0) h += rough*(0.22*Math.sin(x*0.13)*Math.sin(z*0.11) + 0.06*Math.sin(x*0.37+z*0.29));
-  return h;
+  return { h, dmin };
+}
+// terrain without features: hillside with benched trails cut in, plus a flat pad under each building
+export function terrainH(x, z){
+  const raw = terrainRaw(x, z);
+  if (!PADS.length) return raw.h;
+  let acc = 0, wsum = 0, solid = 0;
+  for (let i = 0; i < PADS.length; i++){
+    const p = PADS[i], dx = x - p.x, dz = z - p.z;
+    if (dx * dx + dz * dz > p.r2) continue;
+    const w = padWeight(dx, dz, p);
+    if (w <= 0) continue;
+    if (w >= 1) solid = p.h;
+    acc += w * p.h; wsum += w;
+  }
+  // The flat footprint always wins, including a start deck that sits on a trail. The blend stays off the tread.
+  if (solid) return solid;
+  if (wsum <= 0 || raw.dmin < W + 2) return raw.h;
+  const w = wsum < 1 ? wsum : 1;
+  return raw.h * (1 - w) + (acc / wsum) * w;
 }
 function featHq(x, z, withRocks){
   const fs = featGrid.get(key(Math.floor(x/CELL), Math.floor(z/CELL))); if (!fs) return 0; let h = 0;
@@ -687,7 +724,11 @@ export const SHOP = (() => { let best = null;
     if (c >= 10 && Math.hypot(x-LIFTS[0].bx, z-LIFTS[0].bz) > 35) best = {x, z, yaw: Math.atan2(x - J[0], z - J[1])}; }   // door faces the junction
   return best; })();
 const shopDoor = [SHOP.x - Math.sin(SHOP.yaw)*12, SHOP.z - Math.cos(SHOP.yaw)*12], parkGate = [PARK.x + 100*Math.cos(2.88), PARK.z + 100*Math.sin(2.88)];
-spots.push({name:'Bike Shop', shop:true, x: SHOP.x - Math.sin(SHOP.yaw)*20, z: SHOP.z - Math.cos(SHOP.yaw)*20, yaw: SHOP.yaw + Math.PI});   // always-open teleport on the porch spur, facing the door
+spots.push({name:'Bike Shop', shop:true, x: SHOP.x - Math.sin(SHOP.yaw)*13, z: SHOP.z - Math.cos(SHOP.yaw)*13, yaw: SHOP.yaw + Math.PI});   // on the flat apron in front of the steps, facing the door
+// Flat pad under the cabin, porch, yard and the apron. Corners share one height; the rim blends back into the hill.
+addPad(SHOP.x, SHOP.z, SHOP.yaw, -12, 12, -18, 11, 8);
+for (const L of LIFTS){ addPad(L.bx, L.bz, L.yaw, -6.5, 6.5, -10, 6, 7); addPad(L.tx, L.tz, L.yaw, -6.5, 6.5, -10, 6, 7); }
+if (RAMP) for (const tr of trails){ const yaw = tr.yaw[0], [x, z] = tr.pts[0], bx = x + Math.sin(yaw) * 3.2, bz = z + Math.cos(yaw) * 3.2; addPad(bx, bz, yaw, -3.6, 3.6, -3.8, 3.8, 5); }
 // waypoints on a ring 105 m from the park centre so paths go around the pad and its jump lines, never through them
 const ring = (...degs) => degs.map(a => [PARK.x + 150*Math.cos(a*Math.PI/180), PARK.z + 105*Math.sin(a*Math.PI/180)]);
 const CONN_DEFS = RAMP ? [
