@@ -17,7 +17,7 @@ try {
   await send('Page.enable'); await send('Runtime.enable');
   await send('Page.navigate', { url: `http://127.0.0.1:${PORT}/` });
   const ev=async expr=>{ const r=await send('Runtime.evaluate',{expression:expr,returnByValue:true,awaitPromise:true}); if(r.exceptionDetails) throw new Error(String(r.exceptionDetails.exception?.description||'eval').slice(0,800)); return r.result.value; };
-  for (let i=0;i<40;i++){ if (await ev(`!!window.__game`)) break; await sleep(200); }
+  for (let i=0;i<40;i++){ if (await ev(`!!window.__game && !!window.__world`)) break; await sleep(200); }
   const out = await ev(`(() => {
     const S=window.__game, W=window.__world, g=window.__groundH;
     const wrap=a=>Math.atan2(Math.sin(a),Math.cos(a));
@@ -64,7 +64,9 @@ try {
       if (f.park || f.rollin) continue;
       const h=lipOf(f).h;
       if (f.kind==='roller' && h>0.25 && h<0.55 && f.L>7 && h+Math.abs((W.terrainH(f.x,f.z)-W.terrainH(f.x+f.dx*16,f.z+f.dz*16))/16)<rScore){ rScore=h; roller=f; }
-      if (f.kind==='kicker' && h>0.35 && h<0.7 && h<kh){ kh=h; kBest=f; }
+      // A kicker cut short at a bend (f.cut) is eased into the trail and is no longer a lip. Like the roller, prefer one
+      // whose run-out is not a climb, so the landing check is about the jump and not the hill behind it.
+      if (f.kind==='kicker' && !f.cut && h>0.35 && h<0.7){ const at=d=>g(f.x+f.dx*d,f.z+f.dz*d), sc=h+Math.abs((W.terrainH(f.x,f.z)-W.terrainH(f.x+f.dx*16,f.z+f.dz*16))/16)+Math.max(0,at(f.L+4)-at(f.L+1)); if (sc<kh){ kh=sc; kBest=f; } }
     }
     const dbl=feats.find(f=>f.kind==='double' && f.park==='Intermediate Doubles');
     const table=feats.find(f=>f.kind==='table' && f.park==='Pro Big Doubles');
