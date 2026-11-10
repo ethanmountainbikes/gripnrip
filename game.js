@@ -1024,14 +1024,15 @@ function step(dt, inp){
     S.airT += dt; S.vy -= G_AIR*dt;
     S.x += S.vx*dt; S.z += S.vz*dt; S.y += S.vy*dt;
     if (hitBoulders()) return;
-    // left stick: analog spin / flip with rotational inertia
+    // Left stick Y is the flip. Stick down / back (positive lean, keyboard K) noses up: a backflip.
+    // Stick up / forward (negative lean, keyboard I) noses down: a frontflip. A wheelie cannot start in the air.
     const spinIn = inp.steer, ty = inp.lean;
     S.wYaw = (S.wYaw||0) + (spinIn*6.0 - (S.wYaw||0)) * Math.min(1, dt*7);
     S.wPitch = (S.wPitch||0) + (ty*5.5 - (S.wPitch||0)) * Math.min(1, dt*7);
     S.spin += S.wYaw*dt; S.pitch += S.wPitch*dt;
-    // right stick: proportional whip/tweak (x) and nose angle (y), sprung so it follows the stick
+    // Right stick down matches the left: nose up. The hop is still right-stick down, then up.
     S.tweak = THREE.MathUtils.lerp(S.tweak||0, inp.tweak, Math.min(1, dt*9));
-    S.nose = THREE.MathUtils.lerp(S.nose||0, -inp.rsy*0.6, Math.min(1, dt*8));
+    S.nose = THREE.MathUtils.lerp(S.nose||0, (inp.rsy || 0)*0.6, Math.min(1, dt*8));
     if (Math.abs(S.tweak) > 0.6) S.tweakT = (S.tweakT||0) + dt;
     if (inp.trick){ S.trick = inp.trick; S.trickAmt = inp.trickAmt ?? 1; S.trickT = (S.trickT||0) + dt; if (S.trickT > 0.3) S.tricksDone.add(inp.trick); } else { S.trick = null; S.trickT = 0; }
     S.lean = THREE.MathUtils.lerp(S.lean, (inp.bank || 0) * 0.7, Math.min(1, dt*5)); S.weight = THREE.MathUtils.lerp(S.weight||0, ty, dt*5);

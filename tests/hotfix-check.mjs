@@ -145,7 +145,7 @@ try {
   check('release right stick keeps wheelie', out.released.wheelie === true, JSON.stringify(out.released));
   check('neutral left lowers wheelie', out.lowered.wheelie === false, JSON.stringify(out.lowered));
   check('brake cancels', out.braked.wheelie === false && !out.braked.crash, JSON.stringify(out.braked));
-  check('air still pitches', Math.abs(out.air.dPitch) > 0.05 && out.air.wheelie === false && out.air.air, JSON.stringify(out.air));
+  check('stick down backflips and does not wheelie', out.air.dPitch > 0.05 && out.air.dNose > 0.02 && out.air.wheelie === false && out.air.air, JSON.stringify(out.air));
   check('chord then stick-up does not hop', out.during.pre === 0 && out.afterFlick.air === false, JSON.stringify({during:out.during, after:out.afterFlick}));
   check('both sticks up is the chord', out.pad.both.chord && !out.pad.both.pump && !out.pad.both.pop && out.pad.both.lean < -0.9 && Math.abs(out.pad.both.steer) < 0.01, JSON.stringify(out.pad.both));
   check('left stick forward is not a wheelie', !out.pad.left.chord && out.pad.left.lean < -0.9 && !out.pad.left.pump, JSON.stringify(out.pad.left));
