@@ -33,6 +33,10 @@ This follows Descenders' published default controller bindings. The camera actio
 
 Controller support has been checked against an Xbox One pad's layout in Chrome, Edge and Firefox, including Firefox's non-standard layout where the triggers are axes. Press any button after loading so the browser detects the pad.
 
+Nintendo Switch pads (Nintendo, PowerA, PDP, HORI) are detected from the gamepad id. When the browser does not map one to the standard layout, `pad.js` remaps it by physical position, so the bottom face button does what Xbox A does, and a d-pad reported as a hat on axis 9 works. Button prompts follow the controller in use: Xbox letters, PlayStation symbols, or Nintendo letters in Nintendo positions (B bottom, A right, Y left, X top, L/R/ZL/ZR, +/−).
+
+Any controller that is not on the standard layout gets a setup offer the first time it connects. It is also in Settings → Controls → Set up controller. The setup asks for each button and stick in turn, with skip, redo, dead zone and stick inversion. It works with the keyboard and mouse too, and it is saved per controller on this device. Custom binds in Settings → Controls apply on top of it. Tests: `node tests/pad.test.mjs` and `node tests/pad-ui.mjs`.
+
 ## Riding physics
 - **Weight and momentum:** speed comes from gravity, with pedalling, drag and grass rolling resistance on top. The rider shifts visibly fore and aft, and the suspension compresses on landings and when you preload.
 - **Pumping:** compress (right stick ↓) on backsides and extend over faces to gain speed. Bad timing costs speed. Counter-pumping (right stick ↑) keeps you on the ground over rollers. A bunny hop is that compress then a pop; the pop adds upward speed and is not pulled into a dive by the lip falling away. Climbing a lip only pays the slope once (gravity). A rock or a step still costs extra. Coasting plays a soft freehub tick. Tire roll and wind stay quiet and follow speed and surface.

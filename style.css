@@ -156,3 +156,21 @@ body.inshop #shop{left:auto;right:3vw;transform:translateY(-50%);width:min(500px
 #emoteWheel{position:fixed;left:50%;bottom:max(18px,env(safe-area-inset-bottom));transform:translateX(-50%);z-index:56;max-width:min(640px,92vw);padding:8px 12px;background:rgba(12,16,12,.82);color:#f3e9d2;border:2px solid #d9772b;border-radius:8px;font:600 15px/1.35 "Barlow Condensed",sans-serif;text-align:center;pointer-events:none}
 #emoteWheel[hidden]{display:none}
 @media (max-height:500px),(max-width:600px){ #emoteWheel{font-size:13px;bottom:max(8px,env(safe-area-inset-bottom));max-width:94vw} }
+
+/* controller setup wizard */
+#padWiz { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; background: rgba(10, 9, 6, .72); font-family: "Barlow Condensed", sans-serif; color: #f3e9d2; }
+#padWiz.hidden { display: none; }
+#padWiz .pwBox { width: min(560px, 92vw); max-height: 88vh; overflow-y: auto; background: #1f1b14; border: 2px solid #d9772b; border-radius: 12px; padding: 18px 22px; }
+#padWiz h2 { margin: 0 0 8px; font-family: "Bebas Neue", sans-serif; font-size: 34px; color: #d9772b; letter-spacing: 1px; }
+#padWiz p { font-size: 18px; margin: 6px 0; }
+#padWiz .pwSay { font-size: 28px; font-weight: 700; line-height: 1.2; min-height: 2.4em; }
+#padWiz .pwMsg { color: #9be22d; min-height: 1.3em; }
+#padWiz .pwKeys { opacity: .7; font-size: 15px; }
+#padWiz .pwBar { height: 8px; background: #3a3326; border-radius: 4px; overflow: hidden; }
+#padWiz .pwBar i { display: block; height: 100%; background: #d9772b; }
+#padWiz ul { list-style: none; padding: 0; margin: 12px 0 0; }
+#padWiz li { padding: 8px 12px; margin: 4px 0; border-radius: 6px; background: #2a251c; cursor: pointer; font-size: 19px; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
+#padWiz li b { margin-left: auto; color: #f2b800; }
+#padWiz li small { flex-basis: 100%; opacity: .65; font-size: 14px; }
+#padWiz li.sel, #padWiz li:hover { background: #d9772b; color: #1a160f; }
+#padWiz li.sel b, #padWiz li:hover b { color: #1a160f; }

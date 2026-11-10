@@ -13,7 +13,9 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featBase, featAxis, BOULDERS, boulderH, rockTop, rockContact, bigBouldersNear, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL, LIFTS, connectors, CW, SHOP, WORLD, RAMPAGE, trailDist, layoutTag, parkLayoutTag, editorTrunks, inEditorPad } from './world.js';
-import { loadBinds, proposeBind, swapBind, conflict, keyLabel, padLabel, actionLabel, ACTIONS, KB_DEFAULT, PAD_DEFAULT, spawnHold, clearSpawn, respawnChoice } from './binds.js';
+import { readPad, padFamily, glyph, padText, needsSetup, loadProfiles, GLYPHS } from './pad.js';
+import { createPadWizard } from './padwiz.js';
+import { loadBinds, proposeBind, swapBind, conflict, keyLabel, padLabel as padLabelStd, actionLabel, ACTIONS, KB_DEFAULT, PAD_DEFAULT, spawnHold, clearSpawn, respawnChoice } from './binds.js';
 import { isRaceUnlocked, migrateCleared, advanceCheckpoint, checkpointsDone, shouldSubmit, clearKey } from './race.js';
 import { createEditor } from './editor.js';
 import { initSfx, setSfxVolume, setAmbience, updateSfx, sfxLand, sfxCrash, sfxLiftStart, musicPlaying } from './sfx.js';
@@ -446,7 +448,7 @@ addEventListener('blur', releaseKeys); document.addEventListener('visibilitychan
 addEventListener('keyup', e => { if (e.key === 'Meta') releaseKeys(); });
 const toastEl = document.getElementById('toast'); let toastT;
 function toast(msg){ (window.__toastLog ||= []).push(msg); if (window.__toastLog.length > 50) window.__toastLog.shift(); toastEl.textContent = msg; toastEl.style.opacity = 1; clearTimeout(toastT); toastT = setTimeout(()=>toastEl.style.opacity=0, 2500); }
-addEventListener('gamepadconnected', e => { knownPads[e.gamepad.index]=true; toast('🎮 Controller connected: ' + e.gamepad.id.slice(0,40)); });
+addEventListener('gamepadconnected', e => { knownPads[e.gamepad.index]=true; setPadFamily(padFamily(e.gamepad)); toast('🎮 ' + GLYPHS[padFamily(e.gamepad)].name + ' connected: ' + e.gamepad.id.slice(0,40)); padSeen(e.gamepad); });
 addEventListener('gamepaddisconnected', e => { delete knownPads[e.gamepad.index]; toast('Controller disconnected'); });
 setTimeout(()=>{ if (!Object.keys(knownPads).length) toast(window.isSecureContext ? '🎮 Using a controller? Press any button on it to connect' : 'Controllers need https (or localhost)'); }, 800);
 const dz = (v, z=0.15) => Math.abs(v)<z ? 0 : (v - Math.sign(v)*z)/(1-z);
@@ -457,34 +459,28 @@ const knownPads = {};
 // axes 0,1 left stick; 2 LT; 3,4 right stick; 5 RT (triggers rest at -1, full at +1, sometimes 0 until first touched);
 // buttons 0 A, 1 B, 2 X, 3 Y, 4 LB, 5 RB, 6 View/Back, 7 Menu/Start, 8 LS, 9 RS.
 const trigSeenNeg = {};
-function trigAxis(gp, i){ const v = gp.axes[i]; if (v === undefined) return 0; const k = gp.index+'_'+i;
-  if (v < -0.05) trigSeenNeg[k] = true;
-  const t = trigSeenNeg[k] ? (v+1)/2 : v; return t < 0.04 ? 0 : Math.min(1, t); }
-// D-pad on non-standard layouts: a hat on axes 6/7 (Firefox on Linux/macOS), a single POV-hat axis (axis 9, DirectInput),
-// or plain buttons (the given left/right indices) when the pad has that many buttons.
-function dpadNS(gp, bv, li, ri){
-  let l = false, r = false, u = false, d = false;
-  if (gp.axes.length >= 8){ const h = gp.axes[6] || 0, v = gp.axes[7] || 0; if (h < -0.5) l = true; if (h > 0.5) r = true; if (v < -0.5) u = true; if (v > 0.5) d = true; }
-  if (gp.axes.length >= 10){ const p = gp.axes[9]; if (p !== undefined && p >= -1.05 && p <= 1.05 && Math.abs(p) > 0.05){ const dir = Math.round((p+1)/(2/7));   // 0 up .. 7 up-left
-      if (dir >= 1 && dir <= 3) r = true; if (dir >= 5 && dir <= 7) l = true; if (dir === 0 || dir === 1 || dir === 7) u = true; if (dir >= 3 && dir <= 5) d = true; } }
-  if (gp.buttons.length > ri){ if (bv(li) > 0.5) l = true; if (bv(ri) > 0.5) r = true; if (bv(li-2) > 0.5) u = true; if (bv(li-1) > 0.5) d = true; }
-  return {DL:l, DR:r, DU:u, DD:d};
+// Raw pad -> standard layout lives in pad.js: Chrome's 'standard' mapping, the Switch remap tables, saved setup-wizard maps
+// (per gamepad.id), and the old Firefox fallbacks. Custom binds then pick from the standard names on top of that.
+let PAD_PROFILES = loadProfiles(LS.get('trailDescent.padProfiles', {}));
+function savePadProfile(id, prof){ PAD_PROFILES = { ...PAD_PROFILES }; if (prof) PAD_PROFILES[id] = prof; else delete PAD_PROFILES[id]; LS.set('trailDescent.padProfiles', PAD_PROFILES); }
+function padMap(gp){ return readPad(gp, PAD_PROFILES, trigSeenNeg); }
+// Button names follow the last controller used (Xbox letters, PlayStation symbols, Nintendo letters in Nintendo spots).
+let padFam = 'xbox';
+const padLabel = code => code === 'LT' || code === 'RT' || code in GLYPHS.xbox ? glyph(code, padFam) : padLabelStd(code);
+const PT = s => padText(s, padFam);
+const padWiz = createPadWizard({ getPads: () => navigator.getGamepads ? navigator.getGamepads() : [], readStd: gp => padMap(gp),
+  saveProfile: (id, prof) => savePadProfile(id, prof), toast: m => toast(m), lsGet: LS.get, lsSet: LS.set,
+  onClose: () => { for (const k in prevBtn) prevBtn[k] = true; try { if (menu.open) renderMenu(); } catch(e){} } });
+window.__padWiz = padWiz; window.__padProfiles = () => PAD_PROFILES;
+// First time a pad that is not 'standard' shows up, offer the setup wizard (once per gamepad.id).
+function padSeen(gp){ if (!padWiz.open && needsSetup(gp, PAD_PROFILES) && !padWiz.isAsked(gp.id)) padWiz.offer(gp); }
+function connectedPad(){ const pads = navigator.getGamepads ? navigator.getGamepads() : []; for (const g of pads) if (g && g.connected) return g; return null; }
+function setupController(){ const g = connectedPad(); if (!g){ toast('🎮 Plug in a controller and press a button on it first'); return; } padWiz.start(g); }
+function refreshPadHints(){
+  const sh = document.getElementById('shopHint'); if (sh) sh.innerHTML = PT('<b>{LB}/{RB}</b> or ←/→ · Q/E: tab · D-pad ↑↓: choose (previews live) · <b>{A}</b> / Enter: buy or equip · <b>{B}</b> / Esc: close');
+  if (editorApi && editorApi.isOpen && editorApi.isOpen() && editorApi.refresh) editorApi.refresh();
 }
-function padMap(gp){
-  const bv = i => { const b = gp.buttons[i]; if (!b) return 0; if (typeof b !== 'object') return b; return (b.pressed && !b.value) ? 1 : b.value; };
-  const ax = i => gp.axes[i] || 0;
-  if (gp.mapping === 'standard'){
-    return { lx:ax(0), rx:ax(2), ry:ax(3), lt:bv(6), rt:bv(7),
-      ly:ax(1), btn:{A:bv(0)>0.5, B:bv(1)>0.5, X:bv(2)>0.5, Y:bv(3)>0.5, LB:bv(4)>0.5, RB:bv(5)>0.5, LS:bv(10)>0.5, RS:bv(11)>0.5, Back:bv(8)>0.5, Start:bv(9)>0.5, DL:bv(14)>0.5, DR:bv(15)>0.5, DU:bv(12)>0.5, DD:bv(13)>0.5} };
-  }
-  if (gp.axes.length >= 6){   // Firefox XInput-style: triggers on axes 2 & 5
-    return { lx:ax(0), rx:ax(3), ry:ax(4), lt:trigAxis(gp,2), rt:trigAxis(gp,5),
-      ly:ax(1), btn:{A:bv(0)>0.5, B:bv(1)>0.5, X:bv(2)>0.5, Y:bv(3)>0.5, LB:bv(4)>0.5, RB:bv(5)>0.5, LS:bv(8)>0.5, RS:bv(9)>0.5, Back:bv(6)>0.5, Start:bv(7)>0.5, ...dpadNS(gp, bv, 13, 14)} };
-  }
-  // other non-standard layouts: right stick on 2,3, triggers as buttons 6,7
-  return { lx:ax(0), rx:ax(2), ry:ax(3), lt:Math.max(bv(6), 0), rt:Math.max(bv(7), 0),
-    ly:ax(1), btn:{A:bv(0)>0.5, B:bv(1)>0.5, X:bv(2)>0.5, Y:bv(3)>0.5, LB:bv(4)>0.5, RB:bv(5)>0.5, RS:bv(11)>0.5, Back:bv(8)>0.5, Start:bv(9)>0.5, ...dpadNS(gp, bv, 14, 15)} };
-}
+function setPadFamily(f){ if (!f || f === padFam) return; padFam = f; window.__padFam = f; try { renderHelp(); refreshPadHints(); if (menu.open) renderMenu(); } catch(e){} }
 
 // Descenders default Xbox layout:
 // LS steer (x) / lean fwd-back (y) · RT pedal · LT brake · RS down = pump/preload, RS down->up = bunny hop,
@@ -517,9 +513,11 @@ function readInput(){
   const inp = {rsy:0, ry:0, counter:false, steer:0, lean:0, pedal:0, brake:0, pumpHold:false, pop:false, tweak:0, bank:0, trick:null, kbFlip:0, pressed:{}, hold:{DU:false, DD:false, DL:false, DR:false, T:!!keys.KeyT}};
   const pads = navigator.getGamepads ? navigator.getGamepads() : [];
   for (const gp of pads){ if (!gp || !gp.connected) continue;
-    if (!knownPads[gp.index]){ knownPads[gp.index]=true; toast('🎮 Controller connected: ' + gp.id.slice(0,40)); }
-    const m = padMap(gp), rx = dz(m.rx, 0.2), ry = dz(m.ry);
-    inp.steer += dz(m.lx); inp.lean += dz(m.ly);
+    if (!knownPads[gp.index]){ knownPads[gp.index]=true; setPadFamily(padFamily(gp)); toast('🎮 ' + GLYPHS[padFamily(gp)].name + ' connected: ' + gp.id.slice(0,40)); }
+    padSeen(gp);
+    if (padWiz.open) break;   // the setup wizard reads the raw pad itself; nothing reaches the bike or menus meanwhile
+    const m = padMap(gp), sdz = m.dz, rx = dz(m.rx, sdz ?? 0.2), ry = dz(m.ry, sdz ?? 0.15);
+    inp.steer += dz(m.lx, sdz ?? 0.15); inp.lean += dz(m.ly, sdz ?? 0.15);
     inp.lt = m.lt; inp.rt = m.rt; inp.lsHeld = !!m.btn.LS;
     const brakePad = padBind('brake'), pedalPad = padBind('pedal');
     inp.pedal = Math.max(inp.pedal, pedalPad === 'RT' ? dz(m.rt, 0.12) : pedalPad === 'LT' ? dz(m.lt, 0.12) : (m.btn[pedalPad] ? 1 : 0));
@@ -528,11 +526,13 @@ function readInput(){
       if (m.btn.RS){ inp.trick = 'bar'; inp.trickAmt = 1; }
       else if (mag > 0.35){ const sec = Math.round(Math.atan2(ry, rx)/(Math.PI/4)); inp.trick = {0:'right', 1:'dr', 2:'down', 3:'dl', 4:'left', '-4':'left', '-3':'ul', '-2':'up', '-1':'ur'}[sec]; inp.trickAmt = Math.min(1, (mag-0.35)/0.6); } }
     else { if (ry > 0.5) inp.pumpHold = true; if (ry < -0.5) inp.counter = true; inp.bank = rx; inp.rsy = ry; inp.ry = ry; }
-    inp.dpx = (m.btn.DR?1:0) - (m.btn.DL?1:0); inp.dpy = (m.btn.DD?1:0) - (m.btn.DU?1:0); inp.lsx = dz(m.lx); inp.lsy = dz(m.ly);
+    inp.dpx = (m.btn.DR?1:0) - (m.btn.DL?1:0); inp.dpy = (m.btn.DD?1:0) - (m.btn.DU?1:0); inp.lsx = dz(m.lx, sdz ?? 0.15); inp.lsy = dz(m.ly, sdz ?? 0.15);
     inp.pad = m.btn;
     inp.hold.DU = !!m.btn.DU; inp.hold.DD = !!m.btn.DD; inp.hold.DL = !!m.btn.DL; inp.hold.DR = !!m.btn.DR; inp.hold.Back = !!m.btn.Back;
     for (const name of ['A','B','X','Y','Start','Back','DL','DR','DU','DD','LB','RB','LS','RS']){ const now=!!m.btn[name], key=gp.index+'_'+name; if(now && !prevBtn[key]) inp.pressed[name]=true; prevBtn[key]=now; }
+    if (Object.keys(inp.pressed).length || Math.abs(inp.steer) > 0.3 || inp.pedal > 0.3) setPadFamily(padFamily(gp));
     break; }
+  if (padWiz.open){ inp.pressed = {}; if (window.__forceInp) Object.assign(inp, window.__forceInp, { pressed: {} }); return inp; }
   if (keyDown('steerLeft')) inp.steer -= 1; if (keyDown('steerRight')) inp.steer += 1;
   if (keyDown('pedal')) inp.pedal = 1; if (keyDown('brake')) inp.brake = 1;
   if (keyDown('flipForward')) inp.kbFlip -= 1; if (keyDown('flipBack')) inp.kbFlip += 1;
@@ -667,6 +667,7 @@ function emoteFrame(dt, inp){
   window.__emote = { wheel: !!emoteWheel, tHold: +tHold.toFixed(2), can: !!can };
 }
 function onPress(code){
+  if (padWiz.open){ padWiz.key(code); return; }
   if (editorApi && editorApi.isOpen()){
     if (editorApi.isRiding()){ if (code === 'Escape' || hitBind('editorTest', code) || code === 'Start'){ editorApi.stopRide(); return; } }
     else { if (code === 'Start'){ editorApi.testRide(); return; } editorApi.onPress(code); return; }
@@ -784,7 +785,7 @@ const lockMsg = tr => tr.unlockAny ? `finish any other Rampage line to unlock ${
 const nextOpen = (from, dir) => { for (let k=1;k<=spots.length;k++){ const j = ((from + dir*k) % spots.length + spots.length) % spots.length; if (isOpen(j)) return j; } return from; };
 let spotI = 1;   // spawn at Flow Line
 const spotTag = i => { const tr = spots[i].trail !== undefined ? trails[spots[i].trail] : (spots[i].name.startsWith('Dirt') ? PARK : null); return tr ? ` ${DIFF[tr.diff].icon} ${DIFF[tr.diff].label} ${tr.type}` : ' free roam'; };
-const menuMsg = () => `<small>Press <b>X</b> / <b>O</b> for the 🚲 Bike Shop · $${S.score.toLocaleString()} DOLLAHS</small><br>Press <b>A</b> / <b>Enter</b> to drop in at <b>${spots[spotI].name}</b> <small>(${spotTag(spotI).trim()})</small><br><small>D-pad ← → / [ ] to pick a spot</small>`;
+const menuMsg = () => `<small>Press <b>${padLabel('X')}</b> / <b>O</b> for the 🚲 Bike Shop · $${S.score.toLocaleString()} DOLLAHS</small><br>Press <b>${padLabel('A')}</b> / <b>Enter</b> to drop in at <b>${spots[spotI].name}</b> <small>(${spotTag(spotI).trim()})</small><br><small>D-pad ← → / [ ] to pick a spot</small>`;
 function teleport(i, quiet){
   if (S.lift){ S.lift = null; $('liftRide').style.display = 'none'; myChair.visible = false; }
   spotI = (i + spots.length) % spots.length; const s = spots[spotI];
@@ -1254,7 +1255,7 @@ function frame(){
   requestAnimationFrame(frame);
   window.__rafs = (window.__rafs || 0) + 1;
   const dt = Math.min(0.05, clock.getDelta());
-  const inp = readInput(); if (Object.keys(inp.pressed).length) startAudio();
+  const inp = readInput(); padWiz.tick(); if (Object.keys(inp.pressed).length) startAudio();
   if (editorApi && editorApi.isOpen()) editorApi.tick(dt, inp);
   if (S.state === 'riding' && !menu.open && !shopOpen && !bigMap.open) spawnFrame(inp);
   emoteFrame(dt, inp);
@@ -1541,8 +1542,8 @@ function mapFrame(dt, inp){
     const dist = Math.round(Math.hypot(bigMap.cx - S.x, bigMap.cz - S.z)); c.textAlign = 'left'; c.font = 'bold 13px "Barlow Condensed", sans-serif'; c.fillStyle = '#fff'; c.strokeStyle = '#000'; c.lineWidth = 3;
     bigMap.hov = hov;
     const spotTr = hov >= 0 && spots[hov].trail !== undefined ? trails[spots[hov].trail] : null;
-    const raceNote = spotTr ? (raceOpen(spotTr.id) ? 'Y: race' : 'Complete this trail to unlock racing') : '';
-    const t = hov >= 0 ? `${spots[hov].name} — ${isOpen(hov) ? 'A / Enter: free ride' : '🔒 locked'}${raceNote ? ' · ' + raceNote : ''}` : `${dist} m away`; c.strokeText(t, a+16, b-14); c.fillText(t, a+16, b-14); }
+    const raceNote = spotTr ? (raceOpen(spotTr.id) ? PT('{Y}: race') : 'Complete this trail to unlock racing') : '';
+    const t = hov >= 0 ? `${spots[hov].name} — ${isOpen(hov) ? PT('{A} / Enter: free ride') : '🔒 locked'}${raceNote ? ' · ' + raceNote : ''}` : `${dist} m away`; c.strokeText(t, a+16, b-14); c.fillText(t, a+16, b-14); }
   // legend
   const lx = innerWidth - 270, rows = [['━', '#fff', 'Trail (dashed + 🔒 = locked)'], ['▲', '#f2b800', 'Checkpoint'], ['■', '#e53935', 'Lift station (dashed line = lift)'], ['─', '#ebd7aa', 'Connector path'], ...(RAMP ? [['◯', '#d9772b', 'Finish corral']] : [['●', '#a06e3c', 'Dirt Jump Park']]), ['🚲', '#fff', 'Bike Shop'], ['①', '#fff', 'Teleport spot'], ['◆', '#3ef0ff', `Waypoint (max ${WP_MAX})`], ['▲', '#ffd84d', 'You']];
   c.fillStyle = 'rgba(26,22,15,.88)'; c.fillRect(lx-12, 20, 262, 46 + rows.length*20 + 140); c.textAlign = 'left'; c.font = '28px "Bebas Neue", sans-serif'; c.fillStyle = '#d9772b'; c.fillText('MAP', lx, 44);
@@ -1550,7 +1551,7 @@ function mapFrame(dt, inp){
   let y = 80 + rows.length*20; c.fillStyle = '#fff'; c.font = 'bold 13px "Barlow Condensed", sans-serif'; c.fillText('Difficulty', lx, y); c.font = '13px "Barlow Condensed", sans-serif';
   for (const k of ['green','blue','black','dblack', ...(trails.some(t => t.diff === 'pro3') ? ['pro3'] : [])]){ y += 18; c.fillStyle = /^#(000|111|222)/.test(DIFF[k].color) || DIFF[k].color==='black' ? '#eee' : DIFF[k].color; c.fillText(`${DIFF[k].icon} ${DIFF[k].label}`, lx, y); }
   y += 26; c.fillStyle = '#bbb'; c.font = '12px "Barlow Condensed", sans-serif';
-  for (const l of ['Stick / D-pad / arrows / mouse: move cursor', 'A / Enter / double-click: teleport', 'X / W / click: set or remove waypoint', 'B / M / View: close']){ c.fillText(l, lx, y); y += 16; }
+  for (const l of ['Stick / D-pad / arrows / mouse: move cursor', PT('{A} / Enter / double-click: teleport'), PT('{X} / W / click: set or remove waypoint'), PT('{B} / M / {Back}: close')]){ c.fillText(l, lx, y); y += 16; }
 }
 syncBeacons();
 // ---------- audio: procedural bike and nature sounds only. No music tracks. ----------
@@ -1580,7 +1581,7 @@ const PAGES = {
     {label:'Trails', sub:`${trails.filter((_, i) => isOpen(i)).length}/${trails.length} unlocked — drop in at a trail start`, act:() => go('trails')},
     {label:'Bike Shop', sub:`$${S.score.toLocaleString()} DOLLAHS`, act:() => openShop()},
     {label:'Multiplayer', value:NET && NET.st.status === 'in' ? 'ROOM ' + NET.st.code : undefined, sub:'Ride with friends in a private room (room code)', act:() => go('multi')},
-    {label:'Leaderboards', sub:'Fastest times, biggest air, top speed… (LB / RB or Q / E: category)', act:() => openBoards()},
+    {label:'Leaderboards', sub:PT('Fastest times, biggest air, top speed… ({LB} / {RB} or Q / E: category)'), act:() => openBoards()},
     {label:'Settings', sub:'Graphics, ambience, frame rate, controls', act:() => go('settings')},
     {label:'Credits', act:() => go('credits')} ]}),
   trails: () => ({title:RAMP ? 'RAMPAGE LINES' : 'TRAILS', items:[...trailItems(), ...(RAMP ? [] : [{label:'Dirt Jump Park', sub:'Pro line · always open', act:() => { spotI = spots.findIndex(s => s.name === 'Dirt Jump Park'); startRide(); }}]), {label:'‹ Back', act:back}]}),
@@ -1628,7 +1629,7 @@ const PAGES = {
       {label:'Delete my cloud data', sub:'Removes the online copy + your leaderboard entries (this device keeps its progress)', act:() => { if (cloudDel){ CLOUD && CLOUD.wipe(); cloudDel = false; } else { cloudDel = true; toast('Select again to confirm deleting your cloud data'); setTimeout(() => cloudDel = false, 5000); } }},
       {label:'‹ Back', act:back} ]}; },
   boards: () => { const C = LB_CATS[LBV.cat], tl = trails, html = LBV.res === undefined ? '<p class="mpNote">Loading…</p>' : !LBV.res || !LBV.res.ok ? '<p class="mpNote">📡 Leaderboards are offline right now.</p>' : boardHtml(LBV.res, C);
-    const items = [{label:'Category', value:C.label.toUpperCase(), sub:'LB / RB (Q / E) or ← →', adj:d => lbMove(d, 0)}];
+    const items = [{label:'Category', value:C.label.toUpperCase(), sub:PT('{LB} / {RB} (Q / E) or ← →'), adj:d => lbMove(d, 0)}];
     if (C.per === 'trail'){ items.push({label:'World', value:RAMP ? 'RAMPAGE' : 'MOUNTAIN', sub:'Switching world reloads the game', adj:() => switchWorld()}); items.push({label:'Trail', value:(tl[LBV.trail] || {}).name || '', adj:d => { LBV.trail = (LBV.trail + d + tl.length) % tl.length; lbLoad(); }}); }
     items.push({label:'‹ Back', act:back});
     return {title:'LEADERBOARDS', html, items}; },
@@ -1660,7 +1661,7 @@ function renderMenu(){ const P = PAGES[menu.page](), el = $('menuPanel');
   el.querySelectorAll('li').forEach(li => { const k = +li.dataset.k; li.addEventListener('pointerenter', e => { if (e.pointerType && e.pointerType !== 'mouse') return; if (menu.sel === k) return; menu.sel = k; el.querySelectorAll('li').forEach(n => n.classList.toggle('sel', +n.dataset.k === k)); }); li.onclick = () => { menu.sel = k; menuKey('Enter'); }; });
   const list = el.querySelector('.mItems'), s = el.querySelector('li.sel');
   if (list && s){ const top = s.offsetTop, bot = top + s.offsetHeight, view = list.clientHeight; if (top < list.scrollTop + 2) list.scrollTop = Math.max(0, top - 2); else if (bot > list.scrollTop + view - 2) list.scrollTop = bot - view + 2; }
-  $('menuHint').textContent = menu.page === 'main' ? 'D-pad / stick / arrows: choose · A / Enter: select' : 'D-pad / stick / arrows: choose · ← → change · A / Enter: select · B / Esc: back'; }
+  $('menuHint').textContent = PT(menu.page === 'main' ? 'D-pad / stick / arrows: choose · {A} / Enter: select' : 'D-pad / stick / arrows: choose · ← → change · {A} / Enter: select · {B} / Esc: back'); }
 function openMenu(page){ menu.open = true; menu.page = page; menu.sel = 0; menu.stack = []; $('menu').classList.remove('hidden'); $('menu').classList.toggle('pause', page === 'pause'); document.body.classList.toggle('inmenu', page !== 'pause'); renderMenu(); }
 function closeMenu(){ menu.open = false; document.body.classList.remove('inmenu'); $('menu').classList.add('hidden'); }
 function go(page){ menu.stack.push([menu.page, menu.sel]); menu.page = page; menu.sel = 0; renderMenu(); }
@@ -1684,7 +1685,7 @@ function finishBind(code){
     return;
   }
   const hit = proposeBind(SETTINGS.binds, cap.device, cap.id, code);
-  if (!hit.ok){ cap.phase = 'conflict'; cap.code = code; cap.other = hit.other; toast(bindLabel(cap.device, code) + ' is used by ' + bindName(hit.other) + '. A swaps, B or Esc cancels.'); if (menu.open) renderMenu(); return; }
+  if (!hit.ok){ cap.phase = 'conflict'; cap.code = code; cap.other = hit.other; toast(bindLabel(cap.device, code) + ' is used by ' + bindName(hit.other) + PT('. {A} swaps, {B} or Esc cancels.')); if (menu.open) renderMenu(); return; }
   applyBind(hit.binds, bindName(cap.id) + ' → ' + bindLabel(cap.device, code));
 }
 function captureKey(code){
@@ -1696,14 +1697,17 @@ function captureKey(code){
   finishBind(code);
 }
 function controlItems(){
-  const rows = [{ label:'Reset to defaults', sub:'Restores every keyboard and controller bind', act:() => { SETTINGS.binds = loadBinds(null); saveSettings(); renderHelp(); toast('Controls reset'); } }];
-  const row = (id, device) => ({ label: bindName(id) + (device === 'kb' ? ' — keyboard' : ' — controller'), value: device === 'kb' ? keyLabel(kbBind(id)) : padLabel(padBind(id)), sub: bindCapture && bindCapture.id === id && bindCapture.device === device ? (bindCapture.phase === 'conflict' ? bindLabel(device, bindCapture.code) + ' is ' + bindName(bindCapture.other) + '. A swaps, B cancels.' : 'Press the new ' + (device === 'kb' ? 'key' : 'button') + '. Esc cancels.') : (device === 'kb' ? 'Select, then press a key' : 'Select, then press a button'), act: () => startBind(id, device) });
+  const g = connectedPad(), prof = g && PAD_PROFILES[g.id];
+  const rows = [{ label:'Set up controller', value: g ? (prof ? 'CUSTOM' : g.mapping === 'standard' ? 'STANDARD' : 'AUTO') : 'NONE', sub: g ? `${GLYPHS[padFamily(g)].name}. Press each button when asked, so every button does the right thing.` : 'Plug in a controller and press a button on it', act:() => setupController() }];
+  if (prof) rows.push({ label:'Forget controller setup', sub:'Go back to the automatic layout for this controller', act:() => { savePadProfile(g.id, null); toast('Controller setup removed'); } });
+  rows.push({ label:'Reset to defaults', sub:'Restores every keyboard and controller bind', act:() => { SETTINGS.binds = loadBinds(null); saveSettings(); renderHelp(); toast('Controls reset'); } });
+  const row = (id, device) => ({ label: bindName(id) + (device === 'kb' ? ' — keyboard' : ' — controller'), value: device === 'kb' ? keyLabel(kbBind(id)) : padLabel(padBind(id)), sub: bindCapture && bindCapture.id === id && bindCapture.device === device ? (bindCapture.phase === 'conflict' ? bindLabel(device, bindCapture.code) + ' is ' + bindName(bindCapture.other) + PT('. {A} swaps, {B} cancels.') : 'Press the new ' + (device === 'kb' ? 'key' : 'button') + '. Esc cancels.') : (device === 'kb' ? 'Select, then press a key' : 'Select, then press a button'), act: () => startBind(id, device) });
   for (const [id] of ACTIONS){ rows.push(row(id, 'kb')); if (id in PAD_DEFAULT) rows.push(row(id, 'pad')); }
   rows.push(row('spawnClick', 'pad'));
   rows.push(row('spawnMod', 'pad'));
   rows.push({ label:'Wheelie', value:'BOTH STICKS UP', sub:'Fixed. On the ground only: both sticks leave center together and stay up.' });
-  rows.push({ label:'Hop', value:'RS DOWN, THEN UP', sub:'Fixed. The up flick hops only after the stick was down.' });
-  rows.push({ label:'Tricks', value:'LB + RIGHT STICK', sub:'Fixed. Eight directions. RS click is a barspin. Keyboard uses the trick modifier.' });
+  rows.push({ label:'Hop', value:PT('RIGHT STICK DOWN, THEN UP'), sub:'Fixed. The up flick hops only after the stick was down.' });
+  rows.push({ label:'Tricks', value:PT('{LB} + RIGHT STICK').toUpperCase(), sub:PT('Fixed. Eight directions. {RS} is a barspin. Keyboard uses the trick modifier.') });
   rows.push({ label:'‹ Back', act: back });
   return rows;
 }
@@ -1718,7 +1722,7 @@ function renderHelp(){
     ['Bunny hop. The up flick only hops if the stick was down first.', 'Right stick ↓ then ↑', 'release ' + k('pump')],
     ['Counter-pump (stretch up)', 'Right stick ↑', k('counter')],
     ['Lean the bike into a turn. Matching the steer tightens the turn. Leaning the wrong way widens it. In the air it is a style tilt. Landing leaned much past 30° bails.', 'Right stick ← →', k('leanLeft') + ' / ' + k('leanRight')],
-    ['Tricks (stick amount = strength)', 'LB + right stick. RS click = barspin', k('trick') + ' + direction, ' + k('trick') + ' + ' + k('barspin') + ' = barspin'],
+    ['Tricks (stick amount = strength)', PT('{LB} + right stick. {RS} = barspin'), k('trick') + ' + direction, ' + k('trick') + ' + ' + k('barspin') + ' = barspin'],
     ['Respawn', p('respawn'), k('respawn')],
     ['Camera / reset camera', p('camera') + ' / ' + p('camReset'), k('camera') + ' / ' + k('camReset')],
     ['Shift gear up / down. A short tap shifts. Holding the emote button opens emotes.', p('gearUp') + ' / ' + p('gearDown'), k('gearUp') + ' / ' + k('gearDown')],
@@ -1732,9 +1736,9 @@ function renderHelp(){
     ['Teleport to prev / next spot', p('spotPrev') + ' / ' + p('spotNext'), k('spotPrev') + ' / ' + k('spotNext')],
   ];
   const table = document.querySelector('#help table');
-  if (table) table.innerHTML = '<tr><th></th><th>Xbox controller</th><th>Keyboard</th></tr>' + rows.map(r => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td><td>${esc(r[2])}</td></tr>`).join('');
+  if (table) table.innerHTML = '<tr><th></th><th>' + esc(GLYPHS[padFam].name) + '</th><th>Keyboard</th></tr>' + rows.map(r => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td><td>${esc(r[2])}</td></tr>`).join('');
   const head = document.querySelector('#help h3');
-  if (head) head.innerHTML = `CONTROLS <small>(${k('help')}, or Y in the pause menu, toggles · rebind in Settings → Controls)</small>`;
+  if (head) head.innerHTML = `CONTROLS <small>(${k('help')}, or ${padLabel('Y')} in the pause menu, toggles · rebind in Settings → Controls)</small>`;
   const foot = document.querySelector('#help p');
   if (foot) foot.textContent = `Pump: compress into backsides, extend over faces to gain speed. Lean with the right stick (${k('leanLeft')} / ${k('leanRight')}) to carve. Land straight and not leaned past 30°. Respawn point is ${k('spawn')} or ${p('spawnClick')}+${p('spawnMod')}. Controller: press any button so Firefox detects it.`;
 }
@@ -2067,7 +2071,7 @@ function animateLifts(dt){ for (const o of liftObjs){ o.phase = (o.phase + dt*LI
 function liftProximity(dt){ S.liftCool = Math.max(0, (S.liftCool||0) - dt); if (S.lift || S.liftCool > 0 || S.air || S.crashT > 0) return;
   for (let i=0;i<LIFTS.length;i++){ const L = LIFTS[i]; if (Math.hypot(S.x-L.bx, S.z-L.bz) < 4.5){ startLift(i); return; } } }
 function startLift(i){ sfxLiftStart(); const L = LIFTS[i]; S.lift = {i, d:0}; S.run = null; S.speed = 0; S.vy = 0; S.air = false; S.crumbs = []; S.liftWas = S.yaw;
-  $('liftRide').style.display = 'block'; $('liftRide').textContent = `🚡 ${L.name} → ${L.serves.join(' · ')}   (A / Enter to skip)`; camInit = false; }
+  $('liftRide').style.display = 'block'; $('liftRide').textContent = `🚡 ${L.name} → ${L.serves.join(' · ')}   (${padLabel('A')} / Enter to skip)`; camInit = false; }
 function liftRide(dt, inp){ const o = liftObjs[S.lift.i], L = o.L;
   S.lift.d += dt*LIFT_SPEED*6;   // the ride itself is sped up so it takes ~10-25 s
   if (S.lift.d >= L.len){ endLift(); return; }
@@ -2126,7 +2130,7 @@ let editorApi = null;
 editorApi = createEditor({
   THREE, scene, toast, getS: () => S, placeAt, updateChunks,
   lsGet: (k, d) => LS.get(k, d), lsSet: (k, v) => LS.set(k, v),
-  hit: hitBind, bindLabel: id => keyLabel(kbBind(id)),
+  hit: hitBind, bindLabel: id => keyLabel(kbBind(id)), padLabel: code => padLabel(code),
   closeMenu, mainMenu: () => { S.paused = false; S.state = 'menu'; openMenu('main'); },
   camera: () => camera, view: () => renderer.domElement.getBoundingClientRect(),
 });
@@ -2142,5 +2146,5 @@ window.__sim = (secs, inp) => { const h=1/120; const base={steer:0,pedal:0,brake
 if (SETTINGS.gfx && SETTINGS.gfx !== 'low') import('./gfx.js').then(m => { GFX = m.initGfx({level:SETTINGS.gfx, renderer, scene, camera, sun, SUN_DIR, skyDome, TEX, terrainMat, trunkMat, frameMat, RAMP, S, groundH, terrainH, getCam:() => camMode, toast, tod:SETTINGS.tod, coneG, trunkG, bushG, rockG, folMat, bushMat, rockMat, farU, farMesh:FARMESH, grassMesh:grassField.mesh, chunks, treesInCell, TCELL, HALF, LOAD_R, isDirt, featH, trailDist, groundColor,
     setGrass:(r, c) => { Q = {...Q, grassR:r, grassCell:c}; grassField.rebuild(true); }}); composer = null; window.__gfx = GFX; }).catch(e => { console.warn('graphics upgrade failed, using Low', e); });
 window.__gfxLevel = SETTINGS.gfx;
-renderHelp();
+renderHelp(); refreshPadHints();
 frame(); window.__frame = frame; window.__renderer = renderer; window.__shop = { open: openShop, key: shopKey, close: closeShop };
