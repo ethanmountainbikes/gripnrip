@@ -13,7 +13,8 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH, featBase, featAxis, BOULDERS, boulderH, rockTop, rockContact, bigBouldersNear, base, isDirt, inPark, nearTrails, nearTrees, treesInCell, TCELL, LIFTS, connectors, CW, SHOP, WORLD, RAMPAGE, trailDist, layoutTag, parkLayoutTag } from './world.js';
-import { loadBinds, proposeBind, swapBind, conflict, keyLabel, padLabel, actionLabel, ACTIONS, KB_DEFAULT, PAD_DEFAULT, spawnHold, clearSpawn, respawnChoice, rankedRun } from './binds.js';
+import { loadBinds, proposeBind, swapBind, conflict, keyLabel, padLabel, actionLabel, ACTIONS, KB_DEFAULT, PAD_DEFAULT, spawnHold, clearSpawn, respawnChoice } from './binds.js';
+import { isRaceUnlocked, migrateCleared, advanceCheckpoint, checkpointsDone, shouldSubmit, clearKey } from './race.js';
 import { initSfx, setSfxVolume, updateSfx, sfxLand, sfxCrash, sfxLiftStart } from './sfx.js';
 const RAMP = WORLD === 'rampage';   // Red Bull Rampage-inspired desert world
 
@@ -28,6 +29,12 @@ const BIKES = [
   {id:'bean',     name:'Buckle Bean',      price:5000, color:0x9a5a2e, scale:[1,1.02,1.06], drag:0.86, grip:1.15, pop:1.12, stab:1.15, desc:'The legendary bean bike. Brown frame, blue cape accents, gold buckle hardware.'},
 ];
 const LS = { get:(k,d)=>{ try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch(e){ return d; } }, set:(k,v)=>{ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} } };
+const WID = RAMP ? 1 : 0;
+const CLEAR_KEY = 'trailDescent.cleared';
+let cleared = migrateCleared(LS.get(CLEAR_KEY, {}), LS.get('trailDescent.pb', {}), WID, trails.map(tr => ({ id: tr.id, layout: layoutTag(tr.id) })));
+LS.set(CLEAR_KEY, cleared);
+function raceOpen(id){ const tr = trails[id]; return !!tr && isRaceUnlocked(cleared, LS.get('trailDescent.pb', {}), WID, tr.id, layoutTag(tr.id)); }
+function markCleared(id){ const tr = trails[id]; if (!tr) return; cleared[clearKey(WID, tr.id, layoutTag(tr.id))] = 1; LS.set(CLEAR_KEY, cleared); }
 const owned = new Set(LS.get('trailDescent.owned', ['hardtail'])); owned.add('hardtail');
 let BIKE = BIKES.find(b => b.id === LS.get('trailDescent.bike', 'hardtail') && owned.has(b.id)) || BIKES[0];
 const EARN = 0.15;   // DOLLAHS earn rate vs. the old REP values (~15%)
@@ -661,6 +668,7 @@ function onPress(code){
   if (bigMap.open){ mapKey(code); return; }
   if (menu.open){ menuKey(code); return; }
   if (hitBind('spawn', code) && S.state==='riding'){ trySetSpawn(); return; }
+  if ((code==='Enter' || code==='A') && S.state==='riding' && !S.paused && S.atStart >= 0 && !(S.countdown > 0)){ beginRace(S.atStart); return; }
   if (hitBind('map', code) && S.state==='riding' && !S.lift && !bigMap.open){ openMap(); return; }
   if (code==='Back' && bigMap.open){ closeMap(); return; }
   if (hitBind('drone', code) && S.state==='riding' && !menu.open && !shopOpen && !bigMap.open){ toggleDrone(); return; }
@@ -699,7 +707,7 @@ function droneOpts(){
   return { speed: num('droneSpeed', 12, 6, 24), tilt: num('droneTilt', 12, 0, 35) * Math.PI/180, dist: num('droneDist', 8, 4, 18), height: num('droneHeight', 4, 2, 12), manual: SETTINGS.droneFly === 'manual' };
 }
 function toggleDrone(){
-  if (S.run){ toast('Drone is off during a timed run'); return; }
+  if (S.run || S.countdown > 0){ toast('Drone is off during a race'); return; }
   if (S.lift || shopOpen || bigMap.open) return;
   const D = FPV.state;
   if (D.on){ D.on = false; FPV.group.visible = false; toast('Drone away'); return; }
@@ -712,7 +720,7 @@ function toggleDrone(){
 }
 function flyDrone(dt, inp){
   const D = FPV.state; if (!D.on){ FPV.group.visible = false; return; }
-  if (S.run){ D.on = false; FPV.group.visible = false; toast('Drone is off during a timed run'); return; }
+  if (S.run || S.countdown > 0){ D.on = false; FPV.group.visible = false; toast('Drone is off during a race'); return; }
   const opt = droneOpts(); D.manual = opt.manual;
   // Left stick yaw is the stick only. Arrows also write into steer for the bike, and they are pitch/roll here.
   let thr = -(inp.lyRaw || 0), yawIn = inp.lsx || 0, pitchIn = inp.rsy || 0, rollIn = inp.bankRaw || 0;
@@ -800,15 +808,13 @@ function respawnSafe(){
   const prefer = savedCam(); if (prefer !== camMode){ camMode = prefer; camInit = false; }
   if (S.failedRun !== undefined && S.failedRun !== null){ const tr = trails[S.failedRun]; S.failedRun = null;   // failed run: back to just above that trail's START arch
     placeAt(tr.pts[0][0], tr.pts[0][1], tr.yaw[0]); S.crumbs = []; S.crumbT = 0; camInit = false; return 'start'; }
-  if (spawn){ const tr = S.run && trails[S.run.t];
-    const cp = tr ? (S.run.cp != null ? tr.cps[S.run.cp] : {x:tr.pts[3][0], z:tr.pts[3][1], yaw:tr.yaw[3]}) : { x:S.x, z:S.z, yaw:S.yaw, via:'here' };
-    const choice = respawnChoice(spawn, cp, !!S.run);
-    if (S.run && choice.unranked){ S.run.unranked = true; S.run.spawnUsed = true; }
+  if (spawn && !S.run){ const choice = respawnChoice(spawn, { x:S.x, z:S.z, yaw:S.yaw }, false);
     updateChunks(choice.x, choice.z, 1e9, 160); placeAt(choice.x, choice.z, choice.yaw); S.crumbs = []; S.crumbT = 0; camInit = false;
-    flash(S.run ? 'RESPAWN POINT — UNRANKED' : 'RESPAWN POINT', 1.2);
-    if (S.run) toast('⏱ Respawn point used. This run will not be ranked.');
+    flash('RESPAWN POINT', 1.2);
     return 'spawn'; }
-  if (S.run){ const tr = trails[S.run.t], cp = S.run.cp != null ? tr.cps[S.run.cp] : {x:tr.pts[3][0], z:tr.pts[3][1], yaw:tr.yaw[3]};   // run: last checkpoint (or the start), timer keeps going
+  if (!S.run && S.free && S.free.cp >= 0){ const tr = trails[S.free.t], cp = tr && tr.cps[S.free.cp];
+    if (cp){ updateChunks(cp.x, cp.z, 1e9, 160); placeAt(cp.x, cp.z, cp.yaw); S.speed = 3.5; S.crumbs = []; S.crumbT = 0; camInit = false; return 'checkpoint'; } }
+  if (S.run){ const tr = trails[S.run.t], cp = S.run.cp != null && S.run.cp >= 0 ? tr.cps[S.run.cp] : {x:tr.pts[3][0], z:tr.pts[3][1], yaw:tr.yaw[3]};   // race: last checkpoint, never the personal point. Timer keeps going.
     updateChunks(cp.x, cp.z, 1e9, 160); placeAt(cp.x, cp.z, cp.yaw); S.speed = 3.5; S.crumbs = []; S.crumbT = 0; camInit = false; return 'checkpoint'; }
   // inside the dirt jump park: back to the top of the roll-in of the line you were on (nearest by lateral offset), facing down it, stopped
   if (!RAMP && PARK.lines && inPark(S.x, S.z)){ const d = PARK.dir, sx = -d[1], sz = d[0], lat = (S.x-PARK.x)*sx + (S.z-PARK.z)*sz;
@@ -824,6 +830,38 @@ function respawnSafe(){
   else placeAt(S.x, S.z, S.travel ?? S.yaw);
   S.crumbs = []; S.crumbT = 0;
 }
+function armCountdown(id){
+  if (FPV.state.on){ FPV.state.on = false; FPV.group.visible = false; toast('Drone is off for the race'); }
+  S.countdown = 3; S.countShow = -1; S.countTrail = id; S.run = null;
+  S.speed = 0; S.vx = S.vz = S.vy = 0; S.air = false;
+}
+function tickCountdown(dt){
+  S.speed = 0; S.vx = S.vz = S.vy = 0;
+  S.countdown -= dt;
+  const n = Math.ceil(Math.max(0, S.countdown));
+  if (n !== S.countShow){ S.countShow = n; flash(n > 0 ? String(n) : 'GO', 0.9); }
+  if (S.countdown <= 0){ const id = S.countTrail, tr = trails[id];
+    S.countdown = 0; S.free = null; S.lives = 3; S.atStart = -1;
+    S.run = { mode:'race', t:id, start:S.time, s:0, cp:-1, cpt:[], cpCount:(tr.cps || []).length };
+    trickEl.textContent = `⏱ ${tr.name} — race on`; S.trickMsgT = 2; }
+}
+function beginRace(id){
+  if (!raceOpen(id)){ toast('Complete this trail to unlock racing'); flash('RACE LOCKED', 1.2); return; }
+  const tr = trails[id]; if (!tr) return;
+  if (bigMap.open) closeMap();
+  if (menu.open) closeMenu();
+  const i0 = Math.min(3, tr.pts.length - 1), x = tr.pts[i0][0], z = tr.pts[i0][1];
+  updateChunks(x, z, 1e9, 160); placeAt(x, z, tr.yaw[i0]);
+  S.state = 'riding'; S.paused = false;
+  armCountdown(id);
+}
+let gateEl = null;
+function gatePrompt(){
+  if (!gateEl){ gateEl = document.createElement('div'); gateEl.id = 'gatePrompt'; gateEl.style.cssText = 'position:fixed;left:50%;bottom:16%;transform:translateX(-50%);z-index:28;padding:8px 16px;background:rgba(12,16,12,.82);color:#f3e9d2;font:700 18px/1.3 "Barlow Condensed",sans-serif;letter-spacing:.04em;border-radius:6px;pointer-events:none;display:none;text-align:center'; document.body.appendChild(gateEl); }
+  const show = S.state === 'riding' && !S.paused && !menu.open && !bigMap.open && !shopOpen && !(S.countdown > 0) && !(S.run && S.run.mode === 'race') && S.atStart >= 0;
+  gateEl.style.display = show ? '' : 'none';
+  if (show) gateEl.textContent = raceOpen(S.atStart) ? 'FREE RIDE  ·  Enter / A to RACE' : 'Complete this trail to unlock racing';
+}
 function trackWorld(dt){
   if (S.crashT > 0) return;
   // breadcrumbs for respawn (only while rolling cleanly on the ground)
@@ -833,22 +871,31 @@ function trackWorld(dt){
   const near = nearTrails(S.x, S.z); let cur = null;
   for (const n of near) if (n.d <= W+1.5 && (!cur || n.d < cur.d)) cur = n;
   S.onTrailName = cur ? trails[cur.t].name : inPark(S.x,S.z) ? 'Dirt Jump Park' : '';
+  S.atStart = -1;
   if (cur){ const tr = trails[cur.t];
-    if (cur.s < 18 && (!S.run || S.run.t !== cur.t)) {
-      if (FPV.state.on){ if (!FPV.told){ toast('Put the drone away to start a timed run'); FPV.told = true; } }
-      else { FPV.told = false; S.run = {t:cur.t, start:S.time, s:cur.s}; S.lives = 3; trickEl.textContent = `⏱ ${tr.name} — run started`; S.trickMsgT = 2; } }
-    if (S.run && S.run.t === cur.t){ S.run.s = Math.max(S.run.s, cur.s);
-      const cps = tr.cps || []; while ((S.run.cp ?? -1) + 1 < cps.length && cur.s >= cps[(S.run.cp ?? -1) + 1].s - 2 && cur.s < cps[(S.run.cp ?? -1) + 1].s + 25){ S.run.cp = (S.run.cp ?? -1) + 1; (S.run.cpt ||= [])[S.run.cp] = S.time - S.run.start; toast(`🚩 Checkpoint ${S.run.cp+1}/${cps.length} · ${tr.name}`); flash('CHECKPOINT', 1.0); }
-      if (cur.s > tr.len - 8){ const time = S.time - S.run.start, bonus = Math.round((1000 + tr.len/2)*EARN);
-        S.finishes++; S.score += bonus; flash('FINISH!', 2.5); trickEl.textContent = `${tr.name} in ${fmtTime(time)}  +$${bonus}`; S.trickMsgT = 3.5;
-        S.best ||= {}; if (!S.run.spawnUsed && (!S.best[tr.name] || time < S.best[tr.name])){ S.best[tr.name] = time; LS.set('trailDescent.best.' + WORLD, S.best); toast(`⭐ NEW BEST! ${tr.name}: ${fmtTime(time)}`); }
-        { const cps = tr.cps || [], cpt = S.run.cpt || [];
-          if (!rankedRun(S.run, FPV.state.on)) toast(S.run.spawnUsed ? 'Respawn point was used — this run is not ranked' : 'Drone was out — this run is not ranked');
-          else if (CLOUD && cps.length === cpt.filter(x => x != null).length) CLOUD.trail(RAMP ? 1 : 0, S.run.t, tr.name, time, cpt, S.run.combo || 0, layoutTag(tr.id));
-          else if (CLOUD) setTimeout(() => toast('Leaderboard: missed a checkpoint, so this time is not ranked'), 2500); }
+    if (cur.s < 18 && !(S.run && S.run.t === cur.t) && !(S.countdown > 0)) S.atStart = cur.t;
+    const prog = S.run && S.run.t === cur.t ? S.run : (S.free && S.free.t === cur.t ? S.free : null);
+    if (cur.s < 18 && !S.run && !prog && !(S.countdown > 0)) S.free = { t: cur.t, cp: -1, s: cur.s };
+    const active = S.run && S.run.t === cur.t ? S.run : (S.free && S.free.t === cur.t ? S.free : null);
+    if (active){ active.s = Math.max(active.s || 0, cur.s);
+      const cps = tr.cps || []; let guard = 0;
+      while (guard++ < cps.length + 1){ const next = advanceCheckpoint(active.cp, cur.s, cps); if (next === (active.cp ?? -1)) break; active.cp = next; if (active === S.run) (active.cpt ||= [])[next] = S.time - active.start; toast(`🚩 Checkpoint ${next+1}/${cps.length} · ${tr.name}`); flash('CHECKPOINT', 1.0); }
+      if (cur.s > tr.len - 8){ const racing = active === S.run, time = racing ? S.time - active.start : 0, bonus = Math.round((1000 + tr.len/2)*EARN);
+        S.finishes++; S.score += bonus; flash('FINISH!', 2.5);
+        const done = checkpointsDone(active.cp, cps.length);
+        if (!racing){ trickEl.textContent = `${tr.name}  +$${bonus}`; S.trickMsgT = 3.5;
+          if (done){ markCleared(cur.t); toast(raceOpen(cur.t) ? `${tr.name} complete — racing unlocked` : `${tr.name} complete`); }
+          else toast('Missed a checkpoint — race stays locked'); }
+        else { trickEl.textContent = `${tr.name} in ${fmtTime(time)}  +$${bonus}`; S.trickMsgT = 3.5;
+          S.run.cpCount = cps.length;
+          S.best ||= {}; if (shouldSubmit(S.run, FPV.state.on) && (!S.best[tr.name] || time < S.best[tr.name])){ S.best[tr.name] = time; LS.set('trailDescent.best.' + WORLD, S.best); toast(`⭐ NEW BEST! ${tr.name}: ${fmtTime(time)}`); }
+          if (shouldSubmit(S.run, FPV.state.on)){ markCleared(cur.t); if (CLOUD) CLOUD.trail(RAMP ? 1 : 0, S.run.t, tr.name, time, S.run.cpt || [], S.run.combo || 0, layoutTag(tr.id)); }
+          else if (FPV.state.on) toast('Drone was out — this race is not ranked');
+          else if (!done) toast('Missed a checkpoint — this race is not ranked');
+          else toast('This race is not ranked'); }
         if (!unlocked.has(tr.name)){ const pro = trails.find(o => o.unlockAny && o !== tr), wasPro = pro && anyOtherDone(pro); unlocked.add(tr.name); saveUnlocks(); setTimeout(()=>toast(`🔓 Unlocked: ${tr.name} — teleport there any time`), 1200);
           if (pro && !wasPro && anyOtherDone(pro)) setTimeout(()=>toast(`☠ ${pro.name} UNLOCKED — the hardest line on the mountain. PRO only.`), 4200); }
-        S.run = null; } } }
+        if (racing) S.run = null; else S.free = null; } } }
   // map boundary: warning as you approach, then a bail + respawn at your last safe spot inside (counts as a crash only during a trail run)
   const edge = Math.max(Math.abs(S.x), Math.abs(S.z));
   if (S.crashT <= 0){
@@ -1193,6 +1240,7 @@ function frame(){
   backWas = !!(inp.hold && inp.hold.Back);
   if (S.state==='riding' && !S.paused && S.lift){ liftRide(dt, inp); }
   else if (S.state==='riding' && !S.paused && FPV.state.on && FPV.state.manual){ flyDrone(dt, inp); }
+  else if (S.state==='riding' && !S.paused && S.countdown > 0){ tickCountdown(dt); }
   else if (S.state==='riding' && !S.paused){
     acc += dt; const h = 1/120; while (acc >= h){ step(h, inp); acc -= h; }
     if (FPV.state.on) flyDrone(dt, inp);
@@ -1325,10 +1373,12 @@ function frame(){
   if (CLOUD && S.state === 'riding' && !S.lift && (S.statT = (S.statT || 0) + dt) > 2){ S.statT = 0; if (S.maxKmh > 1) CLOUD.speed(Math.min(S.maxKmh, 108)); }
   $('lives').style.display = S.run ? '' : 'none';
   $('livesVal').textContent = S.lives>0 ? '♥ '.repeat(S.lives).trim() : '—';
-  const run = S.run && trails[S.run.t];
-  $('progressBar').style.width = run ? Math.min(100, S.run.s/run.len*100) + '%' : '0%';
+  const run = (S.run || S.free) && trails[(S.run || S.free).t];
+  const along = (S.run || S.free || {}).s || 0;
+  $('progressBar').style.width = run ? Math.min(100, along/run.len*100) + '%' : '0%';
   $('progressBar').style.background = run ? run.color : '#fff';
-  $('timer').textContent = run ? `${run.name}  ${fmtTime(S.time - S.run.start)}` : (S.onTrailName || 'Free roam');
+  $('timer').textContent = S.run ? `${trails[S.run.t].name}  ${fmtTime(S.time - S.run.start)}` : (S.free && trails[S.free.t] ? `Free ride · ${trails[S.free.t].name}` : (S.onTrailName || 'Free roam'));
+  gatePrompt();
   drawMinimap(); updateWaypoints(dt); if (bigMap.open) mapFrame(dt, inp);
   if (S.trickMsgT > 0){ S.trickMsgT -= dt; if (S.trickMsgT<=0) trickEl.textContent=''; }
   if (S.flashT > 0){ S.flashT -= dt; if (S.flashT<=0) centerEl.style.opacity = 0; }   // fade out (text stays until the next message)
@@ -1411,6 +1461,7 @@ function mapTeleport(){ const {s} = mapScale(); let best = -1, bd = 1e9; spots.f
   if (!isOpen(best)){ toast(`🔒 ${spots[best].name} is locked — ${lockMsg(spotTrail(best))}`); return; }
   closeMap(); teleport(best); }
 function mapKey(code){
+  if ((code==='Y'||code==='KeyY') && bigMap.hov >= 0 && spots[bigMap.hov].trail !== undefined){ beginRace(spots[bigMap.hov].trail); return; }
   if (code==='B'||code===kbBind('map')||code===padBind('map')||code==='Escape') closeMap();
   else if (code==='A'||code==='Enter'||code==='Space') mapTeleport();
   else if (code==='X'||code==='KeyW') toggleWaypointAt(bigMap.cx, bigMap.cz); }
@@ -1455,7 +1506,10 @@ function mapFrame(dt, inp){
   { const [a,b] = P(bigMap.cx, bigMap.cz); c.strokeStyle = '#fff'; c.lineWidth = 2; c.beginPath(); c.arc(a, b, 10, 0, 7); c.moveTo(a-18, b); c.lineTo(a-6, b); c.moveTo(a+6, b); c.lineTo(a+18, b); c.moveTo(a, b-18); c.lineTo(a, b-6); c.moveTo(a, b+6); c.lineTo(a, b+18); c.stroke();
     let hov = -1; spots.forEach((p, i) => { if (Math.hypot(p.x-bigMap.cx, p.z-bigMap.cz)*s < 22) hov = i; });
     const dist = Math.round(Math.hypot(bigMap.cx - S.x, bigMap.cz - S.z)); c.textAlign = 'left'; c.font = 'bold 13px "Barlow Condensed", sans-serif'; c.fillStyle = '#fff'; c.strokeStyle = '#000'; c.lineWidth = 3;
-    const t = hov >= 0 ? `${spots[hov].name} — ${isOpen(hov) ? 'A / Enter: teleport' : '🔒 locked'}` : `${dist} m away`; c.strokeText(t, a+16, b-14); c.fillText(t, a+16, b-14); }
+    bigMap.hov = hov;
+    const spotTr = hov >= 0 && spots[hov].trail !== undefined ? trails[spots[hov].trail] : null;
+    const raceNote = spotTr ? (raceOpen(spotTr.id) ? 'Y: race' : 'Complete this trail to unlock racing') : '';
+    const t = hov >= 0 ? `${spots[hov].name} — ${isOpen(hov) ? 'A / Enter: free ride' : '🔒 locked'}${raceNote ? ' · ' + raceNote : ''}` : `${dist} m away`; c.strokeText(t, a+16, b-14); c.fillText(t, a+16, b-14); }
   // legend
   const lx = innerWidth - 270, rows = [['━', '#fff', 'Trail (dashed + 🔒 = locked)'], ['▲', '#f2b800', 'Checkpoint'], ['■', '#e53935', 'Lift station (dashed line = lift)'], ['─', '#ebd7aa', 'Connector path'], ...(RAMP ? [['◯', '#d9772b', 'Finish corral']] : [['●', '#a06e3c', 'Dirt Jump Park']]), ['🚲', '#fff', 'Bike Shop'], ['①', '#fff', 'Teleport spot'], ['◆', '#3ef0ff', `Waypoint (max ${WP_MAX})`], ['▲', '#ffd84d', 'You']];
   c.fillStyle = 'rgba(26,22,15,.88)'; c.fillRect(lx-12, 20, 262, 46 + rows.length*20 + 140); c.textAlign = 'left'; c.font = '28px "Bebas Neue", sans-serif'; c.fillStyle = '#d9772b'; c.fillText('MAP', lx, 44);
@@ -1497,8 +1551,9 @@ function fpsMeter(dt){ if (!SETTINGS.fpsOn){ if (fpsEl.style.display !== 'none')
   fpsM.acc += dt; fpsM.n++; fpsM.worst = Math.max(fpsM.worst, dt);
   if (fpsM.acc >= 0.5){ const f = fpsM.n/fpsM.acc; fpsEl.textContent = `${f.toFixed(0)} FPS · ${(fpsM.acc/fpsM.n*1000).toFixed(1)} ms · worst ${(fpsM.worst*1000).toFixed(0)} ms` + (GFX && GFX.gov ? ` · ${(SETTINGS.gfx || '').toUpperCase()} ${Math.round(GFX.gov.rs*100)}% scale` : ''); fpsM.acc = 0; fpsM.n = 0; fpsM.worst = 0; } }
 const ON = v => v ? 'ON' : 'OFF', PCT = v => Math.round(v*100) + '%';
+let trailPick = 0;
 function trailItems(){ return trails.map((tr, i) => { const d = DIFF[tr.diff], open = isOpen(i);
-  return {label:`<span class="dIcon" style="color:${d.color === '#111' ? '#e8e2d0' : d.color}">${d.icon}</span> ${open ? '' : '🔒 '}${tr.name}`, sub:`${d.label} · ${tr.type}${open ? '' : tr.unlockAny ? ' · finish any other Rampage line to unlock' : ' · finish it once to unlock'}`, disabled:!open, act:() => { spotI = i; startRide(); }}; }); }
+  return {label:`<span class="dIcon" style="color:${d.color === '#111' ? '#e8e2d0' : d.color}">${d.icon}</span> ${open ? '' : '🔒 '}${tr.name}`, sub:`${d.label} · ${tr.type}${open ? '' : tr.unlockAny ? ' · finish any other Rampage line to unlock' : ' · finish it once to unlock'} · ${raceOpen(tr.id) ? 'Race open' : 'Complete this trail to unlock racing'}`, disabled:!open, act:() => { trailPick = i; go('trailgo'); }}; }); }
 const PAGES = {
   main: () => ({title:null, items:[
     {label:'Ride', sub:RAMP ? 'Free roam from the Valley Overlook' : 'Free roam from the base plaza', act:() => { spotI = spots.findIndex(s => s.name.startsWith(RAMP ? 'Valley Overlook' : 'Valley Base')); startRide(); }},
@@ -1510,6 +1565,10 @@ const PAGES = {
     {label:'Settings', sub:'Graphics, quality, music, controls, invert', act:() => go('settings')},
     {label:'Credits', act:() => go('credits')} ]}),
   trails: () => ({title:RAMP ? 'RAMPAGE LINES' : 'TRAILS', items:[...trailItems(), ...(RAMP ? [] : [{label:'Dirt Jump Park', sub:'Pro line · always open', act:() => { spotI = spots.findIndex(s => s.name === 'Dirt Jump Park'); startRide(); }}]), {label:'‹ Back', act:back}]}),
+  trailgo: () => { const tr = trails[trailPick], open = raceOpen(tr.id); return { title: tr.name.toUpperCase(), items: [
+    { label: 'Free Ride', sub: 'No timer and no leaderboard. Finish every checkpoint to unlock racing.', act: () => { spotI = trailPick; startRide(); } },
+    { label: 'Race', sub: open ? 'Countdown, timer, checkpoints in order. No drone and no respawn point.' : 'Complete this trail to unlock racing', act: () => beginRace(trailPick) },
+    { label: '‹ Back', act: back } ] }; },
   settings: () => ({title:'SETTINGS', items:[
     {label:'Cloud Save', value:CLOUD ? ({synced:'SYNCED', offline:'OFFLINE', idle:'…'})[CLOUD.st.status] || '' : 'OFF', sub:'Your save code, restore on another browser', act:() => go('cloud')},
     {label:'Graphics', value:(SETTINGS.gfx||'low').toUpperCase(), sub:'Low = classic look · Medium / High / Max = HDR sky, PBR textures, shadows, post FX, more detail (reloads)', adj:d => setGfx(d), act:() => setGfx(1, true)},
@@ -1565,7 +1624,7 @@ const PAGES = {
   pause: () => ({title:'PAUSED', items:[
     {label:'Resume', act:() => togglePause()},
     {label:'Map', sub: padLabel(padBind('map')) + ' / ' + keyLabel(kbBind('map')), act:() => { closeMenu(); openMap(); bigMap.wasPaused = false; }},
-    {label:'FPV drone', sub: keyLabel(kbBind('drone')) + ', or hold ' + padLabel(padBind('drone')) + '. Off during a timed run.', act:() => { closeMenu(); S.paused = false; toggleDrone(); }},
+    {label:'FPV drone', sub: keyLabel(kbBind('drone')) + ', or hold ' + padLabel(padBind('drone')) + '. Off during a race.', act:() => { closeMenu(); S.paused = false; toggleDrone(); }},
     {label:'Bike Shop', act:() => openShop()},
     {label:'Clear respawn point', sub: spawn ? 'Bails go back to the last checkpoint' : 'None set', act: () => { if (!spawn){ toast('↩ No respawn point set'); return; } clearSpawnPoint(); }},
     {label:'Multiplayer', value:NET && NET.st.status === 'in' ? 'ROOM ' + NET.st.code : undefined, act:() => go('multi')},
@@ -1578,7 +1637,7 @@ const PAGES = {
 function renderMenu(){ const P = PAGES[menu.page](), el = $('menuPanel');
   menu.items = P.items; menu.sel = Math.max(0, Math.min(menu.sel, P.items.length-1));
   el.innerHTML = (P.title ? `<h2>${P.title}</h2>` : '') + (P.html || '') + `<ul class="mItems${menu.page === 'trails' || menu.page === 'controls' ? ' scroll' : ''}">` + P.items.map((it, k) =>
-    `<li data-k="${k}" class="${k === menu.sel ? 'sel' : ''}${it.disabled ? ' dis' : ''}"><span class="mLabel">${esc(it.label)}</span>${it.value !== undefined ? `<span class="mVal">${it.adj ? '‹ ' : ''}${esc(it.value)}${it.adj ? ' ›' : ''}</span>` : ''}${it.sub ? `<small>${esc(it.sub)}</small>` : ''}</li>`).join('') + '</ul>';
+    `<li data-k="${k}" class="${k === menu.sel ? 'sel' : ''}${it.disabled ? ' dis' : ''}"><span class="mLabel">${it.label}</span>${it.value !== undefined ? `<span class="mVal">${it.adj ? '‹ ' : ''}${esc(it.value)}${it.adj ? ' ›' : ''}</span>` : ''}${it.sub ? `<small>${esc(it.sub)}</small>` : ''}</li>`).join('') + '</ul>';
   $('menuLogo').style.display = menu.page === 'main' ? '' : 'none';
   el.querySelectorAll('li').forEach(li => { const k = +li.dataset.k; li.onmouseenter = () => { if (menu.sel !== k){ menu.sel = k; renderMenu(); } }; li.onclick = () => { menu.sel = k; menuKey('Enter'); }; });
   const s = el.querySelector('li.sel'); if (s && s.scrollIntoView) s.scrollIntoView({block:'nearest'});
@@ -1646,7 +1705,7 @@ function renderHelp(){
     ['Shift gear up / down. A short tap shifts. Holding the emote button opens emotes.', p('gearUp') + ' / ' + p('gearDown'), k('gearUp') + ' / ' + k('gearDown')],
     ['Pause', p('pause') + ' / Esc', k('pause') + ' / Esc'],
     ['Full-screen map. A short press opens it. Hold the drone button for the FPV drone.', p('map') + ' (tap)', k('map')],
-    ['FPV drone. Off during a timed run.', 'Hold ' + p('drone'), k('drone')],
+    ['FPV drone. Off during a race. Free ride can use it.', 'Hold ' + p('drone'), k('drone')],
     ['Bike shop. The controller button opens it from the title or pause menu.', p('shop'), k('shop')],
     ['Respawn point at your position and facing. Stopped or slow, on the ground, not on a lift or inside a rock or tree. Press again while standing on it to clear it, or use the pause menu. Using it during a timed run makes that run unranked. Saved on this device only.', p('spawnClick') + ' + ' + p('spawnMod'), k('spawn')],
     ['Wheelie. Both sticks up together from center, then balance with the left stick. Ground only.', 'Both sticks ↑', k('flipBack') + ' while rolling'],
@@ -2048,6 +2107,7 @@ openMenu('main'); setTimeout(() => $('loading').classList.add('done'), 300);
 teleport(spotI, true);
 window.__features = features; window.__respawn = () => respawnSafe(); window.__game = S; window.__readInput = readInput; window.__emoteFrame = emoteFrame;
 window.__drone = FPV.state; window.__droneToggle = toggleDrone; window.__droneFly = (dt, inp) => flyDrone(dt, inp || {steer:0, lyRaw:0, bankRaw:0, rsy:0}); window.__saveSettings = saveSettings; window.__settings = SETTINGS; window.__bail = () => crash('Bail!'); window.__ragdoll = rag; window.__ragdollReport = () => rag.on ? ragdollReport(rag, groundH) : null; window.__groundH = groundH; window.__lift = i => startLift(i); window.__world = { LIFTS, connectors, trails, features, spots, PARK, SHOP, terrainH, featH, isDirt, nearTrails, base, inPark, treesInCell, trailDist };
+window.__race = { open: raceOpen, mark: markCleared, cleared: () => cleared, submit: run => shouldSubmit(run, false) };
 window.__setCam = m => { camMode = ((m % CAM_NAMES.length) + CAM_NAMES.length) % CAM_NAMES.length; camInit = false; camHead = S.travel ?? S.yaw; };
 window.__BR = BR; window.__teleport = i => teleport(i); window.__unlocked = unlocked; window.__isOpen = isOpen; window.__chunks = () => chunks.size; window.__renderer = renderer; window.__place = (x, z, yaw) => { placeAt(x, z, yaw); S.air = false; };
 window.__sim = (secs, inp) => { const h=1/120; const base={steer:0,pedal:0,brake:0,jump:false,tx:0,ty:0}; for(let t=0;t<secs;t+=h){ step(h, Object.assign({}, base, typeof inp==='function'?inp(t):inp)); trackWorld(h); } return {x:S.x, z:S.z, kmh:S.speed*3.6, air:S.air, lives:S.lives, clean:S.clean, score:S.score}; };
