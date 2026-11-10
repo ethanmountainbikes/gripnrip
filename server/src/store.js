@@ -22,7 +22,7 @@ export const CATS = {
   park:   {per:'g',     asc:false, scale:1},      // dirt jump park best line score
 };
 const RUN_START = 18, RUN_END = 8;   // a run starts within 18 m of the top and finishes 8 m before the end (as in game.js)
-const SETTINGS_KEYS = { tod: ['morning','noon','golden'], quality: ['low','med','high'], invertY: 'b', invertX: 'b', volume: 'n', musicOn: 'b', musicVol: 'n' };
+const SETTINGS_KEYS = { tod: ['morning','noon','golden'], quality: ['low','med','high'], invertY: 'b', invertX: 'b', volume: 'n', musicVol: 'n', ambience: 'n', fpsCap: 'fps' };
 
 const json = (o, s = 200) => new Response(JSON.stringify(o), { status: s, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' } });
 async function sha(s) { const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)); return [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join(''); }
@@ -38,7 +38,7 @@ export function cleanSave(d) {
   const best = (o, w) => { const r = {}; if (o && typeof o === 'object') for (const t of TRAILS[w]) { const v = o[t.name]; if (typeof v === 'number' && v > 0 && v < 36000) r[t.name] = Math.round(v * 1000) / 1000; } return r; };
   const skins = {}; if (d.skins && typeof d.skins === 'object') for (const [b, s] of Object.entries(d.skins).slice(0, 20)) if (ID_RE.test(b) && s && typeof s === 'object') { const o = {}; for (const [k, v] of Object.entries(s).slice(0, 8)) if (ID_RE.test(k) && typeof v === 'string' && ID_RE.test(v)) o[k] = v; skins[b] = o; }
   const settings = {}; if (d.settings && typeof d.settings === 'object') {
-    for (const [k, t] of Object.entries(SETTINGS_KEYS)) { const v = d.settings[k]; if (Array.isArray(t) ? t.includes(v) : t === 'b' ? typeof v === 'boolean' : (typeof v === 'number' && v >= 0 && v <= 1)) settings[k] = v; }
+    for (const [k, t] of Object.entries(SETTINGS_KEYS)) { const v = d.settings[k]; const fpsOk = t === 'fps' && typeof v === 'number' && [0, 30, 60, 90, 120, 144].includes(v); if (Array.isArray(t) ? t.includes(v) : t === 'b' ? typeof v === 'boolean' : fpsOk || (t === 'n' && typeof v === 'number' && v >= 0 && v <= 1)) settings[k] = v; }
     const span = (k, lo, hi) => { const v = d.settings[k]; if (typeof v === 'number' && v >= lo && v <= hi) settings[k] = v; };
     span('droneSpeed', 6, 24); span('droneTilt', 0, 35); span('droneDist', 4, 18); span('droneHeight', 2, 12);
     if (d.settings.droneFly === 'manual' || d.settings.droneFly === 'follow') settings.droneFly = d.settings.droneFly; }

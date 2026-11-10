@@ -79,7 +79,7 @@ html,body{font-family:"Barlow Condensed","Arial Narrow",Arial,sans-serif;color:v
 .tagline{font:600 20px "Barlow Condensed";letter-spacing:5px;color:#cbbf9f;margin-top:10px}
 #menuPanel{position:relative;width:min(470px,86vw);padding:14px 16px;border-top:6px solid var(--dirt)}
 #menuPanel h2{margin:0 0 8px;color:var(--dirt);font-size:40px}
-.mItems{list-style:none;margin:0;padding:0}.mItems.scroll{max-height:58vh;overflow:auto}
+.mItems{list-style:none;margin:0;padding:0}.mItems.scroll{max-height:min(58vh,calc(100dvh - 210px));overflow-y:auto;overscroll-behavior:contain;touch-action:pan-y;-webkit-overflow-scrolling:touch}
 .mItems li{position:relative;padding:8px 14px 8px 18px;margin:3px 0;cursor:pointer;border-left:4px solid transparent;font:400 30px/1 "Bebas Neue",Impact,sans-serif;letter-spacing:1.5px;display:flex;flex-wrap:wrap;align-items:baseline;gap:10px}
 .mItems li small{flex-basis:100%;font:600 15px "Barlow Condensed";letter-spacing:.5px;color:#bfb497}
 .mItems li .mVal{margin-left:auto;color:#9fd18b;font-size:24px}
@@ -126,9 +126,9 @@ body.inshop #shop{left:auto;right:3vw;transform:translateY(-50%);width:min(500px
   #menu{justify-content:flex-start;padding:max(6px,env(safe-area-inset-top)) 10px 6px max(3vw,env(safe-area-inset-left));overflow:hidden}
   #menuLogo{margin-bottom:6px;flex:none}.logoMark svg{width:54px;height:27px}
   .logo{font-size:44px;letter-spacing:3px;text-shadow:3px 3px 0 var(--dirt2)}.tagline{font-size:11px;letter-spacing:2px;margin-top:4px}
-  #menuPanel{padding:6px 8px;border-top-width:4px;min-height:0;display:flex;flex-direction:column;flex:0 1 auto;overflow:hidden}
+  #menuPanel{padding:6px 8px;border-top-width:4px;min-height:0;display:flex;flex-direction:column;flex:1 1 auto;overflow:hidden}
   #menuPanel h2{font-size:24px;margin:0 0 4px}
-  #menuPanel .mItems,.mItems.scroll{overflow:auto;max-height:none;min-height:0}
+  #menuPanel .mItems,.mItems.scroll{flex:1 1 auto;min-height:0;overflow-y:auto;max-height:none;overscroll-behavior:contain;touch-action:pan-y;-webkit-overflow-scrolling:touch}
   .mItems li{font-size:20px;padding:4px 10px 4px 12px;margin:2px 0;gap:6px}.mItems li small{font-size:12px}.mItems li .mVal{font-size:17px}
   .credits{font-size:14px}#menuHint{margin-top:4px;font-size:11px;flex:none}
 }

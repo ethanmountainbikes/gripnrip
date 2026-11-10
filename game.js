@@ -16,7 +16,7 @@ import { DIFF, W, HALF, PARK, trails, features, spots, groundH, terrainH, featH,
 import { loadBinds, proposeBind, swapBind, conflict, keyLabel, padLabel, actionLabel, ACTIONS, KB_DEFAULT, PAD_DEFAULT, spawnHold, clearSpawn, respawnChoice } from './binds.js';
 import { isRaceUnlocked, migrateCleared, advanceCheckpoint, checkpointsDone, shouldSubmit, clearKey } from './race.js';
 import { createEditor } from './editor.js';
-import { initSfx, setSfxVolume, updateSfx, sfxLand, sfxCrash, sfxLiftStart } from './sfx.js';
+import { initSfx, setSfxVolume, setAmbience, updateSfx, sfxLand, sfxCrash, sfxLiftStart, musicPlaying } from './sfx.js';
 const RAMP = WORLD === 'rampage';   // Red Bull Rampage-inspired desert world
 
 const G = 9.81;
@@ -43,7 +43,11 @@ const G_AIR = 9.81*1.35;   // heavier feel in the air: realistic MTB airtime (~0
 let seed = 7; const rnd = () => (seed = (seed*16807) % 2147483647) / 2147483647;
 
 // ---------- settings (quality, inverts, volume) ----------
-const SETTINGS = Object.assign({gfx:'low', tod:'noon', fpsOn:false, invertY:false, invertX:false, volume:0.8, musicOn:true, musicVol:0.5, droneSpeed:12, droneTilt:12, droneDist:8, droneHeight:4, droneFly:'follow'}, LS.get('trailDescent.settings', {}));
+const SETTINGS = Object.assign({gfx:'low', tod:'noon', fpsOn:false, fpsCap:60, invertY:false, invertX:false, volume:0.8, ambience:0.45, droneSpeed:12, droneTilt:12, droneDist:8, droneHeight:4, droneFly:'follow'}, LS.get('trailDescent.settings', {}));
+const FPS_OPTS = [30, 60, 90, 120, 144, 0];
+if (!FPS_OPTS.includes(SETTINGS.fpsCap)) SETTINGS.fpsCap = 60;
+if (typeof SETTINGS.ambience !== 'number') SETTINGS.ambience = SETTINGS.musicOn === false ? 0 : (typeof SETTINGS.musicVol === 'number' ? SETTINGS.musicVol : 0.45);
+function fpsCap(){ return FPS_OPTS.includes(SETTINGS.fpsCap) ? SETTINGS.fpsCap : 60; }
 SETTINGS.binds = loadBinds(SETTINGS.binds);
 const saveSettings = () => LS.set('trailDescent.settings', SETTINGS);
 const kbBind = id => SETTINGS.binds.kb[id] || KB_DEFAULT[id];
@@ -1228,10 +1232,12 @@ function spawnDust(dt){
     dustPos[j*3]+=dustVel[j*3]*dt; dustPos[j*3+1]+=dustVel[j*3+1]*dt; dustPos[j*3+2]+=dustVel[j*3+2]*dt; dustVel[j*3+1]-=0.8*dt; }
   dustGeo.attributes.position.needsUpdate = true;
 }
+let presentAt = 0;
 function frame(){
   requestAnimationFrame(frame);
+  window.__rafs = (window.__rafs || 0) + 1;
   const dt = Math.min(0.05, clock.getDelta());
-  const inp = readInput(); if (Object.keys(inp.pressed).length) startMusic();
+  const inp = readInput(); if (Object.keys(inp.pressed).length) startAudio();
   if (editorApi && editorApi.isOpen()) editorApi.tick(dt, inp);
   if (S.state === 'riding' && !menu.open && !shopOpen && !bigMap.open) spawnFrame(inp);
   emoteFrame(dt, inp);
@@ -1253,7 +1259,7 @@ function frame(){
     if (FPV.state.on) flyDrone(dt, inp);
     trackWorld(dt); shopProximity(dt); liftProximity(dt);
   } else if (S.state!=='riding' && S.state!=='menu') { step(dt, {steer:0,pedal:0,brake:1,jump:false,tx:0,ty:0}); }
-  updateSfx({riding: S.state==='riding' && !S.paused, speed:S.speed||0, air:!!S.air && S.crashT<=0, lift:!!S.lift, sliding:!!S.sliding, brake:inp.brake||0, crank:BR.crank(), coasting: (DRV.cadence||0) < 1 && !S.air && (S.speed||0) > 1.5, surface: S.rockT > 0 ? 'rock' : isDirt(S.x,S.z) ? 'dirt' : 'grass'});
+  updateSfx({riding: S.state==='riding' && !S.paused, speed:S.speed||0, air:!!S.air && S.crashT<=0, lift:!!S.lift, sliding:!!S.sliding, brake:inp.brake||0, crank:BR.crank(), coasting: (DRV.cadence||0) < 1 && !S.air && (S.speed||0) > 1.5, surface: S.rockT > 0 ? 'rock' : isDirt(S.x,S.z) ? 'dirt' : 'grass', trees: nearTrees(S.x, S.z).length, water: terrainH(S.x, S.z) < 18});
   windU.value += dt; grassField.update();
   if (menu.open) menuFrame(dt, inp);
   const flyF = S.state === 'menu' ? flyover(dt) : null, fX = flyF ? flyF[0] : S.x, fZ = flyF ? flyF[1] : S.z;
@@ -1366,7 +1372,9 @@ function frame(){
   skyDome.position.copy(camera.position);
   if (!flyF){ sun.position.set(S.x+30, S.y+60, S.z+20); sun.target.position.set(S.x, S.y, S.z-10); }
   if (NET) NET.update(dt);
-  if (GFX) GFX.render(dt); else if (composer) composer.render(); else renderer.render(scene, camera);
+  const cap = fpsCap(), nowMs = performance.now(), minMs = cap > 0 ? 1000 / cap : 0;
+  if (!(cap > 0) || !presentAt || nowMs - presentAt >= minMs - 1.5){ presentAt = nowMs; window.__presents = (window.__presents || 0) + 1; (window.__presentAt ||= []).push(nowMs); if (window.__presentAt.length > 40) window.__presentAt.shift();
+    if (GFX) GFX.render(dt); else if (composer) composer.render(); else renderer.render(scene, camera); }
   fpsMeter(dt);
   // HUD
   const kmh = S.speed*3.6; S.maxKmh = Math.max(S.maxKmh, kmh);
@@ -1528,27 +1536,12 @@ function mapFrame(dt, inp){
   for (const l of ['Stick / D-pad / arrows / mouse: move cursor', 'A / Enter / double-click: teleport', 'X / W / click: set or remove waypoint', 'B / M / View: close']){ c.fillText(l, lx, y); y += 16; }
 }
 syncBeacons();
-// ---------- music: shuffled CC0 playlist (starts after the first user input, per browser autoplay rules) ----------
-const TRACKS = [
-  {file:'music/lofi-switchback.mp3', title:'Switchback', artist:"Grip 'N Rip", src:'original instrumental written for this game, 2026 (tools/make-lofi.py). Public domain.', loop:true},
-  {file:'music/actiontrack.mp3', title:'Action Track', artist:'LushoGames', src:'opengameart.org/content/action-track'},
-  {file:'music/simplebeat.mp3', title:'Simple Action Beat', artist:'LushoGames', src:'opengameart.org/content/simple-action-beat'},
-  {file:'music/rock-theme-3.mp3', title:'Rock Theme 3', artist:'Umplix', src:'opengameart.org/content/rock-theme-3'},
-  {file:'music/fastsong.mp3', title:'Fast Cheerful Punk Rock Lo-fi', artist:'annandistance', src:'opengameart.org/content/fast-cheerful-punk-rock-lo-fi'},
-];
-const music = { el: new Audio(), order: [], i: -1, started: false };
-music.el.preload = 'auto';
-const shuffle = a => { for (let i = a.length-1; i > 0; i--){ const j = Math.floor(Math.random()*(i+1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
-function musicVol(){ music.el.volume = SETTINGS.musicOn ? SETTINGS.musicVol : 0; }
-function nextSong(){ if (!SETTINGS.musicOn) return;
-  if (music.i < 0){ const rest = shuffle(TRACKS.map((_, k) => k).filter(k => k !== 0)); music.order = [0, ...rest]; music.i = 0; }
-  else if (++music.i >= music.order.length){ music.order = shuffle(TRACKS.map((_, k) => k)); music.i = 0; }
-  const t = TRACKS[music.order[music.i]]; music.el.loop = !!t.loop; music.el.src = t.file; musicVol();
-  music.el.play().then(() => toast(`♪ Now playing: ${t.title} — ${t.artist}${t.loop ? '' : ' (CC0)'}`)).catch(() => {}); }
-music.el.addEventListener('ended', nextSong);
-function startMusic(){ initSfx(); setSfxVolume(SETTINGS.volume); if (music.started || !SETTINGS.musicOn) return; music.started = true; nextSong(); }
-for (const ev of ['keydown', 'pointerdown', 'touchend', 'click']) addEventListener(ev, startMusic, {once:false});
-function setMusicOn(on){ SETTINGS.musicOn = on; saveSettings(); if (on){ if (!music.started){ music.started = true; nextSong(); } else if (music.el.paused){ musicVol(); music.el.play().catch(()=>{}); } } else music.el.pause(); }
+// ---------- audio: procedural bike and nature sounds only. No music tracks. ----------
+let audioOn = false;
+function startAudio(){ if (audioOn) return; audioOn = true; initSfx(); setSfxVolume(SETTINGS.volume); setAmbience(SETTINGS.ambience); }
+for (const ev of ['keydown', 'pointerdown', 'touchend', 'click']) addEventListener(ev, startAudio, {once:false});
+function setAmbienceVol(v){ SETTINGS.ambience = Math.max(0, Math.min(1, Math.round(v*10)/10)); SETTINGS.musicVol = SETTINGS.ambience; saveSettings(); setAmbience(SETTINGS.ambience); }
+window.__musicPlaying = musicPlaying;
 
 // ---------- menus: main menu (flyover), trails, settings, credits, pause ----------
 const menu = { open:false, page:'main', sel:0, stack:[], repeatT:0, fly:0 };
@@ -1571,7 +1564,7 @@ const PAGES = {
     {label:'Bike Shop', sub:`$${S.score.toLocaleString()} DOLLAHS`, act:() => openShop()},
     {label:'Multiplayer', value:NET && NET.st.status === 'in' ? 'ROOM ' + NET.st.code : undefined, sub:'Ride with friends in a private room (room code)', act:() => go('multi')},
     {label:'Leaderboards', sub:'Fastest times, biggest air, top speed… (LB / RB or Q / E: category)', act:() => openBoards()},
-    {label:'Settings', sub:'Graphics, quality, music, controls, invert', act:() => go('settings')},
+    {label:'Settings', sub:'Graphics, ambience, frame rate, controls', act:() => go('settings')},
     {label:'Credits', act:() => go('credits')} ]}),
   trails: () => ({title:RAMP ? 'RAMPAGE LINES' : 'TRAILS', items:[...trailItems(), ...(RAMP ? [] : [{label:'Dirt Jump Park', sub:'Pro line · always open', act:() => { spotI = spots.findIndex(s => s.name === 'Dirt Jump Park'); startRide(); }}]), {label:'‹ Back', act:back}]}),
   trailgo: () => { const tr = trails[trailPick], open = raceOpen(tr.id); return { title: tr.name.toUpperCase(), items: [
@@ -1582,9 +1575,9 @@ const PAGES = {
     {label:'Cloud Save', value:CLOUD ? ({synced:'SYNCED', offline:'OFFLINE', idle:'…'})[CLOUD.st.status] || '' : 'OFF', sub:'Your save code, restore on another browser', act:() => go('cloud')},
     {label:'Graphics', value:(SETTINGS.gfx||'low').toUpperCase(), sub:'Low = classic look · Medium / High / Max = HDR sky, PBR textures, shadows, post FX, more detail (reloads)', adj:d => setGfx(d), act:() => setGfx(1, true)},
     {label:'FPS counter', value:ON(SETTINGS.fpsOn), adj:() => { SETTINGS.fpsOn = !SETTINGS.fpsOn; saveSettings(); }, act:() => { SETTINGS.fpsOn = !SETTINGS.fpsOn; saveSettings(); }},
+    {label:'Frame rate', value:SETTINGS.fpsCap ? SETTINGS.fpsCap + ' FPS' : 'UNLIMITED', sub:'Caps how often the picture is drawn. The bike physics stay on a fixed step.', adj:d => { const i = Math.max(0, FPS_OPTS.indexOf(SETTINGS.fpsCap)); SETTINGS.fpsCap = FPS_OPTS[(i + d + FPS_OPTS.length) % FPS_OPTS.length]; saveSettings(); }, act:() => { const i = Math.max(0, FPS_OPTS.indexOf(SETTINGS.fpsCap)); SETTINGS.fpsCap = FPS_OPTS[(i + 1) % FPS_OPTS.length]; saveSettings(); }},
     {label:'Time of day', value:({morning:'MORNING', noon:'NOON', golden:'GOLDEN HOUR'})[SETTINGS.tod || 'noon'], sub:'Graphics Medium and up (reloads)', adj:d => setTod(d), act:() => setTod(1)},
-    {label:'Music', value:ON(SETTINGS.musicOn), adj:() => setMusicOn(!SETTINGS.musicOn), act:() => setMusicOn(!SETTINGS.musicOn)},
-    {label:'Music volume', value:PCT(SETTINGS.musicVol), adj:d => { SETTINGS.musicVol = Math.max(0, Math.min(1, Math.round((SETTINGS.musicVol + d*0.1)*10)/10)); saveSettings(); musicVol(); }},
+    {label:'Ambience volume', value:PCT(SETTINGS.ambience), sub:'Birds, leaves and a distant creek. 0% is quiet.', adj:d => setAmbienceVol(SETTINGS.ambience + d*0.1)},
     {label:'Sound volume', value:PCT(SETTINGS.volume), sub:'sound effects (0% = mute)', adj:d => { SETTINGS.volume = Math.max(0, Math.min(1, Math.round((SETTINGS.volume + d*0.1)*10)/10)); saveSettings(); setSfxVolume(SETTINGS.volume); }},
     {label:'Invert lean / flip (left stick ↕)', value:ON(SETTINGS.invertY), adj:() => { SETTINGS.invertY = !SETTINGS.invertY; saveSettings(); }, act:() => { SETTINGS.invertY = !SETTINGS.invertY; saveSettings(); }},
     {label:'Invert whip / tweak (right stick ↔)', value:ON(SETTINGS.invertX), adj:() => { SETTINGS.invertX = !SETTINGS.invertX; saveSettings(); }, act:() => { SETTINGS.invertX = !SETTINGS.invertX; saveSettings(); }},
@@ -1624,7 +1617,7 @@ const PAGES = {
     return {title:'LEADERBOARDS', html, items}; },
   credits: () => ({title:'CREDITS', html:`<div class="credits"><p><b>Grip 'N Rip</b> — an open-world mountain bike game in the browser.</p>
     <p><b>Game, code, world, rider and bike models, textures:</b> made procedurally for this project (Three.js r160).</p>
-    <p><b>Music:</b><br>${TRACKS.map(t => `${t.title} — ${t.artist} <small>(${t.src})</small>`).join('<br>')}</p>
+    <p><b>Sound:</b> synthesized in the browser with Web Audio. No music tracks. Bike, wind, birds, leaves and creek are procedural.</p>
     <p><b>Fonts:</b> Bebas Neue & Barlow Condensed (SIL Open Font License, Google Fonts).</p>
     <p><b>Trick references:</b> Red Bull slopestyle trick dictionary, X Games BMX Tricktionary, riding.guide.</p>
     <p><b>Graphics Medium/High/Max:</b> CC0 textures & HDRIs from Poly Haven (polyhaven.com): sparse_grass, brown_mud_leaves_01, aerial_rocks_02, bark_brown_02, gravel, aerial_sand, red_dirt_mud_01, dry_riverbed_rock; skies pizzo_pernice_puresky (Mountain), quarry_01_puresky (Rampage).</p>
@@ -1638,18 +1631,18 @@ const PAGES = {
     {label:'Clear respawn point', sub: spawn ? 'Bails go back to the last checkpoint' : 'None set', act: () => { if (!spawn){ toast('↩ No respawn point set'); return; } clearSpawnPoint(); }},
     {label:'Multiplayer', value:NET && NET.st.status === 'in' ? 'ROOM ' + NET.st.code : undefined, act:() => go('multi')},
     {label:'Leaderboards', act:() => openBoards()},
-    {label:'Skip song', sub: music.started && SETTINGS.musicOn && music.i >= 0 ? `Now: ${TRACKS[music.order[music.i]].title} — ${TRACKS[music.order[music.i]].artist}` : 'Music is off or not started', act:() => { if (!music.started){ music.started = true; } nextSong(); }},
     {label:'Settings', act:() => go('settings')},
     {label:'Controls / help', act:() => $('help').classList.toggle('hidden')},
     {label:'Main Menu', sub:'Leave the ride (progress and DOLLAHS are saved)', act:() => toMainMenu()} ]}),
 };
 function renderMenu(){ const P = PAGES[menu.page](), el = $('menuPanel');
   menu.items = P.items; menu.sel = Math.max(0, Math.min(menu.sel, P.items.length-1));
-  el.innerHTML = (P.title ? `<h2>${P.title}</h2>` : '') + (P.html || '') + `<ul class="mItems${menu.page === 'trails' || menu.page === 'controls' ? ' scroll' : ''}">` + P.items.map((it, k) =>
+  el.innerHTML = (P.title ? `<h2>${P.title}</h2>` : '') + (P.html || '') + `<ul class="mItems${menu.page === 'trails' || menu.page === 'controls' || menu.page === 'settings' ? ' scroll' : ''}">` + P.items.map((it, k) =>
     `<li data-k="${k}" class="${k === menu.sel ? 'sel' : ''}${it.disabled ? ' dis' : ''}"><span class="mLabel">${it.label}</span>${it.value !== undefined ? `<span class="mVal">${it.adj ? '‹ ' : ''}${esc(it.value)}${it.adj ? ' ›' : ''}</span>` : ''}${it.sub ? `<small>${esc(it.sub)}</small>` : ''}</li>`).join('') + '</ul>';
   $('menuLogo').style.display = menu.page === 'main' ? '' : 'none';
-  el.querySelectorAll('li').forEach(li => { const k = +li.dataset.k; li.onmouseenter = () => { if (menu.sel !== k){ menu.sel = k; renderMenu(); } }; li.onclick = () => { menu.sel = k; menuKey('Enter'); }; });
-  const s = el.querySelector('li.sel'); if (s && s.scrollIntoView) s.scrollIntoView({block:'nearest'});
+  el.querySelectorAll('li').forEach(li => { const k = +li.dataset.k; li.addEventListener('pointerenter', e => { if (e.pointerType && e.pointerType !== 'mouse') return; if (menu.sel === k) return; menu.sel = k; el.querySelectorAll('li').forEach(n => n.classList.toggle('sel', +n.dataset.k === k)); }); li.onclick = () => { menu.sel = k; menuKey('Enter'); }; });
+  const list = el.querySelector('.mItems'), s = el.querySelector('li.sel');
+  if (list && s){ const top = s.offsetTop, bot = top + s.offsetHeight, view = list.clientHeight; if (top < list.scrollTop + 2) list.scrollTop = Math.max(0, top - 2); else if (bot > list.scrollTop + view - 2) list.scrollTop = bot - view + 2; }
   $('menuHint').textContent = menu.page === 'main' ? 'D-pad / stick / arrows: choose · A / Enter: select' : 'D-pad / stick / arrows: choose · ← → change · A / Enter: select · B / Esc: back'; }
 function openMenu(page){ menu.open = true; menu.page = page; menu.sel = 0; menu.stack = []; $('menu').classList.remove('hidden'); $('menu').classList.toggle('pause', page === 'pause'); document.body.classList.toggle('inmenu', page !== 'pause'); renderMenu(); }
 function closeMenu(){ menu.open = false; document.body.classList.remove('inmenu'); $('menu').classList.add('hidden'); }
@@ -2133,4 +2126,4 @@ if (SETTINGS.gfx && SETTINGS.gfx !== 'low') import('./gfx.js').then(m => { GFX =
     setGrass:(r, c) => { Q = {...Q, grassR:r, grassCell:c}; grassField.rebuild(true); }}); composer = null; window.__gfx = GFX; }).catch(e => { console.warn('graphics upgrade failed, using Low', e); });
 window.__gfxLevel = SETTINGS.gfx;
 renderHelp();
-frame();window.__shop = { open: openShop, key: shopKey, close: closeShop };
+frame(); window.__frame = frame; window.__renderer = renderer; window.__shop = { open: openShop, key: shopKey, close: closeShop };

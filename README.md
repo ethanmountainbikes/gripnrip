@@ -35,7 +35,7 @@ Controller support has been checked against an Xbox One pad's layout in Chrome, 
 
 ## Riding physics
 - **Weight and momentum:** speed comes from gravity, with pedalling, drag and grass rolling resistance on top. The rider shifts visibly fore and aft, and the suspension compresses on landings and when you preload.
-- **Pumping:** compress (right stick ↓) on backsides and extend over faces to gain speed. Bad timing costs speed. Counter-pumping (right stick ↑) keeps you on the ground over rollers. A bunny hop is that compress then a pop; the pop adds upward speed and is not pulled into a dive by the lip falling away. Climbing a lip only pays the slope once (gravity). A rock or a step still costs extra. Coasting plays the freehub tick a little louder than the pedal click; tire, wind and music levels are unchanged.
+- **Pumping:** compress (right stick ↓) on backsides and extend over faces to gain speed. Bad timing costs speed. Counter-pumping (right stick ↑) keeps you on the ground over rollers. A bunny hop is that compress then a pop; the pop adds upward speed and is not pulled into a dive by the lip falling away. Climbing a lip only pays the slope once (gravity). A rock or a step still costs extra. Coasting plays a soft freehub tick. Tire roll and wind stay quiet and follow speed and surface.
 - **Carving and slides:** the lean angle comes from your actual cornering force. Braking while steering breaks rear traction, so the bike drifts (the heading leads the travel direction), throws dust and scrubs off speed.
 - **Air:** the left stick spins and flips with rotational inertia. The right stick whips and tweaks the bike in proportion to how far you push it. Laying the bike over at takeoff (a scrub) flattens the trajectory and keeps your speed.
 - **Landings:** your velocity is projected onto the real terrain surface, on or off the trail. Within the tolerance, the bike's orientation is damped smoothly to the ground and there's no rebound or bounce.
@@ -140,16 +140,15 @@ Each park roll-in has a 12% pedal-up ramp at its back.
 - Quality Low / Med / High (High adds SSAO + bloom) under Settings.
 - Main menu with 3D flyover: Ride, Trails, Bike Shop, Settings, Credits; works with controller (D-pad/stick + A/B) and keyboard/mouse. Pause → Main Menu.
 
-## Sound effects
-All sound effects (chain clicks following pedal cadence, tyre roll by speed and surface, wind, landing thuds scaled by impact, skids, crashes, chairlift hum) are synthesized live with the Web Audio API in `sfx.js`. No sample files are used, so there is nothing to license. Adjust them with **Sound volume** in the settings menu (0% = mute).
+## Sound
+There is no music. Bike sounds and the nature bed are synthesized in the browser with the Web Audio API (`sfx.js`). No recorded samples are used, so there is nothing to license.
 
-## Music
-The bed that starts the ride is **Switchback**, an original instrumental lo-fi loop written for this game (`tools/make-lofi.py`, 2026, public domain). It is not from a sample pack. Skip song still reaches the older CC0 tracks. NCS was considered, but its FAQ says: *"Q. Can I use NCS music in my game? … Please get in touch via our commercial licensing form"*, so those other tracks are CC0 from OpenGameArt:
-- "Action Track" and "Simple Action Beat": LushoGames (CC0)
-- "Rock Theme 3": Umplix (CC0)
-- "Fast Song": annandistance (CC0)
+- Soft freehub tick while coasting, quieter pedal ticks, tire roll that follows speed and surface, and a light wind that comes up with speed.
+- Birds are short random chirps, panned in stereo, and they happen more often near trees. Leaves rustle a little whenever you are moving, more so in the trees.
+- A very quiet creek is heard only in the lowest valley pockets. The mountain has no water, so this follows terrain height rather than a stream line.
+- **Sound volume** is the bike. **Ambience volume** is birds, leaves and the creek. Either can be set to 0%.
 
-Tracks play shuffled once you first press a key or button. Settings has music on/off and volume, and Skip Song is in the pause menu.
+Old saves that stored a music volume use that number as the ambience volume. Music on/off and Skip song are gone.
 
 ## Cosmetic skins (Bike Shop)
 The shop has tabs: Bikes, Paint, Jersey, Pants, Helmet and Goggles. Switch tabs with LB/RB, ←/→ or Q/E. The highlighted item shows live on a slowly orbiting 3D view of your rider.
