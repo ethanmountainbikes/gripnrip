@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 const name = process.argv[2] || 'rock-garden';
 const PORT = 8898, ART = process.env.ARTIFACTS || '/opt/cursor/artifacts';
+try { (await import('node:fs')).mkdirSync(ART, { recursive: true }); } catch {}
 const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: new URL('..', import.meta.url).pathname, stdio: 'ignore' });
 const chrome = spawn('google-chrome', ['--headless=new','--no-sandbox','--disable-dev-shm-usage','--use-gl=angle','--use-angle=swiftshader','--remote-debugging-port=9498',`--user-data-dir=/tmp/gnr-rock-${Date.now()}`,'--window-size=1280,800','about:blank'], { stdio: 'ignore' });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
