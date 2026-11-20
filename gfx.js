@@ -29,16 +29,16 @@ export const GFX_LEVELS = ['low', 'medium', 'high', 'max'];
 const PRESETS = {
   // pr = render-scale ceiling (x CSS px); gov = governor start step (GOV below). AO passes re-render the whole scene, so they are
   // off by default; the shadow frustum hugs the rider.
-  medium: {pr:1.0,  gov:3, shadow:2048, shadowR:40, ao:null, bloom:0.10, smaa:true, dof:false, mblur:false, flare:false, grassR:38, grassCell:0.9,  dust:500,  envI:0.4,  farStep:60, csm:false, godrays:false},
-  high:   {pr:1.25, gov:2, shadow:2048, shadowR:40, ao:null, bloom:0.14, smaa:true, dof:true,  mblur:false, flare:true,  grassR:45, grassCell:0.75, dust:900,  envI:0.45, farStep:50, csm:false, godrays:true},
-  max:    {pr:1.5,  gov:1, shadow:2048, shadowR:40, ao:null, bloom:0.16, smaa:true, dof:true,  mblur:true,  flare:true,  grassR:52, grassCell:0.65, dust:1400, envI:0.5,  farStep:40, csm:false, godrays:true},
+  medium: {pr:1.0,  gov:3, shadow:2048, shadowR:40, ao:null, bloom:0.06, smaa:true, dof:false, mblur:false, flare:false, grassR:38, grassCell:0.9,  dust:500,  envI:0.4,  farStep:60, csm:false, godrays:false},
+  high:   {pr:1.25, gov:2, shadow:2048, shadowR:40, ao:null, bloom:0.08, smaa:true, dof:true,  mblur:false, flare:true,  grassR:45, grassCell:0.75, dust:900,  envI:0.45, farStep:50, csm:false, godrays:true},
+  max:    {pr:1.5,  gov:1, shadow:2048, shadowR:40, ao:null, bloom:0.09, smaa:true, dof:true,  mblur:true,  flare:true,  grassR:52, grassCell:0.65, dust:1400, envI:0.5,  farStep:40, csm:false, godrays:true},
 };
 // CC0 textures and HDRIs from Poly Haven (polyhaven.com), credited in the Credits menu
 export const GFX_CREDITS = ['Poly Haven (CC0): textures sparse_grass, brown_mud_leaves_01, aerial_rocks_02, bark_brown_02, gravel, aerial_sand, red_dirt_mud_01, dry_riverbed_rock; HDRIs pizzo_pernice_puresky (Mountain), quarry_01_puresky (Rampage)'];
 
 // aerial perspective + distance haze: replaces three's linear fog chunk (compile-time constants, so every material gets it)
 function patchFog(desert){
-  const far = desert ? 'vec3(0.80, 0.78, 0.80)' : 'vec3(0.62, 0.74, 0.88)';
+  const far = desert ? 'vec3(0.86, 0.62, 0.48)' : 'vec3(0.62, 0.40, 0.58)';
   THREE.ShaderChunk.fog_fragment = `#ifdef USE_FOG
     float gfxF = 1.0 - exp(-pow(max(vFogDepth - fogNear, 0.0) / (fogFar*0.9), 1.6));
     vec3 gfxC = mix(fogColor, ${far}, smoothstep(250.0, 2600.0, vFogDepth));
@@ -71,14 +71,17 @@ export function initGfx(o){
   const sky = new Sky(); sky.scale.setScalar(4500); const su = sky.material.uniforms;
   Object.assign(su.turbidity, {value: RAMP ? 6.5 : 2.6}); su.rayleigh.value = RAMP ? 1.4 : 1.6; su.mieCoefficient.value = RAMP ? 0.006 : 0.004; su.mieDirectionalG.value = 0.8;
   su.sunPosition.value.copy(o.SUN_DIR); scene.add(sky);
-  sky.material.fragmentShader = sky.material.fragmentShader.replace('gl_FragColor = vec4( retColor, 1.0 );', 'gl_FragColor = vec4( retColor*0.6, 1.0 );'); sky.material.needsUpdate = true;   // sky radiance scaled to the scene exposure if (o.skyDome) o.skyDome.visible = false; scene.background = null;
+  sky.material.fragmentShader = sky.material.fragmentShader.replace('gl_FragColor = vec4( retColor, 1.0 );',
+    `float gnrH = normalize(vWorldPosition).y; vec3 gnrW = mix(${RAMP ? 'vec3(0.95, 0.52, 0.28)' : 'vec3(1.0, 0.58, 0.28)'}, ${RAMP ? 'vec3(0.55, 0.30, 0.48)' : 'vec3(0.50, 0.28, 0.62)'}, smoothstep(0.0, 0.5, gnrH)); retColor = mix(retColor, gnrW, 0.42); gl_FragColor = vec4( retColor * 0.72, 1.0 );`);
+  sky.material.needsUpdate = true;
+  if (o.skyDome) o.skyDome.visible = false; scene.background = null;
   const pm = new THREE.PMREMGenerator(renderer);
   scene.environment = pm.fromScene((() => { const s = new THREE.Scene(); const k = new Sky(); k.scale.setScalar(1000); Object.assign(k.material.uniforms.sunPosition, {value:o.SUN_DIR.clone()}); ['turbidity','rayleigh','mieCoefficient','mieDirectionalG'].forEach(n => k.material.uniforms[n].value = su[n].value); s.add(k); return s; })(), 0.04).texture;
   new RGBELoader().load(RAMP ? 'tex/quarry_01_puresky.hdr' : 'tex/pizzo_pernice_puresky.hdr', t => { t.mapping = THREE.EquirectangularReflectionMapping; const e = pm.fromEquirectangular(t).texture; scene.environment = e; t.dispose(); }, undefined, () => {});
   // fog colour = the sky's horizon colour; denser near the ground than the old linear fog
-  scene.fog.color.set(RAMP ? 0xe9d4b8 : 0xbfd3e3);
+  scene.fog.color.set(RAMP ? 0xe7b48a : 0xf0b48c);
   // ---- lights: stronger sun with high-res soft shadows following the rider, hemisphere as fill only
-  sun.intensity = RAMP ? 3.4 : 3.2; sun.color.set(RAMP ? 0xfff0dc : 0xfff4e2);
+  sun.intensity = RAMP ? 3.5 : 3.35; sun.color.set(RAMP ? 0xffe2c2 : 0xffe8c4);
   scene.traverse(x => { if (x.isHemisphereLight) x.intensity = 0.35; });
   renderer.shadowMap.enabled = sun.castShadow = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   sun.shadow.mapSize.set(P.shadow, P.shadow); if (sun.shadow.map){ sun.shadow.map.dispose(); sun.shadow.map = null; }
@@ -169,7 +172,7 @@ export function initGfx(o){
     if (o.flare){ o.flare.position.copy(camera.position).addScaledVector(o.SUN_DIR, 3000); }
     sky.position.copy(camera.position);
     if (bokeh){ const cm = o.getCam(), cine = feat.dof && cm >= 5 && S.state === 'riding' && !S.lift; bokeh.enabled = cine; if (cine){ v.set(S.x, S.y + 0.9, S.z); bokeh.uniforms.focus.value = camera.position.distanceTo(v); } }
-    fin.uniforms.uBlur.value = (P.mblur && g.mb && feat.mb) ? Math.max(0, Math.min(0.05, ((S.speed || 0)*3.6 - 35)/1400)) : 0;
+    fin.uniforms.uBlur.value = (P.mblur && g.mb && feat.mb) ? Math.max(0, Math.min(0.02, ((S.speed || 0)*3.6 - 40)/1800)) : 0;
     fin.uniforms.uExp.value = renderer.toneMappingExposure;
     SC.update(dt, proxy); if (!(P.godrays && g.gr && feat.gr)) fin.uniforms.uAmt.value = 0;
     if (feat.shadows && fno % g.shEvery === 0) sun.shadow.needsUpdate = true;

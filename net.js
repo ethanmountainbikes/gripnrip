@@ -1,43 +1,48 @@
 // Multiplayer client (Phase 1): private rooms by 6-character code, remote riders with snapshot interpolation, skins,
-// name tags and preset emotes. No free text exists anywhere: names and emotes are indices into the fixed lists below,
-// and the server rejects anything else. If the server can't be reached the game simply stays single-player.
+// name tags and preset emotes. Clients never send free text: names and emotes are indices into the fixed lists below,
+// and the server rejects anything else. A rider's custom name comes only from the server (it looks up the name the
+// player's save has claimed, filtered and not hidden); this file checks it with the same filter before showing it. If the server can't be reached the game simply stays single-player.
+import { checkName } from './names.js';
 export const MP_SERVER = 'https://gripnrip-rooms.gripnrip.workers.dev';
 export const NAME_A = ['Rapid','Turbo','Dusty','Rowdy','Sneaky','Mega','Gnarly','Flowy','Shreddy','Brave','Lucky','Swift','Muddy','Rad','Chill','Wild','Sunny','Rocky','Zippy','Epic','Steady','Bouncy','Speedy','Mighty','Sandy','Frosty','Pumped','Clever','Jolly','Sendy','Happy','Comet'];
 export const NAME_B = ['Marmot','Fox','Eagle','Goat','Lynx','Bear','Moose','Otter','Falcon','Badger','Coyote','Hawk','Ram','Wolf','Raven','Bison','Puma','Gecko','Owl','Hare','Elk','Beaver','Lizard','Viper','Yak','Panda','Tiger','Rhino','Koala','Bobcat','Heron','Orca'];
-export const EMOTES = ['👍 Nice!', '🔥 Sick line!', '⏳ Wait for me', '🏁 Race?'];   // D-pad up / right / down / left, keyboard T + 1-4
+export const EMOTES = ['👍 Nice!', '🔥 Sick line!', '⏳ Wait for me', '🏁 Race?'];   // hold T or D-pad Up, then 1-4 or the right stick
 const CODE_ALPHA = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+// what a room shows for a rider: the server-sent custom name if it passes the filter here too, else the generated name
+export const roomLabel = (name, custom) => (typeof custom === 'string' && checkName(custom).ok && checkName(custom).name === custom) ? custom
+  : `${NAME_A[name && name[0]] || '?'} ${NAME_B[name && name[1]] || '?'}`;
 export const cleanCode = s => (s || '').toUpperCase().split('').filter(c => CODE_ALPHA.includes(c)).join('').slice(0, 6);
 const SEND_HZ = 15, DELAY = 0.12, EXTRA = 0.15;
 
 export function initNet(g){   // g: {THREE, scene, camera, S, bike, buildBikeRider, skinTo, mySkin, myName, worldIdx, onWorld, toast, trickKeys, drive}
   const { THREE } = g;
-  const st = { ws:null, code:null, id:0, host:0, locked:false, status:'off', peers:new Map(), sendT:0, err:null, listeners:new Set() };
+  const st = { ws:null, you:null, code:null, id:0, host:0, locked:false, status:'off', peers:new Map(), sendT:0, err:null, listeners:new Set() };
   const emit = () => st.listeners.forEach(f => { try { f(st); } catch {} });
   // ---- hud: room badge + emote bubbles
   const hud = document.createElement('div'); hud.id = 'mpHud'; hud.style.cssText = 'position:fixed;left:50%;top:64px;transform:translateX(-50%);z-index:55;font:600 13px/1.35 "Barlow Condensed",sans-serif;color:#fff;background:rgba(20,24,20,0.6);padding:6px 10px;border-radius:6px;display:none;pointer-events:none;text-align:center;max-width:320px'; document.body.appendChild(hud);
   const renderHud = () => { if (!st.ws || st.status !== 'in'){ hud.style.display = 'none'; return; } hud.style.display = 'block';
-    const me = `${NAME_A[g.myName()[0]]} ${NAME_B[g.myName()[1]]}`;
-    hud.innerHTML = `ROOM <b style="letter-spacing:2px">${st.code}</b>${st.locked ? ' 🔒' : ''} · ${st.peers.size + 1}/8<br><small>${me}${st.id === st.host ? ' (host)' : ''} + ${[...st.peers.values()].map(p => p.label).join(", ")} · Emotes (stopped or on a lift): T + 1–4 · D-pad</small>`; };
+    const me = roomLabel(g.myName(), st.you);
+    hud.innerHTML = `ROOM <b style="letter-spacing:2px">${st.code}</b>${st.locked ? ' 🔒' : ''} · ${st.peers.size + 1}/8<br><small>${me}${st.id === st.host ? ' (host)' : ''} + ${[...st.peers.values()].map(p => p.label).join(", ")} · Hold T or D-pad Up for emotes when stopped</small>`; };
   // ---- remote riders
   const tagTex = (text, sub) => { const cv = document.createElement('canvas'); cv.width = 256; cv.height = 64; const c = cv.getContext('2d');
     c.fillStyle = 'rgba(0,0,0,0.55)'; c.beginPath(); c.roundRect ? c.roundRect(4, 8, 248, 48, 12) : c.rect(4, 8, 248, 48); c.fill();
     c.font = '600 28px "Barlow Condensed", sans-serif'; c.fillStyle = '#fff'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(text, 128, 33);
     const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; return t; };
   const mkSprite = (tex, w, h) => { const s = new THREE.Sprite(new THREE.SpriteMaterial({map:tex, depthTest:false, transparent:true, fog:false})); s.scale.set(w, h, 1); s.renderOrder = 999; return s; };
-  function addPeer(id, name, skin){
+  function addPeer(id, name, skin, custom){
     if (st.peers.has(id)) return st.peers.get(id);
     const grp = new THREE.Group(), lean = new THREE.Group(); grp.add(lean);
     const BRx = g.buildBikeRider(new THREE.MeshStandardMaterial({color:0xff2fa8, roughness:0.4, metalness:0.3})); lean.add(BRx.root);
     grp.traverse(o => { if (o.isMesh) o.castShadow = true; });
-    const label = `${NAME_A[name[0]] || '?'} ${NAME_B[name[1]] || '?'}`;
+    const label = roomLabel(name, custom), shownCustom = label === custom ? custom : null;
     const tag = mkSprite(tagTex(label), 2.4, 0.6); tag.position.y = 2.3; grp.add(tag);
-    const p = { id, name, label, skin, grp, lean, BRx, tag, buf:[], fakeS:{air:false, crashT:0, trick:null, trickAmt:1, speed:0, susp:0, tweak:0, wPitch:0, wYaw:0}, inp:{cadence:0, standing:0, steer:0}, bubble:null, bubbleT:0 };
+    const p = { id, name, label, custom:shownCustom, skin, grp, lean, BRx, tag, buf:[], fakeS:{air:false, crashT:0, trick:null, trickAmt:1, speed:0, susp:0, tweak:0, wPitch:0, wYaw:0}, inp:{cadence:0, standing:0, steer:0}, bubble:null, bubbleT:0 };
     try { g.skinTo(BRx, lean, skin); } catch (e) { console.warn('skin', e); }
     grp.visible = false; g.scene.add(grp); st.peers.set(id, p); renderHud(); return p; }
   function dropPeer(id){ const p = st.peers.get(id); if (!p) return; g.scene.remove(p.grp); p.grp.traverse(o => { if (o.geometry) o.geometry.dispose(); }); st.peers.delete(id); renderHud(); }
   function bubble(p, e){ if (p.bubble){ p.grp.remove(p.bubble); p.bubble.material.map.dispose(); } p.bubble = mkSprite(tagTex(EMOTES[e] || ''), 2.6, 0.65); p.bubble.position.y = 2.95; p.grp.add(p.bubble); p.bubbleT = 4; }
   // ---- connection
-  function clearRoom(){ for (const id of [...st.peers.keys()]) dropPeer(id); st.ws = null; st.code = null; st.id = 0; st.status = 'off'; renderHud(); emit(); }
+  function clearRoom(){ for (const id of [...st.peers.keys()]) dropPeer(id); st.ws = null; st.you = null; st.code = null; st.id = 0; st.status = 'off'; renderHud(); emit(); }
   function leave(){ const ws = st.ws; clearRoom(); try { ws && ws.close(1000, 'bye'); } catch {} try { sessionStorage.removeItem('gnr.room'); } catch {} }
   async function create(){
     st.status = 'connecting'; emit();
@@ -50,15 +55,15 @@ export function initNet(g){   // g: {THREE, scene, camera, S, bike, buildBikeRid
     let ws; try { ws = new WebSocket(MP_SERVER.replace(/^http/, 'ws') + '/room/' + code); } catch { st.status = 'off'; g.toast('📡 Multiplayer server unreachable — riding solo'); emit(); return false; }
     st.ws = ws; let welcomed = false;
     const to = setTimeout(() => { if (!welcomed){ try { ws.close(); } catch {} if (st.ws === ws){ clearRoom(); g.toast('📡 Could not reach the room — riding solo'); } } }, 7000);
-    ws.onopen = () => ws.send(JSON.stringify({ t:'hello', name:g.myName(), skin:g.mySkin(), world:g.worldIdx() }));
+    ws.onopen = () => { const sc = g.saveCode && g.saveCode(); ws.send(JSON.stringify({ t:'hello', name:g.myName(), skin:g.mySkin(), world:g.worldIdx(), ...(sc ? { code:sc } : {}) })); };   // the save code lets the server look up (never trust) a custom name
     ws.onmessage = ev => { let m; try { m = JSON.parse(ev.data); } catch { return; } if (st.ws !== ws) return;
       switch (m.t){
-        case 'welcome': welcomed = true; clearTimeout(to); st.id = m.id; st.host = m.host; st.locked = m.locked; st.status = 'in';
+        case 'welcome': welcomed = true; clearTimeout(to); st.id = m.id; st.host = m.host; st.locked = m.locked; st.status = 'in'; st.you = typeof m.you === 'string' ? m.you : null;
           try { sessionStorage.setItem('gnr.room', code); } catch {}
           if (m.world !== g.worldIdx()){ g.onWorld(m.world, code); return; }   // host's world wins: reload into it, then auto-rejoin
-          for (const p of m.peers){ const q = addPeer(p.id, p.name, p.skin); if (p.s) snap(q, p.s); }
+          for (const p of m.peers){ const q = addPeer(p.id, p.name, p.skin, p.custom); if (p.s) snap(q, p.s); }
           g.toast(`🤝 In room ${code} — share the code with a friend`); renderHud(); emit(); break;
-        case 'join': addPeer(m.id, m.name, m.skin); g.toast(`👋 ${st.peers.get(m.id).label} joined`); emit(); break;
+        case 'join': addPeer(m.id, m.name, m.skin, m.custom); g.toast(`👋 ${st.peers.get(m.id).label} joined`); emit(); break;
         case 'leave': { const p = st.peers.get(m.id); if (p) g.toast(`${p.label} left`); dropPeer(m.id); emit(); break; }
         case 's': { const p = st.peers.get(m.id); if (p) snap(p, m); break; }
         case 'e': { const p = st.peers.get(m.id); if (p){ bubble(p, m.e); g.toast(`${p.label}: ${EMOTES[m.e]}`); } break; }
