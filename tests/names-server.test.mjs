@@ -90,3 +90,34 @@ r = await lt(null, d2, 31);
 assert.equal(r.top[0].custom, 'OtherName'); assert.deepEqual(r.top[0].name, [6, 0]);
 assert.equal(r.top[1].custom, undefined); assert.equal(r.top[1].name, undefined, 'an anonymous level time has no name');
 console.log('names-server.test ok');
+
+// ---- rooms: the SERVER picks the shown name from the store; client-sent text is ignored
+const { Room, roomCustomName } = await import('../server/src/index.js');
+const env = { STORE: { idFromName: n => n, get: () => ({ fetch: (u, init) => store.fetch(new Request(u, init)) }) } };
+const room = new Room({}, env); room.inited = true;
+const sock = () => { const ws = { out: [], on: {}, closed: null, send(s) { this.out.push(JSON.parse(s)); }, close(c) { this.closed = c; }, addEventListener(t, f) { this.on[t] = f; } };
+  room.onSocket(ws); ws.say = o => ws.on.message({ data: JSON.stringify(o) }); ws.last = t => [...ws.out].reverse().find(m => m.t === t); return ws; };
+const hid = await player([9, 9]); assert.equal((await call('/name/set', { code: hid, name: 'Hidey9' })).ok, true);
+for (const d of [device(), device(), device()]) await call('/name/report', { device: d, name: 'Hidey9' });
+assert.equal((await call('/name/get', { code: hid })).hidden, true);
+const w1 = sock(); await w1.say({ t: 'hello', name: [6, 0], skin: [0, 0, 0, 0, 0, 0], code: a });   // a = OtherName (visible)
+assert.equal(w1.last('welcome').you, 'OtherName', 'a custom name shows in the room');
+const w2 = sock(); await w2.say({ t: 'hello', name: [9, 9], skin: [0, 0, 0, 0, 0, 0], code: hid });
+assert.equal(w2.last('welcome').you, undefined, 'a hidden (reported) name falls back');
+assert.deepEqual(w1.last('join'), { t: 'join', id: 2, name: [9, 9], skin: [0, 0, 0, 0, 0, 0] });
+const w3 = sock(); await w3.say({ t: 'hello', name: 'Hacker', custom: 'FakeName', you: 'FakeName', skin: [0, 0, 0, 0, 0, 0] });
+assert.equal(w3.last('welcome').you, undefined, 'client-sent name text is ignored');
+assert.deepEqual(w1.last('join').name, [0, 0]); assert.equal(w1.last('join').custom, undefined);
+const w4 = sock(); await w4.say({ t: 'hello', name: [3, 4], skin: [0, 0, 0, 0, 0, 0], code: c });   // c has no custom name
+assert.equal(w4.last('welcome').you, undefined, 'no custom name gives the generated one'); assert.deepEqual(w1.last('join').name, [3, 4]);
+const w5 = sock(); await w5.say({ t: 'hello', name: [1, 1], skin: [0, 0, 0, 0, 0, 0], code: b, custom: 'Other' });   // b = TrailBoss
+assert.equal(w5.last('welcome').you, 'TrailBoss'); assert.equal(w1.last('join').custom, 'TrailBoss');
+const peers = w5.last('welcome').peers; assert.equal(peers.find(p => p.id === 1).custom, 'OtherName'); assert.equal(peers.filter(p => p.custom).length, 1);
+assert.equal(JSON.stringify(w1.out).includes(b), false, 'save codes are never sent to other riders');
+// a name the filter now refuses is not shown even if stored; lookups that fail give none
+db.prepare("UPDATE names SET name = 'sh1t', lower = 'sh1t' WHERE h = (SELECT h FROM names WHERE name = 'TrailBoss')").run();
+assert.equal(await roomCustomName(env, b), null);
+assert.equal(await roomCustomName({ STORE: { idFromName: n => n, get: () => ({ fetch: async () => { throw new Error('down'); } }) } }, a), null);
+assert.equal(await roomCustomName(env, 'NOTACODE'), null); assert.equal(await roomCustomName(env, 12345), null);
+console.log('names-server.test rooms ok');
+

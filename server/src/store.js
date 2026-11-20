@@ -95,6 +95,7 @@ export class Store {
     if (this.rl.size > 20000) this.rl.clear(); if (r.n < 1) return false; r.n -= 1; return true; }
   async fetch(req) {
     const url = new URL(req.url), ip = req.headers.get('CF-Connecting-IP') || 'x';
+    if (url.pathname === '/room/name') return this.roomName(req);   // internal: only the Room object can reach this path
     if (!this.limit('ip:' + ip, 120)) return json({ error: 'slow down' }, 429);
     const cap = url.pathname.startsWith('/level') ? 70000 : 16000;
     let body; try { const t = await req.text(); if (t.length > cap) return json({ error: 'too big' }, 413); body = JSON.parse(t || '{}'); } catch { return json({ error: 'bad json' }, 400); }
@@ -316,6 +317,15 @@ export class Store {
     const hidden = r.hidden || reports >= NAME_REPORTS_HIDE || !chk.ok ? 1 : 0;   // a name the current filter refuses hides at once
     this.sql.exec('UPDATE names SET reports = ?, hidden = ? WHERE h = ?', reports, hidden, r.h);
     return json({ ok: true, already: !!had, hidden: !!hidden });
+  }
+  // Rooms: which custom name to show for this save. Only a claimed, visible name that still passes the filter; else none.
+  async roomName(req){
+    let body; try { const t = await req.text(); if (t.length > 400) return json({ ok: true }); body = JSON.parse(t || '{}'); } catch { return json({ ok: true }); }
+    const code = typeof body.code === 'string' ? body.code.toUpperCase().replace(/[^A-Z0-9]/g, '') : '';
+    if (!SAVE_CODE_RE.test(code)) return json({ ok: true });
+    const r = this.nameRow(await sha((this.env.PEPPER || 'gnr') + ':' + code));
+    const ok = r && r.name && !r.hidden && r.reports < NAME_REPORTS_HIDE && checkName(r.name).ok;
+    return json(ok ? { ok: true, custom: r.name } : { ok: true });
   }
   // Reviewer: needs the ADMIN secret (wrangler secret put ADMIN). list = hidden or reported names; clear = keep the name and
   // drop its reports; remove = take the name away (the player is back on the generated name).

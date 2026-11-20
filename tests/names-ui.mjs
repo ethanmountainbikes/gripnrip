@@ -40,6 +40,13 @@ const STUB = `(() => {
     if (path === '/name/report') return J({ ok: true, already: false, hidden: false });
     return J({ error: 'not found' }, 404);
   };
+  // fake room socket (mode 'new'): records what the game sends; the "server" answers with server-picked names, including
+  // one the client filter must refuse (sh1t) and one rider with no custom name
+  const sent = window.__wsSent = [];
+  window.WebSocket = class { constructor(u){ this.url = u; this.readyState = 0; setTimeout(() => { this.readyState = 1; this.onopen && this.onopen(); }, 30); }
+    send(s){ const m = JSON.parse(s); sent.push(m); if (m.t === 'hello') setTimeout(() => this.onmessage && this.onmessage({ data: JSON.stringify({ t: 'welcome', id: 1, host: 1, world: m.world, locked: false,
+      ...(m.code && state.name ? { you: state.name } : {}), peers: [ { id: 2, name: [1, 2], custom: 'ShredQueen', skin: [0,0,0,0,0,0] }, { id: 3, name: [3, 4], custom: 'sh1t', skin: [0,0,0,0,0,0] }, { id: 4, name: [5, 6], skin: [0,0,0,0,0,0] } ] }) }), 30); }
+    close(){ this.readyState = 3; this.onclose && this.onclose(); } };
 })();`;
 try {
   const page = (await list()).find(t => t.type === 'page');
@@ -112,6 +119,27 @@ try {
   check('B no report item left', !(await row('Report a name')));
   await ev(`__cloud.reportName('ShredQueen')`); reps = await ev(`__stubCalls.filter(c => c.path === '/name/report')`);
   check('B one report per device per name', reps.length === 1);
+  // ---- C: rooms show server-picked custom names (TrailBoss is set; ShredQueen was reported from the board above)
+  await toMain(); await click('Settings'); await sleep(200);
+  const riderC = await row('Rider name'); check('C settings says rooms show the custom name', /Leaderboards and rooms show it/.test(riderC?.sub || ''), JSON.stringify(riderC));
+  check('C no "rooms always use" text left', !(await ev(`document.querySelector('#menuPanel').textContent.includes('Rooms always use')`)));
+  await ev(`localStorage.removeItem('trailDescent.nameReports'); __cloud.st.name.reported.clear(); true`);
+  await ev(`__net.join('ABCDEF')`); await sleep(800);
+  const hello = (await ev(`__wsSent.filter(m => m.t === 'hello')`))[0] || {};
+  check('C hello sends the save code, no name text', /^[A-Z0-9]{16}$/.test(hello.code || '') && Array.isArray(hello.name) && !('custom' in hello), JSON.stringify(hello));
+  const labels = await ev(`[...__net.st.peers.values()].map(p => p.label)`);
+  check('C room peers: custom, filtered fallback, generated', labels[0] === 'ShredQueen' && labels[1] !== 'sh1t' && / /.test(labels[1]) && / /.test(labels[2]), JSON.stringify(labels));
+  const hud = await ev(`document.querySelector('#mpHud').textContent`);
+  check('C room badge shows my custom name', hud.includes('TrailBoss') && hud.includes('ShredQueen') && !hud.includes('sh1t'), hud);
+  await toMain(); await click('Multiplayer'); await sleep(200);
+  check('C room report item for the custom name only', !!(await row('Report ShredQueen')) && !(await row('Report sh1t')));
+  check('C multiplayer name row explains rooms', /Rooms show your custom name TrailBoss/.test((await row('Your rider name'))?.sub || ''));
+  if (process.env.SHOT) { const sh = await send('Page.captureScreenshot', { format: 'png' }); (await import('node:fs')).writeFileSync(process.env.SHOT, Buffer.from(sh.data, 'base64')); }
+  await click('Report ShredQueen'); await sleep(500);
+  reps = await ev(`__stubCalls.filter(c => c.path === '/name/report')`);
+  check('C room report sent', reps.length === 2 && reps[1].body.name === 'ShredQueen', JSON.stringify(reps));
+  check('C shows as reported', !!(await row('Reported ShredQueen')));
+  await click('Leave room'); await sleep(200);
   await toMain(); await click('Settings'); await sleep(200);
   await click('Back to generated name'); await sleep(400);
   check('B back to generated', (await row('Custom name'))?.val === 'NONE' && (await row('Rider name'))?.val === (await row('Generated name'))?.val);

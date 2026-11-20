@@ -211,8 +211,8 @@ Settings → **Graphics**: Low / Medium / High / Max. The setting is saved, and 
 
 ## Multiplayer (private rooms)
 Main menu (or pause menu) → **Multiplayer** → *Create room* gives a 6-character code; friends choose *Join with code* and type it.
-Up to 8 riders see each other ride (smoothed), with their bikes/skins and preset name tags. 4 emotes (👍 🔥 ⏳ 🏁) while stopped or on a lift: hold **T** or **D-pad Up**, then **1–4** or the right stick. A short D-pad Up tap still shifts up a gear. Number keys stay teleports while the wheel is closed. Rooms show your generated rider name (two preset words, no typing), even if you set a custom leaderboard name.
-There is no chat: names and emotes are presets, rooms are private by code, the host can lock the room or remove riders, and
+Up to 8 riders see each other ride (smoothed), with their bikes/skins and preset name tags. 4 emotes (👍 🔥 ⏳ 🏁) while stopped or on a lift: hold **T** or **D-pad Up**, then **1–4** or the right stick. A short D-pad Up tap still shifts up a gear. Number keys stay teleports while the wheel is closed. Rooms show your custom rider name if you set one and it is not hidden; otherwise your generated rider name (two preset words). The server looks the custom name up from your save and checks it, so a changed game can't fake one. Multiplayer → *Report <name>* reports a custom name in your room.
+There is no chat: emotes are presets, names are presets or checked custom names, rooms are private by code, the host can lock the room or remove riders, and
 nothing is stored. If the server can't be reached the game just stays single-player. The server lives in `server/` (see its README).
 
 ## Cloud save + leaderboards

@@ -8,7 +8,9 @@ Cloudflare Worker + Durable Objects (one object per room). Live at **https://gri
 - Unknown codes are refused (`noroom`); a room exists only while someone is in it (+10 min idle), in memory only.
 - Max 8 riders. The first rider is host; host can **lock** the room and **kick** riders. Host passes on if they leave.
 - Whitelisted message types only: `hello`, `s` (state), `e` (emote), `skin`, `lock`, `kick`, `ping`. Everything else is dropped.
-- No text fields exist in rooms: names are two indices into preset word lists (rooms always show the generated name), emotes are an index into 6 presets, skins are small
+- Clients can't send text in rooms: names are two indices into preset word lists, plus a custom name the server itself looks up
+  (hello may carry the save code; the room asks the Store's internal `/room/name`, shown only when claimed, not hidden and passing
+  `names.js`; the code is not kept; `welcome` adds `you`/`custom`, `join` adds `custom`), emotes are an index into 6 presets, skins are small
   integers. Out-of-range values are replaced/dropped. Messages over 400 bytes close the socket. 30 msgs/s rate limit.
 - Nothing is written to storage or logs; no accounts, no personal data.
 
@@ -32,8 +34,8 @@ Save codes: 16 chars, stored as SHA-256(PEPPER + code). Secrets: `PEPPER`, `ADMI
 `src/trails.json` (trail lengths + checkpoint positions) is generated from `world.js` — regenerate and redeploy if trails change:
 `node -e` script in the repo history (import world.js with a fake localStorage per world).
 
-## Custom rider names (in this branch, NOT deployed yet)
-Optional, for leaderboards only; the generated preset name stays the default and rooms keep using it.
+## Custom rider names
+Optional; the generated preset name stays the default. Leaderboards and rooms show a valid, visible custom name.
 - `POST /name/get {code}` → `{ok, name, hidden, nextChange}` · `POST /name/set {code, name}` · `POST /name/clear {code}` (back to the generated name, releases the claim).
   Errors from set: `nosave`, `short`/`long`/`chars`/`word` (filter), `taken` (409), `soon` (429, with `nextChange`).
 - Rules live in the shared `../names.js` (the game uses the same file): 3-12 ASCII letters/digits only, then a word filter

@@ -1,6 +1,10 @@
 // Grip 'N Rip multiplayer room server (Cloudflare Worker + Durable Objects).
 // Safety by construction: the server only understands a fixed set of message types made of small numbers;
-// there is no text field anywhere, so chat is impossible even from a modified client. Nothing is stored.
+// clients can't send text anywhere, so chat is impossible even from a modified client. Nothing is stored here.
+// The one piece of text a room ever sends is a rider's custom name, and the SERVER picks it: the hello may carry the
+// player's save code, the room asks the Store which custom name that save has claimed, and shows it only when it is
+// set, not hidden (reported / under review) and still passes the names.js filter. Otherwise the generated name shows.
+// The save code is used for that one lookup and never kept or sent to anyone. Any name text a client sends is ignored.
 //
 //   GET  /new                 -> {code}   creates a private room (6 chars, no look-alikes)
 //   GET  /room/<CODE> (WS)    -> join; first message must be {t:'hello', ...}
@@ -12,6 +16,7 @@ const MAX_PLAYERS = 8, MAX_RATE = 30;          // msgs per second per rider
 export const LIMITS = { nameA: 32, nameB: 32, emote: 4, skinCat: 6, skinVal: 32, trick: 32, world: 2 };
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type', 'Cache-Control': 'no-store' };
 export { Store } from './store.js';
+import { checkName } from '../../names.js';
 const json = (o, s = 200) => new Response(JSON.stringify(o), { status: s, headers: { 'Content-Type': 'application/json', ...CORS } });
 
 export default {
@@ -43,8 +48,22 @@ export default {
 const int = (v, max) => Number.isInteger(v) && v >= 0 && v < max;
 const num = (v, lim) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= lim;
 
+// Ask the Store which custom name a save has claimed. Any failure (no code, no name, hidden, slow) means "none".
+export async function roomCustomName(env, code) {
+  if (!env || !env.STORE || typeof code !== 'string' || code.length > 40) return null;
+  let timer;
+  try {
+    const stub = env.STORE.get(env.STORE.idFromName('global'));
+    const r = await Promise.race([stub.fetch('https://store/room/name', { method: 'POST', body: JSON.stringify({ code }) }), new Promise((_, no) => { timer = setTimeout(() => no(new Error('slow')), 2500); })]);
+    clearTimeout(timer);
+    if (!r || !r.ok) return null;
+    const o = await r.json(), n = o && o.custom;
+    return typeof n === 'string' && checkName(n).ok && checkName(n).name === n ? n : null;
+  } catch { clearTimeout(timer); return null; }
+}
+
 export class Room {
-  constructor(state) { this.state = state; this.inited = false; this.locked = false; this.host = 0; this.nextId = 1; this.world = 0;
+  constructor(state, env) { this.state = state; this.env = env; this.inited = false; this.locked = false; this.host = 0; this.nextId = 1; this.world = 0;
     this.players = new Map();   // id -> {ws, name:[a,b], skin:[..], last:{}, tokens, t}
     this.idleTimer = null; }
   async fetch(req) {
@@ -58,26 +77,30 @@ export class Room {
   send(ws, o) { try { ws.send(JSON.stringify(o)); } catch {} }
   bcast(o, except) { const s = JSON.stringify(o); for (const [id, p] of this.players) if (id !== except) { try { p.ws.send(s); } catch {} } }
   onSocket(ws) {
-    let me = 0;
+    let me = 0, joining = false;
     const close = (code, why) => { try { ws.close(code, why); } catch {} };
     if (!this.inited) { this.send(ws, { t: 'err', m: 'noroom' }); close(4004, 'noroom'); return; }
     const hello = setTimeout(() => { if (!me) close(4000, 'no hello'); }, 5000);
-    ws.addEventListener('message', ev => {
+    ws.addEventListener('message', async ev => {
       if (typeof ev.data !== 'string' || ev.data.length > 400) return close(4001, 'bad');
       let m; try { m = JSON.parse(ev.data); } catch { return close(4001, 'bad'); }
       if (!m || typeof m !== 'object' || typeof m.t !== 'string') return;
       if (!me) {   // ---- join
         if (m.t !== 'hello') return close(4001, 'bad');
+        if (joining) return; joining = true;
+        const custom = await roomCustomName(this.env, m.code);   // decided here from the store; m.name text / m.custom are never used
+        if (me) return;
         if (this.players.size >= MAX_PLAYERS) { this.send(ws, { t: 'err', m: 'full' }); return close(4003, 'full'); }
         if (this.locked) { this.send(ws, { t: 'err', m: 'locked' }); return close(4003, 'locked'); }
         const name = Array.isArray(m.name) && m.name.length === 2 && int(m.name[0], LIMITS.nameA) && int(m.name[1], LIMITS.nameB) ? m.name : [0, 0];
         const skin = Array.isArray(m.skin) && m.skin.length === LIMITS.skinCat && m.skin.every(v => int(v, LIMITS.skinVal)) ? m.skin : [0, 0, 0, 0, 0, 0];
         me = this.nextId++; clearTimeout(hello); clearTimeout(this.idleTimer);
         if (this.players.size === 0) { this.host = me; this.world = int(m.world, LIMITS.world) ? m.world : 0; }
-        this.players.set(me, { ws, name, skin, last: null, tokens: MAX_RATE, t: Date.now() });
-        this.send(ws, { t: 'welcome', id: me, host: this.host, world: this.world, locked: this.locked,
-          peers: [...this.players].filter(([id]) => id !== me).map(([id, p]) => ({ id, name: p.name, skin: p.skin, s: p.last })) });
-        this.bcast({ t: 'join', id: me, name, skin }, me); return;
+        const cn = custom ? { custom } : {};
+        this.players.set(me, { ws, name, skin, custom, last: null, tokens: MAX_RATE, t: Date.now() });
+        this.send(ws, { t: 'welcome', id: me, host: this.host, world: this.world, locked: this.locked, ...(custom ? { you: custom } : {}),
+          peers: [...this.players].filter(([id]) => id !== me).map(([id, p]) => ({ id, name: p.name, ...(p.custom ? { custom: p.custom } : {}), skin: p.skin, s: p.last })) });
+        this.bcast({ t: 'join', id: me, name, ...cn, skin }, me); return;
       }
       const p = this.players.get(me); if (!p) return;
       const now = Date.now(); p.tokens = Math.min(MAX_RATE, p.tokens + (now - p.t) / 1000 * MAX_RATE); p.t = now;
@@ -97,7 +120,7 @@ export class Room {
         default: return;   // unknown types are ignored
       }
     });
-    const bye = () => { clearTimeout(hello); if (me) this.leave(me); me = -1; };
+    const bye = () => { clearTimeout(hello); if (me > 0) this.leave(me); me = -1; };
     ws.addEventListener('close', bye); ws.addEventListener('error', bye);
   }
   leave(id) {
