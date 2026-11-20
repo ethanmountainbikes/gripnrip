@@ -110,8 +110,9 @@ export function initCloud(g){   // g: {toast, worldIdx, onBoard(res), reload}
   async function setName(raw){ const c = checkName(raw); if (!c.ok) return c;
     const r = await nameCall('/name/set', {name:c.name});
     if (r.ok){ keepName(r); return {ok:true, name:r.name}; }
-    if (r.error === 'soon') NM.nextChange = r.nextChange || 0;
-    const say = r.say || NAME_SAY[r.error] || (r.error === 'nosave' ? NAME_SAY.nosave : r.status === 429 && !r.nextChange ? 'Slow down a little and try again' : NAME_SAY.word);
+    if (r.error === 'soon'){ NM.nextChange = r.nextChange || 0; emit(); }
+    const days = r.error === 'soon' && r.nextChange > Date.now() ? Math.ceil((r.nextChange - Date.now()) / 86400000) : 0;
+    const say = days ? `You can change your name in ${days === 1 ? '1 day' : days + ' days'}` : r.say || NAME_SAY[r.error] || (r.error === 'nosave' ? NAME_SAY.nosave : r.status === 429 && !r.nextChange ? 'Slow down a little and try again' : NAME_SAY.word);
     return {ok:false, reason:r.error, say, nextChange:r.nextChange}; }
   async function clearName(){ const r = await nameCall('/name/clear', {}); if (r.ok){ keepName(r); return {ok:true}; } return {ok:false, reason:r.error, say:r.say || NAME_SAY.offline}; }
   async function reportName(name){ const k = nameKey(name || '');

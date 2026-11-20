@@ -33,7 +33,7 @@ let r = await call('/name/set', { code: a, name: 'TrailBoss' }); assert.equal(r.
 assert.equal((await call('/name/set', { code: b, name: 'trailboss' })).error, 'taken');
 assert.equal((await call('/name/set', { code: b, name: 'TRAILBOSS' })).status, 409);
 assert.equal((await call('/name/get', { code: a })).name, 'TrailBoss');
-// once a day
+// one change per 7 days
 r = await call('/name/set', { code: a, name: 'OtherName' }); assert.equal(r.error, 'soon'); assert.ok(r.nextChange > Date.now());
 db.prepare('UPDATE names SET changed = ? WHERE name = ?').run(Date.now() - NAME_CHANGE_MS - 1000, 'TrailBoss');
 r = await call('/name/set', { code: a, name: 'OtherName' }); assert.equal(r.ok, true);
@@ -121,3 +121,21 @@ assert.equal(await roomCustomName({ STORE: { idFromName: n => n, get: () => ({ f
 assert.equal(await roomCustomName(env, 'NOTACODE'), null); assert.equal(await roomCustomName(env, 12345), null);
 console.log('names-server.test rooms ok');
 
+// ---- 7-day cooldown: the first save is free, then one change per 7 days, enforced here
+assert.equal(NAME_CHANGE_MS, 7 * 24 * 3600 * 1000);
+const fresh = await player([5, 5]);
+r = await call('/name/set', { code: fresh, name: 'ZippyBison' }); assert.equal(r.ok, true, 'the first save is free'); 
+assert.ok(Math.abs(r.nextChange - (Date.now() + NAME_CHANGE_MS)) < 5000, 'next change is 7 days out');
+r = await call('/name/set', { code: fresh, name: 'SwiftOtter' }); assert.equal(r.error, 'soon'); assert.equal(r.status, 429);
+db.prepare('UPDATE names SET changed = ? WHERE name = ?').run(Date.now() - 6.9 * 24 * 3600 * 1000, 'ZippyBison');
+assert.equal((await call('/name/set', { code: fresh, name: 'SwiftOtter' })).error, 'soon', 'still waiting after 6.9 days');
+assert.equal((await call('/name/get', { code: fresh })).nextChange > Date.now(), true);
+// clearing does not skip the wait
+assert.equal((await call('/name/clear', { code: fresh })).name, null);
+assert.equal((await call('/name/set', { code: fresh, name: 'SwiftOtter' })).error, 'soon', 'clear keeps the change time');
+db.prepare('UPDATE names SET changed = ? WHERE h = (SELECT h FROM names WHERE name IS NULL AND changed > ? LIMIT 1)').run(Date.now() - NAME_CHANGE_MS - 1000, Date.now() - 7 * 24 * 3600 * 1000);
+assert.equal((await call('/name/set', { code: fresh, name: 'SwiftOtter' })).ok, true, 'allowed after 7 days');
+// a generated-style name is claimed and unique like any other
+const other = await player([5, 6]);
+assert.equal((await call('/name/set', { code: other, name: 'swiftotter' })).error, 'taken');
+console.log('names-server.test cooldown ok');

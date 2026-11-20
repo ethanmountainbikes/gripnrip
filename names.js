@@ -21,7 +21,7 @@ export const NAME_SAY = {
   chars: 'Only letters A-Z and numbers 0-9. No spaces or symbols',
   word: 'Try a different name',
   taken: 'That name is taken. Try another one!',
-  soon: 'You can change your name again tomorrow',
+  soon: 'You can change your name once every 7 days',
   offline: 'Custom names coming soon',
   nosave: 'Custom names need cloud save. Try again in a moment',
 };
@@ -54,7 +54,7 @@ const EXTRA = [
 const EDGE = ['ass', 'arse', 'tit', 'tits', 'cum', 'sex', 'anal', 'anus', 'hoe', 'hoes', 'butt', 'mong', 'scat', 'poon', 'poof', 'quim', 'paki',
   'guro', 'bbw', 'lsd', 'oxy', 'dope', 'bong', 'mod', 'mods', 'kys', 'fag', 'fags', 'fuk', 'fck', 'fux', 'azz'];
 // Checked on the raw lowercase name (digits, and letters that squashing would hide).
-const RAW = ['69', '420', '1488', 'kkk'];
+const RAW = ['69', '420', '1488', '58008', '80085', '5318008', 'kkk'];
 // Real words that contain a bad one. They are taken out before checking, so what is left still gets checked.
 export const ALLOW = ['scunthorpe', 'penistone', 'cockatoo', 'peacock', 'hancock', 'hitchcock', 'woodcock', 'shuttlecock', 'cockpit', 'cocktail',
   'shiitake', 'shitake', 'dickens', 'arsenal', 'therapist', 'grape', 'drape', 'scrape', 'trapeze', 'basement', 'button', 'butter', 'butterfly',
@@ -66,7 +66,7 @@ export const ALLOW = ['scunthorpe', 'penistone', 'cockatoo', 'peacock', 'hancock
 ];
 
 const LIST = [...new Set([...LDNOOBW_EN, ...EXTRA])];
-const edgeSet = new Set(EDGE);
+const edgeSet = new Set(EDGE), LIST_SET = new Set(LIST);
 const SUB = LIST.filter(w => w.length >= 4 && !edgeSet.has(w));
 const SHORT = [...new Set([...EDGE, ...LIST.filter(w => w.length < 4)])];
 const ALLOW_FORMS = [...new Set([...ALLOW, ...ALLOW.map(collapse)])].sort((a, b) => b.length - a.length);
@@ -86,9 +86,32 @@ export function nameParts(raw) {
 const unX = s => s.replace(/^x+/, '').replace(/x+$/, '');   // xXnameXx decoration
 
 // The bad word (for tests and the reviewer), or null when the name is fine. Shape is not checked here.
+// Digit runs: 1-3 digits can be letters in disguise (a55, s3x, b00b), so they are read as leetspeak. A run of 4+ digits is
+// read as a number (a year, a lucky number: Ethan2015, Rider123456) and only blocked when the whole run spells a bad
+// word (8008) or is / nearly is a bad number (69, 420, 1488 as the run itself or with one digit more: 690, 14888).
+const LONG_RUN = /[0-9]{4,}/g;
+function digitProblem(raw) {
+  for (const run of String(raw).match(/[0-9]+/g) || []) {
+    for (const w of RAW) if (/^[0-9]+$/.test(w) && (run === w || (run.length <= w.length + 1 && run.includes(w)))) return w;
+    if (run.length >= 4) for (const v of unleet(run)) for (const f of [v, collapse(v)]) if (LIST_SET.has(f) || edgeSet.has(f)) return f;
+  }
+  return null;
+}
 export function nameProblem(raw) {
   const low = String(raw).toLowerCase();
-  for (const w of RAW) if (low.includes(w)) return w;
+  for (const w of RAW) if (!/^[0-9]+$/.test(w) && low.includes(w)) return w;
+  const d = digitProblem(raw); if (d) return d;
+  // a long number becomes a plain separator ('2' is not a leet letter), but its first / last 1-2 digits are still read
+  // as letters stuck to the word next to them, so BigA5569 is still big-a55
+  const s = String(raw), forms = new Set([s.replace(LONG_RUN, '2')]);
+  for (const m of s.matchAll(LONG_RUN)) for (const k of [1, 2]) {
+    const end = m.index + m[0].length;
+    if (m.index > 0) forms.add(s.slice(0, m.index + k).replace(LONG_RUN, '2'));     // the word before the number + its first digits
+    if (end < s.length) forms.add(s.slice(end - k).replace(LONG_RUN, '2')); }      // its last digits + the word after
+  for (const f of forms) { const p = wordProblem(f); if (p) return p; }
+  return null;
+}
+function wordProblem(raw) {
   for (const v of unleet(raw)) {
     const b = collapse(v);
     // squashed spelling only for words that stay 4+ letters squashed, so "Bobby" is not "boob" and "Nigel" is fine

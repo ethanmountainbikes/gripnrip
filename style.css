@@ -177,3 +177,5 @@ body.inshop #shop{left:auto;right:3vw;transform:translateY(-50%);width:min(500px
 #padWiz li small { flex-basis: 100%; opacity: .65; font-size: 14px; }
 #padWiz li.sel, #padWiz li:hover { background: #d9772b; color: #1a160f; }
 #padWiz li.sel b, #padWiz li:hover b { color: #1a160f; }
+#mpAsk button:focus{outline:3px solid #fff;outline-offset:2px}
+#mpAsk .mpBtns{margin:2px 0 8px}

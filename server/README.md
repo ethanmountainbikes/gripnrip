@@ -37,12 +37,12 @@ Save codes: 16 chars, stored as SHA-256(PEPPER + code). Secrets: `PEPPER`, `ADMI
 ## Custom rider names
 Optional; the generated preset name stays the default. Leaderboards and rooms show a valid, visible custom name.
 - `POST /name/get {code}` → `{ok, name, hidden, nextChange}` · `POST /name/set {code, name}` · `POST /name/clear {code}` (back to the generated name, releases the claim).
-  Errors from set: `nosave`, `short`/`long`/`chars`/`word` (filter), `taken` (409), `soon` (429, with `nextChange`).
+  Errors from set: `nosave`, `short`/`long`/`chars`/`word` (filter), `taken` (409), `soon` (429, with `nextChange`, 7 days after the last change).
 - Rules live in the shared `../names.js` (the game uses the same file): 3-12 ASCII letters/digits only, then a word filter
   (lowercase, leetspeak map, repeated letters squashed, `xX…Xx` stripped, substring match for long words, part/start/end match
   for short ones, allowlist for Scunthorpe-style words). Word list: LDNOOBW `en` (CC BY 4.0) in `../namewords.js`, plus
   slurs, sexual and drug terms and impersonation (admin, mod, official, gripnrip, …) in `names.js`.
-- Unique ignoring case (`names.lower` is UNIQUE), keyed to the save hash. Changes about once a day (20 h; clearing does not reset it).
+- Unique ignoring case (`names.lower` is UNIQUE), keyed to the save hash. The first name a player saves is free; after that one change per 7 days (`soon`, 429, with `nextChange`). `/name/clear` keeps the change time, so it can't skip the wait; the game no longer offers it.
 - `POST /name/report {device, name}`: one report per device hash per name; at 3 the name is hidden (boards show the
   generated name, the name stays claimed) until reviewed. Boards (`/lb/*`) add `custom` only for visible names.
 - `POST /level/time` accepts an optional `savecode` so level boards carry `name` / `custom`.

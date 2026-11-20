@@ -6,7 +6,7 @@ import TRAILS from './trails.json';
 import { validateLevel, publicCodeOk, levelName, rateLevel, makeCode, ALPHA } from '../../level.js';
 import { checkName, nameKey } from '../../names.js';
 
-export const NAME_CHANGE_MS = 20 * 3600 * 1000;   // about once a day
+export const NAME_CHANGE_MS = 7 * 24 * 3600 * 1000;   // one change per 7 days; the first name a player saves is free
 export const NAME_REPORTS_HIDE = 3;              // reports (one per device) before a name is hidden pending review
 
 const SAVE_CODE_RE = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{16}$/;
@@ -300,7 +300,7 @@ export class Store {
     if (hiddenAlready) this.sql.exec('UPDATE names SET hidden = 1 WHERE h = ?', h);
     return json(this.nameState(this.nameRow(h)));
   }
-  nameClear(h){   // back to the generated name: releases the claim, keeps the change time
+  nameClear(h){   // back to the generated name: releases the claim, keeps the change time (so it can't skip the 7-day wait). The game no longer offers it.
     if (!h) return json({ error: 'badcode' }, 400);
     this.sql.exec('UPDATE names SET name = NULL, lower = NULL, reports = 0, hidden = 0 WHERE h = ?', h);
     return json(this.nameState(this.nameRow(h)));

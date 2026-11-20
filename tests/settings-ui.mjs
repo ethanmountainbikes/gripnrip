@@ -69,6 +69,7 @@ try {
   const labels = await ev(`[...document.querySelectorAll('#menuPanel .mLabel')].map(el => el.textContent)`);
   check('music controls are gone', !labels.some(t => /music|skip song/i.test(t)), JSON.stringify(labels));
   check('ambience volume is in settings', labels.includes('Ambience volume'));
+  check('one rider name row (no Generated / Custom name rows)', labels.filter(t => t === 'Rider name').length === 1 && !labels.some(t => /^(Generated name|Custom name|Back to generated name)$/.test(t)), JSON.stringify(labels));
   check('frame rate is in settings', labels.includes('Frame rate'));
   let cap = '';
   const seen = [];

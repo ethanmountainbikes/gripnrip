@@ -33,4 +33,15 @@ for (const n of ['Scunthorpe', 'Penistone', 'Peacock', 'Cockatoo', 'Hancock', 'S
   'Model', 'Modern', 'Method', 'Seaweed', 'Torpedo', 'Oxygen', 'Foxy', 'Hello', 'Bobby', 'Nigel', 'Devin', 'Devon', 'GnarlyPine42',
   'MuddyOtter', 'Sk8ter', 'Shred99', 'xXShredXx', 'Pine', 'Lilly', 'Willow', 'Puppy', 'Sparky', 'Rider007'])
   ok(n);
+
+// digit runs: 4+ digits are a number (years, lucky numbers), shorter runs can be letters in disguise
+for (const n of ['Ethan2015', 'Shredder1234', 'Rider1969', 'Ethan1999', 'Bike2020', 'Max123456', 'Tst123456', 'Zoe20162016', 'Rider1945'])
+  ok(n);
+for (const n of ['Ethan69', 'Rider690', 'Tst1488', 'Kid14888', 'Ethan8008', 'Rider58008', 'A55hole', 'B00bs', 'S3xy', 'BigA5569', 'A5512Kid', 'Ass2015', 'Sh1t1234'])
+  no(n, 'word');
+// nearly every generated CamelCase name that fits is allowed
+const { NAME_A, NAME_B } = { NAME_A: ['Rapid','Turbo','Dusty','Rowdy','Sneaky','Mega','Gnarly','Flowy','Shreddy','Brave','Lucky','Swift','Muddy','Rad','Chill','Wild','Sunny','Rocky','Zippy','Epic','Steady','Bouncy','Speedy','Mighty','Sandy','Frosty','Pumped','Clever','Jolly','Sendy','Happy','Comet'],
+  NAME_B: ['Marmot','Fox','Eagle','Goat','Lynx','Bear','Moose','Otter','Falcon','Badger','Coyote','Hawk','Ram','Wolf','Raven','Bison','Puma','Gecko','Owl','Hare','Elk','Beaver','Lizard','Viper','Yak','Panda','Tiger','Rhino','Koala','Bobcat','Heron','Orca'] };
+const gen = NAME_A.flatMap(a => NAME_B.map(b => a + b)).filter(n => n.length <= 12);
+assert.ok(gen.length > 900); const refused = gen.filter(n => !checkName(n).ok); assert.ok(refused.length <= 10, 'few generated names hit the filter (pumPEDOtter, comETHawk); the game skips those: ' + refused);
 console.log('names.test ok');

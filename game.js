@@ -668,6 +668,7 @@ function emoteFrame(dt, inp){
   window.__emote = { wheel: !!emoteWheel, tHold: +tHold.toFixed(2), can: !!can };
 }
 function onPress(code){
+  if (nameDlg){ nameDlg.key(code); return; }
   if (padWiz.open){ padWiz.key(code); return; }
   if (editorApi && editorApi.isOpen()){
     if (editorApi.isRiding()){ if (code === 'Escape' || hitBind('editorTest', code) || code === 'Start'){ editorApi.stopRide(); return; } }
@@ -1621,7 +1622,7 @@ const PAGES = {
       if (host) for (const p of st.peers.values()) items.push({label:`Remove ${p.label}`, sub:'Kick this rider from the room', act:() => NET.kick(p.id)});
       for (const p of st.peers.values()) if (p.custom) items.push(CLOUD && CLOUD.reported(p.custom) ? {label:`Reported ${p.custom}`, sub:'Thanks! A grown-up will check it.', act:() => {}} : {label:`Report ${p.custom}`, sub:'Is this name mean or rude? Select to report it for review.', act:() => reportName(p.custom).then(() => renderMenu())});
       items.push({label:'Leave room', act:() => { NET.leave(); renderMenu(); }}); }
-    items.push({label:'Your rider name', value:`${NAME_A[nm[0]]} ${NAME_B[nm[1]]}`.toUpperCase(), sub:(NAME_S() && NAME_S().custom && !NAME_S().hidden ? 'Rooms show your custom name ' + NAME_S().custom + ' · this is your generated name, used if it can\'t be shown' : 'Rooms show your generated name · ← → to change') + (inRoom ? ' (applies next time you join)' : ''), adj:d => { const k = (nm[0]*NAME_B.length + nm[1] + d*7 + NAME_A.length*NAME_B.length) % (NAME_A.length*NAME_B.length); LS.set('trailDescent.mpName', [Math.floor(k/NAME_B.length), k % NAME_B.length]); }, act:() => { const n = [Math.floor(Math.random()*NAME_A.length), Math.floor(Math.random()*NAME_B.length)]; LS.set('trailDescent.mpName', n); }});
+    { const r = nameRows()[0]; items.push({...r, label:'Your rider name', sub:r.sub + (inRoom ? ' (a new name shows next time you join)' : '')}); }
     items.push({label:'‹ Back', act:back});
     return {title:'MULTIPLAYER', html:'<p class="mpNote">Private rooms only — no chat, preset emotes, preset or checked custom names. Your rider position and look are shared with the room while you are in it; nothing is stored.</p>', items}; },
   cloud: () => { const c = CLOUD && CLOUD.st; return {title:'CLOUD SAVE', html:`<p class="mpNote">Your progress (DOLLAHS, bikes, skins, unlocks, best times) is saved on this device and backed up online.<br>Use your <b>save code</b> to get it back on another browser. Keep it secret — anyone with the code can load your save.</p>`, items:[
@@ -1747,7 +1748,7 @@ function renderHelp(){
   const foot = document.querySelector('#help p');
   if (foot) foot.textContent = `Pump: compress into backsides, extend over faces to gain speed. Lean with the right stick (${k('leanLeft')} / ${k('leanRight')}) to carve. Land straight and not leaned past 30°. Respawn point is ${k('spawn')} or ${p('spawnClick')}+${p('spawnMod')}. Controller: press any button so Firefox detects it.`;
 }
-function menuKey(code){ if (bindCapture){ captureKey(code); return; } const it = menu.items[menu.sel];
+function menuKey(code){ if (nameDlg){ nameDlg.key(code); return; } if (bindCapture){ captureKey(code); return; } const it = menu.items[menu.sel];
   if (menu.page === 'boards' && ['LB','RB','KeyQ','KeyE'].includes(code)){ lbMove(['LB','KeyQ'].includes(code) ? -1 : 1, 1); return; }
   if (['DU','ArrowUp','KeyW'].includes(code)){ do { menu.sel = (menu.sel - 1 + menu.items.length) % menu.items.length; } while (menu.items[menu.sel].disabled && menu.items.some(i => !i.disabled) && false); renderMenu(); }
   else if (['DD','ArrowDown','KeyS'].includes(code)){ menu.sel = (menu.sel + 1) % menu.items.length; renderMenu(); }
@@ -2110,32 +2111,60 @@ const lbPanel = document.createElement('div'); lbPanel.id = 'lbPanel'; document.
 function showFinishBoard(r){ if (!r || !r.top) return; const C = LB_CATS.find(c => c.id === (r.cat || 'time'));
   lbPanel.innerHTML = `<h4>🏁 ${r.label || ''} — LEADERBOARD</h4>` + boardHtml({...r, top:r.top.slice(0, 5)}, C) + (r.improved ? '<p class="lbMe">⭐ New personal best on the board!</p>' : '');
   lbPanel.classList.add('on'); clearTimeout(lbPanelT); lbPanelT = setTimeout(() => lbPanel.classList.remove('on'), 9000); }
-// ---- custom rider names (optional; the generated preset name stays the default. Leaderboards and rooms show a valid custom name)
+// ---- rider names: one Settings row. The generated preset name is the default; a claimed custom name (typed or generated
+// in the pop-up) shows on leaderboards and in rooms while it is valid and not hidden. The server allows one change per 7 days.
 const NAME_S = () => CLOUD && CLOUD.st.name;
 function genName(){ const n = mpName(); return `${NAME_A[n[0]]} ${NAME_B[n[1]]}`; }
-function nameRows(){ const N = NAME_S(), soon = !N || N.avail === false, wait = N && N.nextChange > Date.now() ? Math.ceil((N.nextChange - Date.now()) / 3600000) : 0;
-  const shown = N && N.custom && !N.hidden && !soon ? N.custom : genName();
-  const rows = [
-    {label:'Rider name', value:shown.toUpperCase(), sub:N && N.custom && N.hidden ? 'Your custom name is being checked. Boards and rooms show your generated name for now.' : N && N.custom ? 'Your custom name. Leaderboards and rooms show it.' : 'Your generated name. Leaderboards and rooms show it.', act:() => {}},
-    {label:'Generated name', value:genName().toUpperCase(), sub:N && N.custom && !N.hidden && !soon ? '← → picks another. Shown if your custom name can\'t be.' : '← → picks another. Leaderboards and rooms show this one.', adj:d => { const n = mpName(), k = (n[0]*NAME_B.length + n[1] + d*7 + NAME_A.length*NAME_B.length) % (NAME_A.length*NAME_B.length); LS.set('trailDescent.mpName', [Math.floor(k/NAME_B.length), k % NAME_B.length]); }, act:() => { LS.set('trailDescent.mpName', [Math.floor(Math.random()*NAME_A.length), Math.floor(Math.random()*NAME_B.length)]); }},
-    {label:'Custom name', value:soon ? 'SOON' : N.custom ? N.custom.toUpperCase() : 'NONE', sub:soon ? NAME_S.soonText() : wait ? `${NAME_SAY.soon} (about ${wait} h)` : `Optional. 3-${NAME_MAX} letters and numbers. You can change it about once a day.`, act:() => { if (soon){ toast(NAME_S.soonText()); if (CLOUD) CLOUD.refreshName().then(() => menu.open && renderMenu()); } else askCustomName(); }}];
-  if (N && N.custom && !soon) rows.push({label:'Back to generated name', sub:'Stop using ' + N.custom + ' and show ' + genName() + ' again', act:() => CLOUD.clearName().then(r => { toast(r.ok ? 'Back to ' + genName() : r.say); if (menu.open) renderMenu(); })});
-  return rows; }
+// days (rounded up) until the server allows the next name change, 0 when it is allowed now
+function nameWaitDays(N){ return N && N.nextChange > Date.now() ? Math.ceil((N.nextChange - Date.now()) / 86400000) : 0; }
+const daysText = d => d === 1 ? '1 day' : d + ' days';
+function nameRows(){ const N = NAME_S(), soon = !N || N.avail === false, wait = soon ? 0 : nameWaitDays(N);
+  const mine = N && N.custom && !N.hidden && !soon, shown = mine ? N.custom : genName();
+  const sub = soon ? NAME_S.soonText()
+    : N.custom && N.hidden ? `Your name is being checked. Leaderboards and rooms show ${genName()} for now.` + (wait ? ` You can change it in ${daysText(wait)}.` : '')
+    : mine ? 'Leaderboards and rooms show it. ' + (wait ? `You can change your name in ${daysText(wait)}.` : 'Select to change it.')
+    : 'Leaderboards and rooms show it. Select to type your own name or generate one.';
+  return [{label:'Rider name', value:shown.toUpperCase(), sub, act:() => { if (soon){ toast(NAME_S.soonText()); if (CLOUD) CLOUD.refreshName().then(() => menu.open && renderMenu()); } else askCustomName(); }}]; }
 NAME_S.soonText = () => NAME_SAY.offline;
-function askCustomName(){ const ov = document.createElement('div'); ov.id = 'mpAsk'; const N = NAME_S();
-  ov.innerHTML = `<div class="mpBox"><h3>CUSTOM RIDER NAME</h3><input id="mpName" maxlength="${NAME_MAX}" autocomplete="off" spellcheck="false" placeholder="${genName().replace(' ', '')}" style="width:340px;letter-spacing:2px;text-transform:none;font-size:30px"><p class="mpNote" id="mpNameSay">3-${NAME_MAX} letters and numbers. No spaces.</p><div><button id="mpGo">Use this name</button> <button id="mpNo">Cancel</button></div></div>`;
-  document.body.appendChild(ov); const inp = ov.querySelector('#mpName'), say = ov.querySelector('#mpNameSay'), goB = ov.querySelector('#mpGo'); inp.value = N && N.custom || ''; inp.focus();
+// a random generated name in CamelCase with no space (ZippyBison), from the same preset word lists, that fits and passes the filter
+function randomCamelName(not){ for (let i = 0; i < 200; i++){ const n = NAME_A[Math.floor(Math.random()*NAME_A.length)] + NAME_B[Math.floor(Math.random()*NAME_B.length)];
+    if (n.length <= NAME_MAX && n !== not && checkName(n).ok) return n; } return 'ZippyBison'; }
+let nameDlg = null;   // the open RIDER NAME pop-up: pad and keyboard presses go to it, not to the menu behind it
+function askCustomName(){ if (nameDlg) return; const ov = document.createElement('div'); ov.id = 'mpAsk'; const N = NAME_S();
+  ov.innerHTML = `<div class="mpBox"><h3>RIDER NAME</h3><input id="mpName" maxlength="${NAME_MAX}" autocomplete="off" spellcheck="false" placeholder="${genName().replace(' ', '')}" style="width:340px;letter-spacing:2px;text-transform:none;font-size:30px"><p class="mpNote" id="mpNameSay">3-${NAME_MAX} letters and numbers. No spaces.</p><p class="mpNote bad" id="mpNameWait" style="display:none"></p><div class="mpBtns"><button id="mpGen">🎲 Generate name</button> <button id="mpGo">Use this name</button> <button id="mpNo">Cancel</button></div><p class="mpNote" id="mpNameHelp">${padLabel('X')} or 🎲 makes a new name · ${padLabel('A')} / Enter picks · ${padLabel('B')} / Esc cancels</p></div>`;
+  document.body.appendChild(ov); const inp = ov.querySelector('#mpName'), say = ov.querySelector('#mpNameSay'), waitP = ov.querySelector('#mpNameWait'), goB = ov.querySelector('#mpGo'), genB = ov.querySelector('#mpGen'), noB = ov.querySelector('#mpNo');
+  inp.value = N && N.custom || ''; inp.focus();
   let busy = false;
-  const live = () => { const c = checkName(inp.value); say.textContent = inp.value === '' ? `3-${NAME_MAX} letters and numbers. No spaces.` : c.ok ? '✓ Looks good' : c.say; say.className = 'mpNote' + (c.ok || inp.value === '' ? '' : ' bad'); goB.disabled = !c.ok || busy; return c; };
-  const close = () => { ov.remove(); if (menu.open) renderMenu(); };
-  const submit = async () => { const c = live(); if (!c.ok || busy) return; busy = true; goB.disabled = true; say.textContent = 'Checking…';
+  const waitDays = () => nameWaitDays(NAME_S());
+  const live = () => { const c = checkName(inp.value), w = waitDays();
+    say.textContent = inp.value === '' ? `3-${NAME_MAX} letters and numbers. No spaces.` : c.ok ? '✓ Looks good' : c.say; say.className = 'mpNote' + (c.ok || inp.value === '' ? '' : ' bad');
+    waitP.style.display = w ? '' : 'none'; waitP.textContent = w ? `You can change your name in ${daysText(w)}` : '';
+    goB.disabled = !c.ok || busy || !!w; return c; };
+  const close = () => { ov.remove(); nameDlg = null; if (menu.open) renderMenu(); };
+  const submit = async () => { const c = live(); if (!c.ok || busy || waitDays()) return; busy = true; goB.disabled = true; say.textContent = 'Checking…';
     const r = await CLOUD.setName(c.name); busy = false;
-    if (r.ok){ toast('You are now ' + r.name + ' on the leaderboards'); close(); return; }
-    say.textContent = r.say; say.className = 'mpNote bad'; goB.disabled = false; };
+    if (r.ok){ toast('You are now ' + r.name + ' on the leaderboards and in rooms'); close(); return; }
+    live(); say.textContent = r.reason === 'taken' ? r.say + ' Press Generate for another.' : r.say; say.className = 'mpNote bad'; };
+  const generate = () => { inp.value = randomCamelName(inp.value); live(); };
+  // focus ring for pad / arrow keys: the text box, then the three buttons
+  const ring = [inp, genB, goB, noB], at = () => Math.max(0, ring.indexOf(document.activeElement));
+  const move = d => { let i = at(); for (let k = 0; k < ring.length; k++){ i = (i + d + ring.length) % ring.length; if (!ring[i].disabled) break; } ring[i].focus(); };
+  const press = () => { const el = ring[at()]; if (el === inp) submit(); else if (!el.disabled) el.click(); };
+  nameDlg = { key(code){   // pad buttons (and keys that reach the game while focus is outside the box)
+    if (code === 'X') generate();
+    else if (code === 'A' || code === 'Enter' || code === 'Space') press();
+    else if (code === 'B' || code === 'Escape') close();
+    else if (code === 'DU' || code === 'DL' || code === 'ArrowUp' || code === 'ArrowLeft') move(-1);
+    else if (code === 'DD' || code === 'DR' || code === 'ArrowDown' || code === 'ArrowRight' || code === 'Tab') move(1); }, generate, submit, close, el: ov };
   // the field only keeps ASCII letters and digits (drops spaces, symbols, emoji, accents and invisible characters)
   inp.addEventListener('input', () => { const v = inp.value.replace(/[^A-Za-z0-9]/g, '').slice(0, NAME_MAX); if (v !== inp.value) inp.value = v; live(); });
-  inp.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') submit(); if (e.key === 'Escape') close(); }); inp.addEventListener('keyup', e => e.stopPropagation());
-  goB.onclick = submit; ov.querySelector('#mpNo').onclick = close; live(); }
+  // keyboard inside the pop-up stays here: Enter in the box saves, arrows move between the box and buttons, Esc cancels
+  ov.addEventListener('keydown', e => { e.stopPropagation(); const inBox = e.target === inp;
+    if (e.key === 'Escape'){ e.preventDefault(); close(); }
+    else if (e.key === 'Enter' && inBox){ e.preventDefault(); submit(); }
+    else if (e.key === 'ArrowDown' || (e.key === 'ArrowUp' && !inBox) || (!inBox && (e.key === 'ArrowLeft' || e.key === 'ArrowRight'))){ e.preventDefault(); move(e.key === 'ArrowUp' || e.key === 'ArrowLeft' ? -1 : 1); } });
+  ov.addEventListener('keyup', e => e.stopPropagation());
+  genB.onclick = generate; goB.onclick = submit; noB.onclick = close; live(); }
 async function reportName(name, btn){ if (!CLOUD) return;
   const r = await CLOUD.reportName(name);
   if (btn){ const sp = document.createElement('span'); sp.className = 'nameRep done'; sp.title = 'Reported'; sp.textContent = '⚑'; btn.replaceWith(sp); }
@@ -2180,7 +2209,7 @@ editorApi = createEditor({
 });
 openMenu('main'); setTimeout(() => $('loading').classList.add('done'), 300);
 teleport(spotI, true);
-window.__features = features; window.__respawn = () => respawnSafe(); window.__game = S; window.__readInput = readInput; window.__emoteFrame = emoteFrame;
+window.__features = features; Object.defineProperty(window, '__nameDlg', { get: () => nameDlg, configurable: true }); window.__respawn = () => respawnSafe(); window.__game = S; window.__readInput = readInput; window.__emoteFrame = emoteFrame;
 window.__drone = FPV.state; window.__droneToggle = toggleDrone; window.__droneFly = (dt, inp) => flyDrone(dt, inp || {steer:0, lyRaw:0, bankRaw:0, rsy:0}); window.__saveSettings = saveSettings; window.__settings = SETTINGS; window.__bail = () => crash('Bail!'); window.__ragdoll = rag; window.__ragdollReport = () => rag.on ? ragdollReport(rag, groundH) : null; window.__groundH = groundH; window.__lift = i => startLift(i); window.__world = { LIFTS, connectors, trails, features, spots, PARK, SHOP, terrainH, featH, isDirt, nearTrails, base, inPark, treesInCell, trailDist };
 window.__race = { open: raceOpen, mark: markCleared, cleared: () => cleared, submit: run => shouldSubmit(run, false) };
 window.__editor = editorApi;
